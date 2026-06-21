@@ -1,0 +1,22 @@
+services:
+  postgres:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    container_name: ragent-postgres
+    environment:
+      POSTGRES_DB: ragent
+      POSTGRES_USER: ragent
+      POSTGRES_PASSWORD: ragent
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ragent -d ragent"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+volumes:
+  pgdata:

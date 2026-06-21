@@ -1,5 +1,4 @@
 from app.models.schemas import RetrievedChunk
-import os
 
 SYSTEM_PROMPT = "You are a helpful assistant. Answer the user's question based on the provided context and conversation history."
 
@@ -28,17 +27,18 @@ class RAGPromptBuilder:
         self,
         query: str,
         history: list[dict],
+        summary: str,
         retrieved_chunks: list[RetrievedChunk],
     ) -> list[dict]:
         if not retrieved_chunks:
-            return self._build_system_messages(query, history)
+            return self._build_system_messages(query, history, summary)
 
         context_parts = []
         for i, chunk in enumerate(retrieved_chunks):
             context_parts.append(f"[Source {i+1}]\n{chunk.text}")
 
         context_str = "\n\n".join(context_parts)
-        history_str = self._format_history(history) if history else ""
+        history_str = self._format_history(history, summary)
 
         user_prompt = KB_ANSWER_TEMPLATE.format(
             context=context_str,
@@ -50,8 +50,8 @@ class RAGPromptBuilder:
             {"role": "user", "content": user_prompt},
         ]
 
-    def _build_system_messages(self, query: str, history: list[dict]) -> list[dict]:
-        history_str = self._format_history(history) if history else ""
+    def _build_system_messages(self, query: str, history: list[dict], summary: str) -> list[dict]:
+        history_str = self._format_history(history, summary)
         user_prompt = SYSTEM_ANSWER_TEMPLATE.format(
             history=history_str,
             query=query,
@@ -61,12 +61,15 @@ class RAGPromptBuilder:
             {"role": "user", "content": user_prompt},
         ]
 
-    def _format_history(self, history: list[dict]) -> str:
+    def _format_history(self, history: list[dict], summary: str = "") -> str:
         parts = []
+        if summary:
+            parts.append(f"Conversation overview:\n{summary}\n")
+        parts.append("Recent conversation:")
         for m in history:
             role = "User" if m["role"] == "user" else "Assistant"
             parts.append(f"{role}: {m['content']}")
-        return "Conversation history:\n" + "\n".join(parts)
+        return "\n".join(parts)
 
 
 prompt_builder = RAGPromptBuilder()

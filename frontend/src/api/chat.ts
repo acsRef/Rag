@@ -1,0 +1,87 @@
+import api from './index'
+
+export interface Conversation {
+  conversation_id: string
+  title: string
+  created_at: string
+  updated_at: string
+}
+
+export interface ChatMessage {
+  role: 'user' | 'assistant'
+  content: string
+  conversation_id?: string
+}
+
+export const chatApi = {
+  async listConversations() {
+    const res = await api.get<Conversation[]>('/chat/conversations')
+    return res.data
+  },
+  async deleteConversation(id: string) {
+    await api.delete(`/chat/conversations/${id}`)
+  },
+  streamChat(
+    query: string,
+    conversationId: string | null,
+    knowledgeBaseIds: string[] | null,
+    onToken: (token: string) => void,
+    onMetadata: (data: { conversation_id: string }) => void,
+    onDone: () => void,
+    onError: (err: string) => void,
+  ): AbortController {
+    const controller = new AbortController()
+    const token = localStorage.getItem('token') || ''
+    const body = JSON.stringify({ query, conversation_id: conversationId, knowledge_base_ids: knowledgeBaseIds })
+
+    fetch('/api/v1/chat/stream', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+      body,
+      signal: controller.signal,
+    }).then(async (res) => {
+      const reader = res.body?.getReader()
+      if (!reader) return
+      const decoder = new TextDecoder()
+      let buffer = ''
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        buffer += decoder.decode(value, { stream: true })
+        const lines = buffer.split('\n')
+        buffer = lines.pop() || ''
+        for (const line of lines) {
+          if (line.startsWith('event: ')) {
+            const eventType = line.slice(7).trim()
+            if (eventType === 'metadata') {
+              // next line will be data
+            } else if (eventType === 'done') {
+              onDone()
+            }
+          } else if (line.startsWith('data: ')) {
+            const data = line.slice(6).trim()
+            if (data.startsWith('{')) {
+              try {
+                const parsed = JSON.parse(data)
+                if (parsed.conversation_id) {
+                  onMetadata(parsed)
+                }
+              } catch { /* ignore */ }
+            } else {
+              onToken(data)
+            }
+          }
+        }
+      }
+    }).catch((err) => {
+      if (err.name !== 'AbortError') {
+        onError(err.message || 'Connection error')
+      }
+    })
+
+    return controller
+  },
+}

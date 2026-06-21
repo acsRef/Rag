@@ -16,9 +16,10 @@ class RAGPipeline:
         yield f"event: metadata\ndata: {{\"conversation_id\": \"{conv_id}\"}}\n\n"
 
         history = conversation_memory.get_history(conv_id)
+        summary = conversation_memory.get_summary(conv_id)
 
         # Step 1: Rewrite query
-        rewrite_result = query_rewrite_service.rewrite(req.query, history)
+        rewrite_result = query_rewrite_service.rewrite(req.query, history, summary)
 
         # Step 2: Classify intents for each sub-question
         all_chunks: list[RetrievedChunk] = []
@@ -44,6 +45,7 @@ class RAGPipeline:
         messages = prompt_builder.build_messages(
             query=req.query,
             history=history,
+            summary=summary,
             retrieved_chunks=unique_chunks,
         )
 
