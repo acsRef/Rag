@@ -3,39 +3,49 @@ from app.config import settings
 from app.llm.chat import minimax_client
 from datetime import datetime, timezone
 
-SUMMARY_UPDATE_PROMPT = """You are a conversation summarizer. Given an existing summary and new conversation turns, produce an updated summary.
+SUMMARY_UPDATE_PROMPT = """你是一个对话摘要助手。请根据已有的摘要和新的对话轮次，生成更新后的摘要。
 
-Existing summary:
+已有的摘要：
 {existing_summary}
 
-New conversation turns:
+新的对话轮次：
 {new_turns}
 
-Instructions:
-1. Merge the new information into the existing summary
-2. Keep key technical terms, proper nouns, and decisions
-3. Preserve the "active topics" and "key terms" sections
-4. Keep the summary concise ({max_tokens} tokens max)
-5. If the question contains pronouns（它/它们/这个/那个/其/上述等）, resolve them to concrete terms in the summary
-6. Output ONLY the updated summary text, no explanations"""
+要求：
+1. 将新信息合并到已有摘要中，不要丢失原有重要内容
+2. 保留关键的技术术语、专有名词、用户偏好和已做出的决策
+3. 保持"活跃话题"和"关键术语"两部分
+4. 控制摘要长度在 {max_tokens} token 以内
+5. 如果后续对话可能用代词引用某个概念（它、它们、这个、那个、其、上述等），请确保该概念在摘要中有明确的术语名称，便于消歧
+6. 只输出摘要文本，不要额外解释
 
-SUMMARY_FRESH_PROMPT = """Summarize the following conversation. Keep:
-- Key topics discussed and decisions made
-- Important facts, technical terms, and proper nouns
-- User preferences and intents
-- Active topics at the end
-- Key terms that might be referenced by pronouns later
+输出格式示例：
+用户询问了 Transformer 注意力机制的原理，已解释 QKV 计算方式。
 
-Output format:
-[summary text]
+活跃话题：注意力机制、Transformer、QKV
+关键术语：self-attention, scaled dot-product, softmax"""
 
-Active topics: topic1, topic2, ...
-Key terms: term1, term2, ...
+SUMMARY_FRESH_PROMPT = """请总结以下对话。需要保留以下内容：
 
-Conversation:
+- 讨论的关键主题和做出的决策
+- 重要的事实、技术术语和专有名词
+- 用户的偏好和意图
+- 结尾处的活跃话题
+- 后续可能被代词引用的关键术语
+
+对话内容：
 {conversation_text}
 
-Keep the summary under {max_tokens} tokens. Output ONLY the summary."""
+输出格式（控制在 {max_tokens} token 以内）：
+[摘要正文]
+
+活跃话题：话题1、话题2、...
+关键术语：术语1、术语2、...
+
+要求：
+- 只输出摘要内容，不要额外解释
+- 如果对话内容为空，直接输出"暂无对话内容"
+- 不要编造对话中不存在的信息"""
 
 
 class ConversationMemory:

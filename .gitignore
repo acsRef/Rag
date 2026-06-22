@@ -24,3 +24,6 @@ ragent.db
 # Frontend
 frontend/node_modules/
 frontend/dist/
+frontend/src/**/*.js
+frontend/vite.config.js
+frontend/*.tsbuildinfo

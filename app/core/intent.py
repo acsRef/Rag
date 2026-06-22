@@ -4,29 +4,40 @@ from app.config import settings
 import json
 
 
-INTENT_CLASSIFIER_PROMPT = """You are an intent classifier. Given a user question and a list of available knowledge bases, determine which knowledge bases are relevant.
+INTENT_CLASSIFIER_PROMPT = """你是一个意图分类器。根据用户的问题和可用的知识库列表，判断哪些知识库与问题相关。
 
-Available knowledge bases:
+可用的知识库：
 {kb_list}
 
-User question: {question}
+用户问题：{question}
 
-Return a JSON object:
+返回 JSON 对象：
 {{
   "intent_type": "KB",
   "matches": [
-    {{"kb_id": "kb_name", "score": 0.95}}
+    {{"kb_id": "知识库ID或名称", "score": 0.95}}
   ]
 }}
 
-Rules:
-- intent_type is always "KB"
-- score between 0 and 1, higher means more relevant
-- Only include knowledge bases with score >= 0.3
-- Return at most {max_count} matches
-- If no knowledge base is relevant, return empty matches array
+规则：
+- intent_type 固定为 "KB"
+- score 范围 0~1，越高表示越相关
+- 只保留 score >= 0.3 的知识库
+- 最多返回 {max_count} 个匹配
+- 如果没有相关知识库，返回空数组 matches
+- 如果问题明显与技术/知识无关（如打招呼、闲聊），也返回空数组
 
-Return only the JSON object, no other text."""
+示例：
+
+用户问题："如何优化 RAG 分块策略？"
+知识库：["文档处理", "系统配置"]
+返回：{{"intent_type": "KB", "matches": [{{"kb_id": "文档处理", "score": 0.85}}]}}
+
+用户问题："你好"
+知识库：["文档处理", "系统配置"]
+返回：{{"intent_type": "KB", "matches": []}}
+
+只返回 JSON 对象，不要包含其他文本。"""
 
 
 class IntentClassifier:

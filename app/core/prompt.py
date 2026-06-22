@@ -1,25 +1,32 @@
 from app.models.schemas import RetrievedChunk
 
-SYSTEM_PROMPT = "You are a helpful assistant. Answer the user's question based on the provided context and conversation history."
+SYSTEM_PROMPT = "你是一个智能助手。请根据提供的检索内容和对话历史回答用户的问题。如果信息不足，如实告知即可。"
 
 
-KB_ANSWER_TEMPLATE = """You are a knowledgeable assistant with access to a knowledge base. Answer the user's question based on the retrieved context.
+KB_ANSWER_TEMPLATE = """你是一个知识库助手。请基于以下检索结果回答用户的问题。
 
-Retrieved context:
+检索内容：
 {context}
 
 {history}
 
-User question: {query}
+用户问题：{query}
 
-Answer concisely and accurately based on the context. If the context doesn't contain relevant information, say so politely."""
+要求：
+- 如果检索内容与问题无关或信息不足，请如实说"我没有找到相关信息"，不要编造
+- 回答要简洁、准确
+- 可以直接引用检索内容中的表述"""
 
 
-SYSTEM_ANSWER_TEMPLATE = """Answer the following question based on your own knowledge.
+SYSTEM_ANSWER_TEMPLATE = """请根据你自身的知识回答以下问题。
 
 {history}
 
-User question: {query}"""
+用户问题：{query}
+
+要求：
+- 如果你不知道答案，直接说"我不知道"，不要编造
+- 回答要简洁、准确"""
 
 
 class RAGPromptBuilder:

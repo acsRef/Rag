@@ -22,6 +22,13 @@ def init_db():
         conn.execute(
             text("ALTER TABLE conversations ADD COLUMN IF NOT EXISTS last_summary_at TIMESTAMP")
         )
+        conn.execute(
+            text("ALTER TABLE chunks ADD COLUMN IF NOT EXISTS search_text TEXT DEFAULT ''")
+        )
+        conn.execute(
+            text("CREATE INDEX IF NOT EXISTS idx_chunks_search_text ON chunks "
+                 "USING GIN (to_tsvector('simple', search_text))")
+        )
         conn.commit()
 
 
@@ -122,6 +129,7 @@ class Chunk(Base):
     summary = Column(Text, default="")
     questions = Column(Text, default="")
     section_path = Column(String(512), default="")
+    search_text = Column(Text, default="")
     visibility = Column(String(16), default="public")
     allowed_roles = Column(ARRAY(Integer), default=[])
     created_at = Column(DateTime, default=utc_now)

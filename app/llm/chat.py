@@ -1,6 +1,6 @@
 from app.config import settings
 from openai import OpenAI
-from typing import AsyncIterator
+from typing import Generator
 
 
 class MiniMaxClient:
@@ -11,12 +11,13 @@ class MiniMaxClient:
         )
         self.model = settings.minimax_model
 
-    def chat_stream(self, messages: list[dict]) -> AsyncIterator[str]:
+    def chat_stream(self, messages: list[dict], temperature: float = 0.7, top_p: float = 0.9) -> Generator[str, None, None]:
         response = self.client.chat.completions.create(
             model=self.model,
             messages=messages,
             stream=True,
-            temperature=0.7,
+            temperature=temperature,
+            top_p=top_p,
             max_tokens=4096,
         )
         for chunk in response:

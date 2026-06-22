@@ -53,12 +53,20 @@ class RAGPipeline:
         conversation_memory.add_message(conv_id, "user", req.query, req.user_id)
 
         full_response = ""
-        for token in minimax_client.chat_stream(messages):
-            full_response += token
-            yield f"event: token\ndata: {token}\n\n"
+        try:
+            for token in minimax_client.chat_stream(
+                messages,
+                temperature=req.temperature,
+                top_p=req.top_p,
+            ):
+                full_response += token
+                yield f"event: token\ndata: {token}\n\n"
+        except GeneratorExit:
+            if full_response:
+                conversation_memory.add_message(conv_id, "assistant", full_response, req.user_id)
+            return
 
         conversation_memory.add_message(conv_id, "assistant", full_response, req.user_id)
-
         yield "event: done\ndata: {}\n\n"
 
 

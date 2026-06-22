@@ -95,6 +95,8 @@ class ChatRequest(BaseModel):
     conversation_id: Optional[str] = None
     query: str
     knowledge_base_ids: Optional[list[str]] = None
+    temperature: float = 0.7
+    top_p: float = 0.9
 
 
 class ChatMessage(BaseModel):

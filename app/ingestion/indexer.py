@@ -10,6 +10,7 @@ from app.ingestion.cleaner import document_cleaner
 from app.ingestion.structurer import document_structurer
 from app.ingestion.metadata import chunk_metadata_generator
 from app.store.db import get_session, Document, new_id, utc_now
+from app.store.pgvector_store import tokenize
 
 
 class DocumentIndexer:
@@ -49,6 +50,7 @@ class DocumentIndexer:
                 "summary": c.summary,
                 "questions": "; ".join(c.questions),
                 "section_path": " > ".join(c.section_path) if c.section_path else "",
+                "search_text": tokenize(c.text),
                 "visibility": visibility,
                 "allowed_roles": allowed_roles or [],
             }

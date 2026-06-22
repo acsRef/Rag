@@ -30,6 +30,9 @@ class Settings(BaseSettings):
     history_keep_turns: int = 4
     history_summary_turns: int = 10  # 多少轮之前的消息触发摘要压缩
     max_summary_tokens: int = 800    # 摘要最大 token 数（超出时再压缩）
+    hybrid_search_enabled: bool = True
+    hybrid_search_top_k: int = 20  # 单路搜多取一些用于 RRF 合并
+    hybrid_rrf_k: int = 60  # RRF 常数
 
     # Server
     host: str = "0.0.0.0"

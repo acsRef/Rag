@@ -31,6 +31,7 @@ def create_user(username: str, password: str, display_name: str = "", email: str
         for rid in (role_ids or []):
             session.add(UserRole(user_id=user.id, role_id=rid))
         session.commit()
+        session.expunge(user)
         return user
     finally:
         session.close()

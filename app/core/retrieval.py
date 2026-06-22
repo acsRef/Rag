@@ -23,15 +23,29 @@ class RetrievalEngine:
         seen_ids = set()
         results: list[dict] = []
 
+        search_fn = pgvector_store.hybrid_search if settings.hybrid_search_enabled else pgvector_store.search
+
         for kb_id in target_kb_ids:
             try:
-                chunks = pgvector_store.search(
-                    kb_ids=[kb_id],
-                    embedding=query_emb,
-                    user_role_ids=user_role_ids,
-                    can_read_all=can_read_all,
-                    top_k=top_k,
-                )
+                if settings.hybrid_search_enabled:
+                    chunks = search_fn(
+                        kb_ids=[kb_id],
+                        embedding=query_emb,
+                        query=query,
+                        user_role_ids=user_role_ids,
+                        can_read_all=can_read_all,
+                        top_k=top_k,
+                        fetch_k=settings.hybrid_search_top_k,
+                        rrf_k=settings.hybrid_rrf_k,
+                    )
+                else:
+                    chunks = search_fn(
+                        kb_ids=[kb_id],
+                        embedding=query_emb,
+                        user_role_ids=user_role_ids,
+                        can_read_all=can_read_all,
+                        top_k=top_k,
+                    )
                 for c in chunks:
                     if c["chunk_id"] not in seen_ids:
                         seen_ids.add(c["chunk_id"])
@@ -47,13 +61,25 @@ class RetrievalEngine:
                 if kb_id in target_kb_ids:
                     continue
                 try:
-                    chunks = pgvector_store.search(
-                        kb_ids=[kb_id],
-                        embedding=query_emb,
-                        user_role_ids=user_role_ids,
-                        can_read_all=can_read_all,
-                        top_k=top_k,
-                    )
+                    if settings.hybrid_search_enabled:
+                        chunks = search_fn(
+                            kb_ids=[kb_id],
+                            embedding=query_emb,
+                            query=query,
+                            user_role_ids=user_role_ids,
+                            can_read_all=can_read_all,
+                            top_k=top_k,
+                            fetch_k=settings.hybrid_search_top_k,
+                            rrf_k=settings.hybrid_rrf_k,
+                        )
+                    else:
+                        chunks = search_fn(
+                            kb_ids=[kb_id],
+                            embedding=query_emb,
+                            user_role_ids=user_role_ids,
+                            can_read_all=can_read_all,
+                            top_k=top_k,
+                        )
                     for c in chunks:
                         if c["chunk_id"] not in seen_ids:
                             seen_ids.add(c["chunk_id"])

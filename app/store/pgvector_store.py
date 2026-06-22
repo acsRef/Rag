@@ -1,4 +1,5 @@
-"""pgvector-based vector search with permission filtering."""
+"""pgvector-based vector search + BM25 lexical search with permission filtering."""
+import jieba
 from sqlalchemy import text
 from app.store.db import get_session, Chunk, utc_now
 
@@ -22,6 +23,7 @@ def add_chunks(chunks_data: list[dict]):
                 summary=c.get("summary", ""),
                 questions=c.get("questions", ""),
                 section_path=c.get("section_path", ""),
+                search_text=c.get("search_text", ""),
                 visibility=c.get("visibility", "public"),
                 allowed_roles=c.get("allowed_roles", []),
                 created_at=utc_now(),
@@ -80,6 +82,100 @@ def search(
         ]
     finally:
         session.close()
+
+
+def tokenize(text: str) -> str:
+    """jieba tokenize for BM25 full-text search."""
+    return " ".join(jieba.cut(text))
+
+
+def bm25_search(
+    kb_ids: list[str],
+    query: str,
+    user_role_ids: list[int] | None = None,
+    can_read_all: bool = False,
+    top_k: int = 10,
+) -> list[dict]:
+    """BM25-style lexical search using PostgreSQL ts_rank + jieba tokenization."""
+    query_tokens = tokenize(query)
+    session = get_session()
+    try:
+        sql = """
+            SELECT chunk_id, text, title, summary, section_path,
+                   ts_rank(to_tsvector('simple', search_text),
+                           plainto_tsquery('simple', :query)) AS score
+            FROM chunks
+            WHERE kb_id = ANY(:kb_ids)
+              AND (:can_read_all = TRUE
+                   OR visibility = 'public'
+                   OR (visibility IN ('internal', 'restricted')
+                       AND allowed_roles && :user_roles))
+              AND to_tsvector('simple', search_text) @@ plainto_tsquery('simple', :query)
+            ORDER BY score DESC
+            LIMIT :top_k
+        """
+        rows = session.execute(text(sql), {
+            "query": query_tokens,
+            "kb_ids": kb_ids,
+            "can_read_all": can_read_all,
+            "user_roles": user_role_ids or [],
+            "top_k": top_k,
+        }).fetchall()
+
+        return [
+            {
+                "chunk_id": r[0],
+                "text": r[1],
+                "title": r[2],
+                "summary": r[3],
+                "section_path": r[4],
+                "score": float(r[5]),
+            }
+            for r in rows
+        ]
+    finally:
+        session.close()
+
+
+def hybrid_search(
+    kb_ids: list[str],
+    embedding: list[float],
+    query: str,
+    user_role_ids: list[int] | None = None,
+    can_read_all: bool = False,
+    top_k: int = 10,
+    fetch_k: int = 20,
+    rrf_k: int = 60,
+) -> list[dict]:
+    """Hybrid vector + BM25 search with RRF merge.
+
+    Combines cosine similarity (semantic) and ts_rank (lexical) results
+    using Reciprocal Rank Fusion.
+    """
+    vector_results = search(
+        kb_ids, embedding, user_role_ids, can_read_all, top_k=fetch_k,
+    )
+    bm25_results = bm25_search(
+        kb_ids, query, user_role_ids, can_read_all, top_k=fetch_k,
+    )
+
+    rrf_scores: dict[str, float] = {}
+    for rank, r in enumerate(vector_results):
+        rrf_scores[r["chunk_id"]] = 1.0 / (rrf_k + rank + 1)
+    for rank, r in enumerate(bm25_results):
+        rrf_scores[r["chunk_id"]] = rrf_scores.get(r["chunk_id"], 0) + 1.0 / (rrf_k + rank + 1)
+
+    merged: dict[str, dict] = {}
+    for r in vector_results:
+        merged[r["chunk_id"]] = r
+    for r in bm25_results:
+        merged[r["chunk_id"]] = r
+
+    ranked = sorted(merged.values(), key=lambda r: rrf_scores[r["chunk_id"]], reverse=True)
+    for r in ranked:
+        r["score"] = rrf_scores[r["chunk_id"]]
+
+    return ranked[:top_k]
 
 
 def delete_chunks_by_document(document_id: str):

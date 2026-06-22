@@ -4,7 +4,7 @@
 
     <nav class="sidebar-nav">
       <button class="nav-item" :class="{ active: route.path.startsWith('/chat') }" @click="go('/chat')">
-        💬 Chat
+        💬 对话
       </button>
       <button
         v-if="auth.hasPermission('doc.upload') || auth.hasPermission('doc.read_all')"
@@ -12,7 +12,7 @@
         :class="{ active: route.path === '/documents' }"
         @click="go('/documents')"
       >
-        📄 Documents
+        📄 文档
       </button>
       <button
         v-if="auth.hasPermission('kb.create') || auth.hasPermission('kb.delete')"
@@ -20,14 +20,14 @@
         :class="{ active: route.path === '/kb' }"
         @click="go('/kb')"
       >
-        🗂 Knowledge Base
+        🗂 知识库
       </button>
     </nav>
 
     <template v-if="route.path.startsWith('/chat')">
       <div class="sidebar-divider" />
       <button class="new-conv-btn" @click="$emit('new-conv')">
-        <span>+</span> New conversation
+        <span>+</span> 新对话
       </button>
       <div class="sidebar-conversations">
         <div
@@ -37,11 +37,11 @@
           :class="{ active: currentConvId === c.conversation_id }"
           @click="$emit('switch-conv', c.conversation_id)"
         >
-          <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ c.title }}</span>
-          <button class="delete-btn-icon" title="Delete" @click.stop="$emit('delete-conv', c.conversation_id)">✕</button>
+          <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" :title="c.title">{{ c.title }}</span>
+          <button class="delete-btn-icon" title="删除" @click.stop="$emit('delete-conv', c.conversation_id)">✕</button>
         </div>
-        <div v-if="!conversations.length" style="padding:12px;font-size:12px;color:var(--text-tertiary);text-align:center">
-          No conversations yet
+        <div v-if="!conversations.length" style="padding:10px;font-size:11px;color:var(--text-tertiary);text-align:center">
+          暂无对话
         </div>
       </div>
     </template>
@@ -49,7 +49,7 @@
     <div class="sidebar-footer">
       <div class="sidebar-user">
         <span>{{ auth.user?.display_name || auth.user?.username }}</span>
-        <button class="logout-btn" @click="doLogout">Sign out</button>
+        <button class="logout-btn" @click="doLogout">退出</button>
       </div>
     </div>
   </aside>

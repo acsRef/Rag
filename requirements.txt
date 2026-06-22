@@ -9,6 +9,7 @@ python-multipart
 chardet>=5.0.0
 Pillow>=10.0.0
 httpx
+jieba
 psycopg2-binary
 pgvector
 python-jose[cryptography]
