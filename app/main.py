@@ -6,6 +6,7 @@ from app.api.admin import router as admin_router
 from app.api.kb import router as kb_router
 from app.store.db import init_db
 from app.store.auth_store import seed_defaults
+from app.core.pii_rules import seed_pii_rules
 from app.config import settings
 import uvicorn
 
@@ -21,6 +22,7 @@ app.include_router(chat_router)
 def startup():
     init_db()
     seed_defaults()
+    seed_pii_rules()
 
 
 @app.get("/health")

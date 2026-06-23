@@ -34,6 +34,11 @@ class Settings(BaseSettings):
     hybrid_search_top_k: int = 20  # 单路搜多取一些用于 RRF 合并
     hybrid_rrf_k: int = 60  # RRF 常数
 
+    # PII / Sensitive data
+    pii_enabled: bool = True
+    pii_cache_ttl: int = 300
+    pii_encryption_key: str = "change-me-to-a-random-key"
+
     # Server
     host: str = "0.0.0.0"
     port: int = 8000

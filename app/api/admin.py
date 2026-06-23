@@ -1,4 +1,4 @@
-"""Admin API: user & role management."""
+"""Admin API: user & role management + PII review."""
 from fastapi import APIRouter, Depends, HTTPException
 from app.store.auth_store import (
     list_users, get_user_by_id, get_user_role_ids, set_user_roles,
@@ -6,8 +6,11 @@ from app.store.auth_store import (
     seed_defaults,
 )
 from app.store.db import RolePermission
+from app.store.db import get_session, PiiAlert, PiiHold, utc_now
 from app.middleware.auth import get_current_user
 from app.models.schemas import UserResponse, UserRoleUpdateRequest
+from app.core.pii_scanner import invalidate_cache
+from pydantic import BaseModel
 
 router = APIRouter(prefix="/api/v1/admin", tags=["admin"])
 
@@ -63,3 +66,136 @@ def create_new_role(name: str, description: str = "", permissions: list[str] = [
     if permissions:
         set_role_permissions(role.id, permissions)
     return {"id": role.id, "name": role.name}
+
+
+# ── PII Audit ────────────────────────────────────────────
+
+class PiiAlertItem(BaseModel):
+    id: int
+    source_type: str
+    source_id: str
+    rule_name: str
+    context_snippet: str
+    strategy: str
+    status: str
+    created_at: str
+
+
+@router.get("/pii-alerts", response_model=list[PiiAlertItem])
+def list_pii_alerts(status: str = "pending", current_user: dict = Depends(get_current_user)):
+    require_admin(current_user)
+    session = get_session()
+    try:
+        alerts = (
+            session.query(PiiAlert)
+            .filter(PiiAlert.status == status)
+            .order_by(PiiAlert.created_at.desc())
+            .limit(50)
+            .all()
+        )
+        return [
+            PiiAlertItem(
+                id=a.id,
+                source_type=a.source_type,
+                source_id=a.source_id,
+                rule_name=a.rule_name,
+                context_snippet=a.context_snippet,
+                strategy=a.strategy,
+                status=a.status,
+                created_at=a.created_at.isoformat() if a.created_at else "",
+            )
+            for a in alerts
+        ]
+    finally:
+        session.close()
+
+
+@router.post("/pii-alerts/{alert_id}/confirm")
+def confirm_pii_alert(alert_id: int, current_user: dict = Depends(get_current_user)):
+    require_admin(current_user)
+    session = get_session()
+    try:
+        alert = session.query(PiiAlert).filter(PiiAlert.id == alert_id).first()
+        if not alert:
+            raise HTTPException(status_code=404, detail="Alert not found")
+        alert.status = "confirmed"
+        alert.resolved_at = utc_now()
+        session.commit()
+        return {"ok": True}
+    finally:
+        session.close()
+
+
+@router.post("/pii-alerts/{alert_id}/false-positive")
+def false_positive_pii_alert(alert_id: int, current_user: dict = Depends(get_current_user)):
+    require_admin(current_user)
+    session = get_session()
+    try:
+        alert = session.query(PiiAlert).filter(PiiAlert.id == alert_id).first()
+        if not alert:
+            raise HTTPException(status_code=404, detail="Alert not found")
+        alert.status = "false_positive"
+        alert.resolved_at = utc_now()
+        session.commit()
+
+        hold = (
+            session.query(PiiHold)
+            .filter(
+                PiiHold.source_type == alert.source_type,
+                PiiHold.source_id == alert.source_id,
+                PiiHold.status == "pending",
+            )
+            .first()
+        )
+        if hold:
+            hold.status = "released"
+            session.commit()
+        return {"ok": True}
+    finally:
+        session.close()
+
+
+@router.post("/pii-alerts/{alert_id}/whitelist")
+def whitelist_pii_alert(alert_id: int, current_user: dict = Depends(get_current_user)):
+    require_admin(current_user)
+    session = get_session()
+    try:
+        alert = session.query(PiiAlert).filter(PiiAlert.id == alert_id).first()
+        if not alert:
+            raise HTTPException(status_code=404, detail="Alert not found")
+
+        from app.store.db import SensitiveRule
+        rule = session.query(SensitiveRule).filter(
+            SensitiveRule.rule_name == alert.rule_name
+        ).first()
+        if not rule:
+            raise HTTPException(status_code=404, detail="Rule not found")
+
+        existing = (rule.exclusion_words or "").split(";")
+        word = alert.matched_text[:20]
+        if word not in existing:
+            existing.append(word)
+            rule.exclusion_words = ";".join(w for w in existing if w.strip())
+            session.commit()
+
+        alert.status = "false_positive"
+        alert.resolved_at = utc_now()
+        session.commit()
+
+        hold = (
+            session.query(PiiHold)
+            .filter(
+                PiiHold.source_type == alert.source_type,
+                PiiHold.source_id == alert.source_id,
+                PiiHold.status == "pending",
+            )
+            .first()
+        )
+        if hold:
+            hold.status = "released"
+            session.commit()
+
+        invalidate_cache()
+        return {"ok": True, "whitelisted": word}
+    finally:
+        session.close()

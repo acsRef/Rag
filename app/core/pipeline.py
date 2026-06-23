@@ -5,7 +5,16 @@ from app.core.retrieval import retrieval_engine
 from app.core.prompt import prompt_builder
 from app.llm.chat import minimax_client
 from app.models.schemas import ChatRequest, RetrievedChunk
+from app.config import settings
 from typing import Generator
+
+
+def _pii_safe(text: str) -> str:
+    """Mask PII in text if PII filtering is enabled."""
+    if not settings.pii_enabled:
+        return text
+    from app.core.pii_scanner import mask_text
+    return mask_text(text)
 
 
 class RAGPipeline:
@@ -14,6 +23,26 @@ class RAGPipeline:
             req.conversation_id, req.user_id
         )
         yield f"event: metadata\ndata: {{\"conversation_id\": \"{conv_id}\"}}\n\n"
+
+        if settings.pii_enabled:
+            from app.core.pii_scanner import scan_and_reject
+            rejects = scan_and_reject(req.query)
+            if rejects:
+                from app.store.db import get_session, PiiAlert
+                session = get_session()
+                try:
+                    for r in rejects:
+                        session.add(PiiAlert(
+                            source_type="chat", source_id=conv_id,
+                            rule_name=r.rule_name, matched_text=r.matched_text,
+                            context_snippet=req.query[max(0, r.start-30):r.end+30],
+                            strategy=r.strategy, status="pending",
+                        ))
+                    session.commit()
+                finally:
+                    session.close()
+                yield "event: error\ndata: 您的问题涉及敏感信息，无法回答，请修改后重试\n\n"
+                return
 
         history = conversation_memory.get_history(conv_id)
         summary = conversation_memory.get_summary(conv_id)
@@ -50,7 +79,7 @@ class RAGPipeline:
         )
 
         # Step 5: Stream LLM response
-        conversation_memory.add_message(conv_id, "user", req.query, req.user_id)
+        conversation_memory.add_message(conv_id, "user", _pii_safe(req.query), req.user_id)
 
         full_response = ""
         try:
@@ -63,10 +92,10 @@ class RAGPipeline:
                 yield f"event: token\ndata: {token}\n\n"
         except GeneratorExit:
             if full_response:
-                conversation_memory.add_message(conv_id, "assistant", full_response, req.user_id)
+                conversation_memory.add_message(conv_id, "assistant", _pii_safe(full_response), req.user_id)
             return
 
-        conversation_memory.add_message(conv_id, "assistant", full_response, req.user_id)
+        conversation_memory.add_message(conv_id, "assistant", _pii_safe(full_response), req.user_id)
         yield "event: done\ndata: {}\n\n"
 
 

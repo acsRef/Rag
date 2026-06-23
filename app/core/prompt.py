@@ -1,4 +1,5 @@
 from app.models.schemas import RetrievedChunk
+from app.config import settings
 
 SYSTEM_PROMPT = "你是一个智能助手。请根据提供的检索内容和对话历史回答用户的问题。如果信息不足，如实告知即可。"
 
@@ -42,7 +43,11 @@ class RAGPromptBuilder:
 
         context_parts = []
         for i, chunk in enumerate(retrieved_chunks):
-            context_parts.append(f"[Source {i+1}]\n{chunk.text}")
+            text = chunk.text
+            if settings.pii_enabled:
+                from app.core.pii_scanner import mask_text
+                text = mask_text(text)
+            context_parts.append(f"[Source {i+1}]\n{text}")
 
         context_str = "\n\n".join(context_parts)
         history_str = self._format_history(history, summary)

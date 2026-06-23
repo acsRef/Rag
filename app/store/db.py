@@ -29,6 +29,12 @@ def init_db():
             text("CREATE INDEX IF NOT EXISTS idx_chunks_search_text ON chunks "
                  "USING GIN (to_tsvector('simple', search_text))")
         )
+        conn.execute(
+            text("CREATE INDEX IF NOT EXISTS idx_pii_alerts_status ON pii_alerts (status)")
+        )
+        conn.execute(
+            text("CREATE INDEX IF NOT EXISTS idx_pii_hold_status ON pii_hold (status)")
+        )
         conn.commit()
 
 
@@ -158,4 +164,46 @@ class Message(Base):
     role = Column(String(16), nullable=False)
     content = Column(Text, nullable=False)
     metadata_json = Column(JSON, default={})
+    created_at = Column(DateTime, default=utc_now)
+
+
+# ── PII / Sensitive Data ─────────────────────────────────
+
+class SensitiveRule(Base):
+    __tablename__ = "sensitive_rules"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    rule_name = Column(String(64), unique=True, nullable=False, index=True)
+    display_name = Column(String(128), nullable=False)
+    pattern = Column(String(512), nullable=False)
+    validation_fn = Column(String(64), default="")
+    strategy = Column(String(16), nullable=False, default="mask")  # mask / reject / audit
+    mask_mode = Column(String(16), default="partial")  # partial / full
+    exclusion_words = Column(String(1024), default="")
+    description = Column(String(256), default="")
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=utc_now)
+    updated_at = Column(DateTime, default=utc_now, onupdate=utc_now)
+
+
+class PiiAlert(Base):
+    __tablename__ = "pii_alerts"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    source_type = Column(String(16), nullable=False)  # document / chat
+    source_id = Column(String(64), nullable=False, index=True)
+    rule_name = Column(String(64), nullable=False)
+    matched_text = Column(Text, nullable=False)
+    context_snippet = Column(Text, default="")
+    strategy = Column(String(16), nullable=False)
+    status = Column(String(16), nullable=False, default="pending")  # pending / confirmed / false_positive
+    created_at = Column(DateTime, default=utc_now)
+    resolved_at = Column(DateTime, nullable=True)
+
+
+class PiiHold(Base):
+    __tablename__ = "pii_hold"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    source_type = Column(String(16), nullable=False)  # document / chat
+    source_id = Column(String(64), nullable=False, index=True)
+    encrypted_text = Column(Text, nullable=False)
+    status = Column(String(16), nullable=False, default="pending")  # pending / released / deleted
     created_at = Column(DateTime, default=utc_now)
