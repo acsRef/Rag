@@ -3,7 +3,7 @@ from app.core.pipeline import rag_pipeline
 from app.core.memory import conversation_memory
 from app.models.schemas import ChatRequest, ConversationResponse
 from app.middleware.auth import get_current_user, get_optional_user
-from app.store.db import get_session, Conversation
+from app.store.db import get_db_ctx, Conversation
 from fastapi import APIRouter, Depends, HTTPException
 
 router = APIRouter(prefix="/api/v1/chat", tags=["Chat"])
@@ -30,8 +30,7 @@ async def stream_chat(
 
 @router.get("/conversations", response_model=list[ConversationResponse])
 def list_conversations(current_user: dict = Depends(get_current_user)):
-    session = get_session()
-    try:
+    with get_db_ctx() as session:
         convs = (
             session.query(Conversation)
             .filter(Conversation.user_id == current_user["id"])
@@ -43,20 +42,17 @@ def list_conversations(current_user: dict = Depends(get_current_user)):
             ConversationResponse(
                 conversation_id=c.conversation_id,
                 title=c.title or "New conversation",
-                created_at=c.created_at.isoformat() if c.created_at else "",
-                updated_at=c.updated_at.isoformat() if c.updated_at else "",
+                created_at=c.created_at,
+                updated_at=c.updated_at,
             )
             for c in convs
         ]
-    finally:
-        session.close()
 
 
 @router.delete("/conversations/{conversation_id}")
 def delete_conversation(conversation_id: str, current_user: dict = Depends(get_current_user)):
     from app.store.db import Message
-    session = get_session()
-    try:
+    with get_db_ctx() as session:
         conv = session.query(Conversation).filter(
             Conversation.conversation_id == conversation_id,
             Conversation.user_id == current_user["id"],
@@ -67,5 +63,3 @@ def delete_conversation(conversation_id: str, current_user: dict = Depends(get_c
         session.delete(conv)
         session.commit()
         return {"ok": True}
-    finally:
-        session.close()

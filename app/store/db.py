@@ -35,11 +35,43 @@ def init_db():
         conn.execute(
             text("CREATE INDEX IF NOT EXISTS idx_pii_hold_status ON pii_hold (status)")
         )
+        conn.execute(
+            text("ALTER TABLE chunks ADD COLUMN IF NOT EXISTS content_hash VARCHAR(64) DEFAULT ''")
+        )
+        conn.execute(
+            text("ALTER TABLE documents ADD COLUMN IF NOT EXISTS content_hash VARCHAR(64) DEFAULT ''")
+        )
+        conn.execute(
+            text("ALTER TABLE documents ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP")
+        )
         conn.commit()
+
+
+from contextlib import contextmanager
+from collections.abc import Generator
 
 
 def get_session():
     return SessionLocal()
+
+
+def get_db() -> Generator:
+    """FastAPI Depends generator — yields session, auto-closes on request end."""
+    session = SessionLocal()
+    try:
+        yield session
+    finally:
+        session.close()
+
+
+@contextmanager
+def get_db_ctx():
+    """Context manager for internal (non-route) use."""
+    session = SessionLocal()
+    try:
+        yield session
+    finally:
+        session.close()
 
 
 def new_id() -> str:
@@ -112,7 +144,9 @@ class Document(Base):
     owner_id = Column(String(64), ForeignKey("users.id"), nullable=False)
     status = Column(String(32), default="indexing")
     chunk_count = Column(Integer, default=0)
+    content_hash = Column(String(64), default="")
     created_at = Column(DateTime, default=utc_now)
+    updated_at = Column(DateTime, nullable=True)
 
 
 class DocRoleAccess(Base):
@@ -136,6 +170,7 @@ class Chunk(Base):
     questions = Column(Text, default="")
     section_path = Column(String(512), default="")
     search_text = Column(Text, default="")
+    content_hash = Column(String(64), default="")
     visibility = Column(String(16), default="public")
     allowed_roles = Column(ARRAY(Integer), default=[])
     created_at = Column(DateTime, default=utc_now)

@@ -1,5 +1,8 @@
+from datetime import datetime
 from pydantic import BaseModel, Field
 from typing import Optional
+
+_DATE_ENCODER = {datetime: lambda v: v.isoformat() if v else ""}
 
 
 # ── Auth ────────────────────────────────────────────────
@@ -34,19 +37,21 @@ class UserResponse(BaseModel):
 
 
 class ConversationResponse(BaseModel):
+    model_config = {"json_encoders": _DATE_ENCODER}
     conversation_id: str
     title: str
-    created_at: str
-    updated_at: str
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
 
 
 class DocumentListItem(BaseModel):
+    model_config = {"json_encoders": _DATE_ENCODER}
     document_id: str
     filename: str
     status: str
     kb_id: str
     chunk_count: int
-    created_at: str
+    created_at: datetime | None = None
 
 
 class UserRoleUpdateRequest(BaseModel):
@@ -79,6 +84,7 @@ class DocumentUploadResponse(BaseModel):
     filename: str
     status: str
     chunk_count: int
+    message: str = ""
 
 
 class DocumentStatusResponse(BaseModel):
@@ -124,6 +130,7 @@ class IntentResult(BaseModel):
 
 class RetrievedChunk(BaseModel):
     chunk_id: str
+    document_id: str = ""
     text: str
     score: float
     title: str = ""

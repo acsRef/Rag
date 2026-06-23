@@ -5,9 +5,12 @@ for ALL chunks in one batch, then writes results back into the Chunk objects.
 """
 
 import json
+import logging
 
 from app.llm.chat import minimax_client
 from app.ingestion.chunker import Chunk
+
+logger = logging.getLogger(__name__)
 
 
 METADATA_PROMPT = """你是一个文档分析助手。为以下每个文本块生成元数据。
@@ -51,7 +54,7 @@ class ChunkMetadataGenerator:
                     chunks[idx].summary = item.get("summary", "")
                     chunks[idx].questions = item.get("questions", [])
         except Exception:
-            pass
+            logger.exception("Metadata generation failed for %d chunks", len(chunks))
 
         return chunks
 

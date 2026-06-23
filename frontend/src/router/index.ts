@@ -1,11 +1,12 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import { useAuthStore } from '../stores/auth'
-import LoginView from '../views/LoginView.vue'
-import RegisterView from '../views/RegisterView.vue'
-import ChatView from '../views/ChatView.vue'
-import DocumentsView from '../views/DocumentsView.vue'
-import KBView from '../views/KBView.vue'
-import AppLayout from '../components/AppLayout.vue'
+
+const LoginView = () => import('../views/LoginView.vue')
+const RegisterView = () => import('../views/RegisterView.vue')
+const ChatView = () => import('../views/ChatView.vue')
+const DocumentsView = () => import('../views/DocumentsView.vue')
+const KBView = () => import('../views/KBView.vue')
+const AppLayout = () => import('../components/AppLayout.vue')
 
 const routes = [
   { path: '/login', component: LoginView, meta: { guest: true } },

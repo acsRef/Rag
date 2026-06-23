@@ -1,3 +1,5 @@
+import asyncio
+
 from app.ingestion.indexer import document_indexer
 
 
@@ -10,14 +12,17 @@ class IngestionPipeline:
         user_id: str = "default_user",
         visibility: str = "public",
         allowed_roles: list[int] | None = None,
+        document_id: str | None = None,
     ) -> dict:
-        return document_indexer.index(
+        return await asyncio.to_thread(
+            document_indexer.index,
             filename=filename,
             content=content,
             kb_id=kb_id,
             user_id=user_id,
             visibility=visibility,
             allowed_roles=allowed_roles,
+            document_id=document_id,
         )
 
 

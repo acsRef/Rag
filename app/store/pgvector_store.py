@@ -8,7 +8,8 @@ def add_chunks(chunks_data: list[dict]):
     """Bulk insert chunks with embeddings.
 
     chunks_data: [{chunk_id, document_id, kb_id, text, embedding, title,
-                   summary, questions, section_path, visibility, allowed_roles}]
+                   summary, questions, section_path, search_text,
+                   content_hash, visibility, allowed_roles}]
     """
     session = get_session()
     try:
@@ -24,11 +25,41 @@ def add_chunks(chunks_data: list[dict]):
                 questions=c.get("questions", ""),
                 section_path=c.get("section_path", ""),
                 search_text=c.get("search_text", ""),
+                content_hash=c.get("content_hash", ""),
                 visibility=c.get("visibility", "public"),
                 allowed_roles=c.get("allowed_roles", []),
                 created_at=utc_now(),
             ))
         session.commit()
+    finally:
+        session.close()
+
+
+def get_chunks_by_document(document_id: str) -> list[dict]:
+    """Return all chunks for a document, keyed by content_hash for reuse lookup."""
+    session = get_session()
+    try:
+        rows = (
+            session.query(Chunk)
+            .filter(Chunk.document_id == document_id)
+            .all()
+        )
+        return [
+            {
+                "chunk_id": r.chunk_id,
+                "text": r.text,
+                "embedding": r.embedding,
+                "title": r.title,
+                "summary": r.summary,
+                "questions": r.questions,
+                "section_path": r.section_path,
+                "search_text": r.search_text,
+                "content_hash": r.content_hash,
+                "visibility": r.visibility,
+                "allowed_roles": r.allowed_roles,
+            }
+            for r in rows
+        ]
     finally:
         session.close()
 
@@ -50,15 +81,15 @@ def search(
     session = get_session()
     try:
         sql = """
-            SELECT chunk_id, text, title, summary, section_path,
-                   1 - (embedding <=> :query) AS score
+            SELECT chunk_id, document_id, text, embedding, title, summary,
+                   section_path, 1 - (embedding <=> (:query)::vector) AS score
             FROM chunks
             WHERE kb_id = ANY(:kb_ids)
               AND (:can_read_all = TRUE
                    OR visibility = 'public'
                    OR (visibility IN ('internal', 'restricted')
                        AND allowed_roles && :user_roles))
-            ORDER BY embedding <=> :query
+            ORDER BY embedding <=> (:query)::vector
             LIMIT :top_k
         """
         rows = session.execute(text(sql), {
@@ -72,11 +103,13 @@ def search(
         return [
             {
                 "chunk_id": r[0],
-                "text": r[1],
-                "title": r[2],
-                "summary": r[3],
-                "section_path": r[4],
-                "score": float(r[5]),
+                "document_id": r[1],
+                "text": r[2],
+                "embedding": r[3],
+                "title": r[4],
+                "summary": r[5],
+                "section_path": r[6],
+                "score": float(r[7]),
             }
             for r in rows
         ]
@@ -101,7 +134,8 @@ def bm25_search(
     session = get_session()
     try:
         sql = """
-            SELECT chunk_id, text, title, summary, section_path,
+            SELECT chunk_id, document_id, text, embedding, title, summary,
+                   section_path,
                    ts_rank(to_tsvector('simple', search_text),
                            plainto_tsquery('simple', :query)) AS score
             FROM chunks
@@ -125,11 +159,13 @@ def bm25_search(
         return [
             {
                 "chunk_id": r[0],
-                "text": r[1],
-                "title": r[2],
-                "summary": r[3],
-                "section_path": r[4],
-                "score": float(r[5]),
+                "document_id": r[1],
+                "text": r[2],
+                "embedding": r[3],
+                "title": r[4],
+                "summary": r[5],
+                "section_path": r[6],
+                "score": float(r[7]),
             }
             for r in rows
         ]

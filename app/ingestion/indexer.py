@@ -1,7 +1,11 @@
 """Full indexing pipeline: parse → clean → structure → chunk → metadata → embed → store.
 
-Coordinates all ingestion stages and persists results to PostgreSQL + pgvector.
+Supports incremental update: reuses chunks by content_hash to avoid redundant
+embedding and LLM calls. Coordinates all ingestion stages and persists results
+to PostgreSQL + pgvector.
 """
+
+import hashlib
 
 from app.store import pgvector_store
 from app.llm.embedding import sf_embedding
@@ -14,6 +18,10 @@ from app.store.pgvector_store import tokenize
 from app.config import settings
 
 
+def _content_hash(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
 class DocumentIndexer:
     def index(
         self,
@@ -23,80 +31,132 @@ class DocumentIndexer:
         user_id: str = "default_user",
         visibility: str = "public",
         allowed_roles: list[int] | None = None,
+        document_id: str | None = None,
     ) -> dict:
         from app.ingestion.parser import document_parser
 
         text = document_parser.parse_bytes(content, filename)
         text = document_cleaner.clean(text)
+        doc_hash = _content_hash(text)
 
+        # ── PII check ─────────────────────────────────
         if settings.pii_enabled:
             from app.core.pii_scanner import scan_and_reject, mask_text
             rejects = scan_and_reject(text)
             if rejects:
-                doc_id = new_id()
-                from app.store.db import PiiAlert, PiiHold
-                from app.core.pii_scanner import load_rules
-                session = get_session()
-                try:
-                    for r in rejects:
-                        session.add(PiiAlert(
-                            source_type="document", source_id=doc_id,
-                            rule_name=r.rule_name,
-                            matched_text=r.matched_text,
-                            context_snippet=text[max(0, r.start-30):r.end+30],
-                            strategy=r.strategy,
-                            status="pending",
-                        ))
-                    session.add(PiiHold(
-                        source_type="document", source_id=doc_id,
-                        encrypted_text=text,
-                        status="pending",
-                    ))
-                    self._save_document(doc_id, user_id, kb_id, filename, 0, "pending_review")
-                    session.commit()
-                finally:
-                    session.close()
-                return {
-                    "document_id": doc_id,
-                    "filename": filename,
-                    "status": "pending_review",
-                    "chunk_count": 0,
-                    "message": "文档因包含禁止上传的敏感内容，已暂停处理，管理员审核中",
-                }
+                return self._reject_document(
+                    text, rejects, user_id, kb_id, filename,
+                )
             text = mask_text(text)
 
+        # ── Quick unchanged check ──────────────────────
+        if document_id:
+            session = get_session()
+            try:
+                existing = session.query(Document).filter(
+                    Document.document_id == document_id
+                ).first()
+            finally:
+                session.close()
+
+            if existing and existing.content_hash == doc_hash:
+                return {
+                    "document_id": document_id,
+                    "filename": filename,
+                    "status": "unchanged",
+                    "chunk_count": existing.chunk_count,
+                    "message": "文档内容无变化，跳过索引",
+                }
+
+        # ── Structure + Chunk ──────────────────────────
         sections = document_structurer.structure(text)
         chunks: list[Chunk] = text_chunker.chunk(sections)
 
-        doc_id = new_id()
         if not chunks:
-            self._save_document(doc_id, user_id, kb_id, filename, 0, "failed")
+            doc_id = document_id or new_id()
+            self._save_document(doc_id, user_id, kb_id, filename, 0, "failed", doc_hash)
             return {"document_id": doc_id, "chunk_count": 0, "status": "failed"}
 
-        chunks = chunk_metadata_generator.generate(chunks)
-        embeddings = sf_embedding.embed_batch([c.text for c in chunks])
+        # ── Compute per-chunk hash for reuse ────────────
+        for c in chunks:
+            c.content_hash = _content_hash(c.text)
 
-        chunk_ids = [f"{doc_id}_{i}" for i in range(len(chunks))]
-        chunks_data = [
-            {
-                "chunk_id": chunk_ids[i],
-                "document_id": doc_id,
-                "kb_id": kb_id,
-                "text": c.text,
-                "embedding": embeddings[i],
-                "title": c.title,
-                "summary": c.summary,
-                "questions": "; ".join(c.questions),
-                "section_path": " > ".join(c.section_path) if c.section_path else "",
-                "search_text": tokenize(c.text),
-                "visibility": visibility,
-                "allowed_roles": allowed_roles or [],
-            }
-            for i, c in enumerate(chunks)
-        ]
+        # ── Load old chunks for reuse matching ──────────
+        old_chunks_map: dict[str, dict] = {}
+        if document_id:
+            for oc in pgvector_store.get_chunks_by_document(document_id):
+                if oc.get("content_hash"):
+                    old_chunks_map[oc["content_hash"]] = oc
 
+        # ── Separate reused vs new chunks ───────────────
+        new_chunks: list[Chunk] = []
+        chunk_index: list[tuple[Chunk, bool]] = []  # (chunk, is_reused)
+
+        for c in chunks:
+            if c.content_hash in old_chunks_map:
+                chunk_index.append((c, True))
+            else:
+                chunk_index.append((c, False))
+                new_chunks.append(c)
+
+        # ── Process new chunks (embed + metadata) ───────
+        new_embeddings: list = []
+        if new_chunks:
+            new_chunks = chunk_metadata_generator.generate(new_chunks)
+            new_embeddings = sf_embedding.embed_batch([c.text for c in new_chunks])
+
+        # ── Build final chunks_data ─────────────────────
+        doc_id = document_id or new_id()
+        chunk_seq = 0
+        new_idx = 0
+        chunks_data = []
+
+        for c, is_reused in chunk_index:
+            ch = c.content_hash
+            chunk_id = f"{doc_id}_{chunk_seq}"
+            chunk_seq += 1
+
+            if is_reused:
+                old = old_chunks_map[ch]
+                chunks_data.append({
+                    "chunk_id": chunk_id,
+                    "document_id": doc_id,
+                    "kb_id": kb_id,
+                    "text": c.text,
+                    "embedding": old["embedding"],
+                    "title": old["title"],
+                    "summary": old["summary"],
+                    "questions": old["questions"],
+                    "section_path": old.get("section_path", ""),
+                    "search_text": old.get("search_text", "") or tokenize(c.text),
+                    "content_hash": ch,
+                    "visibility": old.get("visibility", visibility),
+                    "allowed_roles": old.get("allowed_roles", allowed_roles or []),
+                })
+            else:
+                chunks_data.append({
+                    "chunk_id": chunk_id,
+                    "document_id": doc_id,
+                    "kb_id": kb_id,
+                    "text": c.text,
+                    "embedding": new_embeddings[new_idx],
+                    "title": c.title,
+                    "summary": c.summary,
+                    "questions": "; ".join(c.questions),
+                    "section_path": " > ".join(c.section_path) if c.section_path else "",
+                    "search_text": tokenize(c.text),
+                    "content_hash": ch,
+                    "visibility": visibility,
+                    "allowed_roles": allowed_roles or [],
+                })
+                new_idx += 1
+
+        # ── Atomic replace ──────────────────────────────
+        if document_id:
+            pgvector_store.delete_chunks_by_document(document_id)
+
+        self._save_document(doc_id, user_id, kb_id, filename, len(chunks), "indexed", doc_hash)
         pgvector_store.add_chunks(chunks_data)
-        self._save_document(doc_id, user_id, kb_id, filename, len(chunks), "indexed")
 
         return {
             "document_id": doc_id,
@@ -105,19 +165,65 @@ class DocumentIndexer:
             "chunk_count": len(chunks),
         }
 
-    def _save_document(self, doc_id: str, user_id: str, kb_id: str,
-                       filename: str, chunk_count: int, status: str):
+    def _reject_document(
+        self, text: str, rejects: list, user_id: str, kb_id: str, filename: str,
+    ) -> dict:
+        from app.store.db import PiiAlert, PiiHold
+        doc_id = new_id()
         session = get_session()
         try:
-            session.add(Document(
-                document_id=doc_id,
-                kb_id=kb_id,
-                filename=filename,
-                owner_id=user_id,
-                status=status,
-                chunk_count=chunk_count,
-                created_at=utc_now(),
+            for r in rejects:
+                session.add(PiiAlert(
+                    source_type="document", source_id=doc_id,
+                    rule_name=r.rule_name,
+                    matched_text=r.matched_text,
+                    context_snippet=text[max(0, r.start-30):r.end+30],
+                    strategy=r.strategy,
+                    status="pending",
+                ))
+            session.add(PiiHold(
+                source_type="document", source_id=doc_id,
+                encrypted_text=text,
+                status="pending",
             ))
+            self._save_document(doc_id, user_id, kb_id, filename, 0, "pending_review", "")
+            session.commit()
+        finally:
+            session.close()
+        return {
+            "document_id": doc_id,
+            "filename": filename,
+            "status": "pending_review",
+            "chunk_count": 0,
+            "message": "文档因包含禁止上传的敏感内容，已暂停处理，管理员审核中",
+        }
+
+    def _save_document(self, doc_id: str, user_id: str, kb_id: str,
+                       filename: str, chunk_count: int, status: str,
+                       content_hash: str):
+        session = get_session()
+        try:
+            existing = session.query(Document).filter(
+                Document.document_id == doc_id
+            ).first()
+            if existing:
+                existing.status = status
+                existing.chunk_count = chunk_count
+                existing.filename = filename
+                existing.content_hash = content_hash
+                existing.updated_at = utc_now()
+            else:
+                session.add(Document(
+                    document_id=doc_id,
+                    kb_id=kb_id,
+                    filename=filename,
+                    owner_id=user_id,
+                    status=status,
+                    chunk_count=chunk_count,
+                    content_hash=content_hash,
+                    created_at=utc_now(),
+                    updated_at=utc_now(),
+                ))
             session.commit()
         finally:
             session.close()

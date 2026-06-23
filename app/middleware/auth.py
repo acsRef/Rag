@@ -24,23 +24,9 @@ def decode_token(token: str) -> dict | None:
         return None
 
 
-async def get_current_user(
-    credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
-) -> dict:
-    """FastAPI dependency: returns {id, username, display_name, role_ids, permissions, is_admin}."""
-    if credentials is None:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
-    payload = decode_token(credentials.credentials)
-    if payload is None:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
-    user_id = payload.get("sub")
-    if not user_id:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token payload")
-    user = get_user_by_id(user_id)
-    if not user or not user.is_active:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found or inactive")
-    role_ids = get_user_role_ids(user_id)
-    permissions = get_user_permissions(user_id)
+def _build_user_dict(user) -> dict:
+    role_ids = get_user_role_ids(user.id)
+    permissions = get_user_permissions(user.id)
     return {
         "id": user.id,
         "username": user.username,
@@ -49,30 +35,38 @@ async def get_current_user(
         "permissions": permissions,
         "is_admin": "admin" in permissions,
     }
+
+
+def _resolve_token(credentials: HTTPAuthorizationCredentials | None) -> dict | None:
+    if credentials is None:
+        return None
+    payload = decode_token(credentials.credentials)
+    if payload is None:
+        return None
+    user_id = payload.get("sub")
+    if not user_id:
+        return None
+    user = get_user_by_id(user_id)
+    if not user or not user.is_active:
+        return None
+    return _build_user_dict(user)
+
+
+async def get_current_user(
+    credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
+) -> dict:
+    """FastAPI dependency: returns {id, username, display_name, role_ids, permissions, is_admin}.
+
+    Raises 401 if token missing or invalid.
+    """
+    result = _resolve_token(credentials)
+    if result is None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
+    return result
 
 
 async def get_optional_user(
     credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
 ) -> dict | None:
-    """Like get_current_user but returns None instead of 401 if no token."""
-    if credentials is None:
-        return None
-    payload = decode_token(credentials.credentials)
-    if payload is None:
-        return None
-    user_id = payload.get("sub")
-    if not user_id:
-        return None
-    user = get_user_by_id(user_id)
-    if not user or not user.is_active:
-        return None
-    role_ids = get_user_role_ids(user_id)
-    permissions = get_user_permissions(user_id)
-    return {
-        "id": user.id,
-        "username": user.username,
-        "display_name": user.display_name,
-        "role_ids": role_ids,
-        "permissions": permissions,
-        "is_admin": "admin" in permissions,
-    }
+    """Like get_current_user but returns None instead of 401."""
+    return _resolve_token(credentials)

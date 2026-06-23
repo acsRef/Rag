@@ -1,4 +1,4 @@
-from app.store.db import get_session, Message, Conversation, new_id
+from app.store.db import get_db_ctx, Message, Conversation, new_id
 from app.config import settings
 from app.llm.chat import minimax_client
 from datetime import datetime, timezone
@@ -50,8 +50,7 @@ SUMMARY_FRESH_PROMPT = """请总结以下对话。需要保留以下内容：
 
 class ConversationMemory:
     def get_or_create_conversation(self, conversation_id: str | None, user_id: str = "default_user") -> str:
-        session = get_session()
-        try:
+        with get_db_ctx() as session:
             if conversation_id:
                 conv = session.query(Conversation).filter_by(conversation_id=conversation_id).first()
                 if conv:
@@ -64,14 +63,11 @@ class ConversationMemory:
             session.add(conv)
             session.commit()
             return conv.conversation_id
-        finally:
-            session.close()
 
     def get_history(self, conversation_id: str, turns: int | None = None) -> list[dict]:
         if turns is None:
             turns = settings.history_keep_turns
-        session = get_session()
-        try:
+        with get_db_ctx() as session:
             messages = (
                 session.query(Message)
                 .filter_by(conversation_id=conversation_id)
@@ -81,20 +77,14 @@ class ConversationMemory:
             )
             messages.reverse()
             return [{"role": m.role, "content": m.content} for m in messages]
-        finally:
-            session.close()
 
     def get_summary(self, conversation_id: str) -> str:
-        session = get_session()
-        try:
+        with get_db_ctx() as session:
             conv = session.query(Conversation).filter_by(conversation_id=conversation_id).first()
             return conv.summary if conv else ""
-        finally:
-            session.close()
 
     def add_message(self, conversation_id: str, role: str, content: str, user_id: str = "default_user"):
-        session = get_session()
-        try:
+        with get_db_ctx() as session:
             msg = Message(
                 message_id=new_id(),
                 conversation_id=conversation_id,
@@ -109,8 +99,6 @@ class ConversationMemory:
             session.commit()
 
             self._maybe_summarize(conversation_id, session)
-        finally:
-            session.close()
 
     def _maybe_summarize(self, conversation_id: str, session):
         total = session.query(Message).filter_by(conversation_id=conversation_id).count()
@@ -156,11 +144,8 @@ class ConversationMemory:
         session.commit()
 
     def summarize(self, conversation_id: str):
-        session = get_session()
-        try:
+        with get_db_ctx() as session:
             self._maybe_summarize(conversation_id, session)
-        finally:
-            session.close()
 
 
 conversation_memory = ConversationMemory()

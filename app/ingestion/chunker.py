@@ -19,6 +19,7 @@ class Chunk:
     summary: str = ""
     questions: list[str] = field(default_factory=list)
     section_path: list[str] = field(default_factory=list)
+    content_hash: str = ""
 
 
 class TextChunker:

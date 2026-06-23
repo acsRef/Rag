@@ -34,6 +34,13 @@ class Settings(BaseSettings):
     hybrid_search_top_k: int = 20  # 单路搜多取一些用于 RRF 合并
     hybrid_rrf_k: int = 60  # RRF 常数
 
+    # MMR diversity rerank
+    mmr_enabled: bool = True
+    mmr_lambda: float = 0.7
+    mmr_candidate_k: int = 30
+    mmr_max_per_doc: int = 2
+    mmr_doc_penalty: float = 0.05
+
     # PII / Sensitive data
     pii_enabled: bool = True
     pii_cache_ttl: int = 300

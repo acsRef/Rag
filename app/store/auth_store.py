@@ -1,6 +1,6 @@
 """User & role CRUD operations."""
 from sqlalchemy import text
-from app.store.db import get_session, User, Role, UserRole, RolePermission, new_id
+from app.store.db import get_session, User, Role, UserRole, RolePermission, KnowledgeBase, new_id, utc_now
 from passlib.context import CryptContext
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -178,6 +178,15 @@ def seed_defaults():
         session.add(admin)
         session.flush()
         session.add(UserRole(user_id=admin.id, role_id=admin_role.id))
+
+        # Seed default knowledge base if not exists
+        existing = session.query(KnowledgeBase).filter(KnowledgeBase.id == "default").first()
+        if not existing:
+            session.add(KnowledgeBase(
+                id="default", name="默认知识库", visibility="public",
+                owner_id=admin.id, created_at=utc_now(),
+            ))
+
         session.commit()
     finally:
         session.close()
