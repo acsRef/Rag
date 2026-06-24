@@ -1,13 +1,70 @@
 """Document upload & status API with auth."""
+import asyncio
+import json
+import logging
+import threading
+from typing import AsyncIterator, Optional
+
 from app.ingestion.pipeline import ingestion_pipeline
-from app.store.db import get_db_ctx, Document
+from app.store.db import get_db_ctx, Document, Chunk, DocRoleAccess, new_id, utc_now
 from app.config import settings
 
 from app.models.schemas import DocumentUploadResponse, DocumentStatusResponse, DocumentListItem
 from app.middleware.auth import get_current_user
-from fastapi import APIRouter, UploadFile, File, Form, Depends, HTTPException
+from fastapi import APIRouter, UploadFile, File, Form, Depends, HTTPException, BackgroundTasks
+from fastapi.responses import StreamingResponse
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/documents", tags=["Documents"])
+
+
+# ── SSE 文档进度事件总线(进程内 pub/sub) ───────────────────────
+# 内存 list 存所有订阅者,每个订阅者持有一个 asyncio.Queue
+# uvicorn 单 worker 够用,多 worker 需要 Redis 之类共享
+_doc_event_subscribers: list[asyncio.Queue] = []
+_subscribers_lock = asyncio.Lock()
+_main_loop: Optional[asyncio.AbstractEventLoop] = None
+_main_loop_lock = threading.Lock()
+
+
+def set_main_loop(loop: asyncio.AbstractEventLoop) -> None:
+    """在 FastAPI startup 时调一次,保存主事件循环引用,供后台线程 emit。"""
+    global _main_loop
+    with _main_loop_lock:
+        _main_loop = loop
+
+
+async def subscribe_doc_events() -> asyncio.Queue:
+    """新建一个订阅者,返回它的 Queue。"""
+    q: asyncio.Queue = asyncio.Queue(maxsize=256)
+    async with _subscribers_lock:
+        _doc_event_subscribers.append(q)
+    return q
+
+
+async def unsubscribe_doc_events(q: asyncio.Queue) -> None:
+    async with _subscribers_lock:
+        if q in _doc_event_subscribers:
+            _doc_event_subscribers.remove(q)
+
+
+def emit_doc_progress(event: dict) -> None:
+    """同步 emit 一个事件(从后台 ingestion 线程调用)。
+
+    由于后台任务在 `asyncio.to_thread` 里跑(同步),而订阅者在 async SSE handler 里,
+    用 `loop.call_soon_threadsafe` 把 put_nowait 排到事件循环。
+    如果主 loop 未设置或已关闭,静默 return(不影响 ingestion 主流程)。
+    """
+    with _main_loop_lock:
+        loop = _main_loop
+    if loop is None or loop.is_closed():
+        return
+    for q in list(_doc_event_subscribers):
+        try:
+            loop.call_soon_threadsafe(q.put_nowait, event)
+        except Exception:
+            pass
 
 
 def _get_kb_visibility(kb_id: str) -> tuple[str, list[int]]:
@@ -61,10 +118,50 @@ def _resolve_document_id(filename: str, kb_id: str, client_doc_id: str | None) -
         )
 
 
+def _ensure_document_id(document_id: str | None) -> str:
+    return document_id or new_id()
+
+
+def _upsert_processing_document(doc_id: str, filename: str, kb_id: str, user_id: str):
+    with get_db_ctx() as session:
+        existing = session.query(Document).filter(Document.document_id == doc_id).first()
+        if existing:
+            existing.status = "processing"
+            existing.filename = filename
+            existing.updated_at = utc_now()
+        else:
+            session.add(Document(
+                document_id=doc_id, kb_id=kb_id, filename=filename,
+                owner_id=user_id, status="processing", chunk_count=0,
+                content_hash="", created_at=utc_now(), updated_at=utc_now(),
+            ))
+        session.commit()
+
+
+async def _run_ingestion_background(
+    filename: str, content: bytes, kb_id: str, user_id: str,
+    visibility: str, allowed_roles: list[int], document_id: str,
+):
+    try:
+        await ingestion_pipeline.run(
+            filename=filename, content=content, kb_id=kb_id,
+            user_id=user_id, visibility=visibility,
+            allowed_roles=allowed_roles, document_id=document_id,
+        )
+    except Exception:
+        logger.exception("Background ingestion failed for doc_id=%s", document_id)
+        with get_db_ctx() as session:
+            doc = session.query(Document).filter(Document.document_id == document_id).first()
+            if doc:
+                doc.status = "failed"
+                session.commit()
+
+
 @router.post("/upload", response_model=DocumentUploadResponse)
 async def upload_document(
+    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
-    kb_id: str = Form(default="default"),
+    kb_id: str = Form(...),
     document_id: str | None = Form(default=None),
     current_user: dict = Depends(get_current_user),
 ):
@@ -85,10 +182,13 @@ async def upload_document(
             status_code=413,
             detail=f"文件过大（{len(content)//1024//1024}MB），最大允许 {settings.max_upload_size_mb}MB",
         )
-    visibility, allowed_roles = _get_kb_visibility(kb_id)
-    resolved_id = _resolve_document_id(file.filename or "unknown", kb_id, document_id)
 
-    result = await ingestion_pipeline.run(
+    visibility, allowed_roles = _get_kb_visibility(kb_id)
+    resolved_id = _ensure_document_id(_resolve_document_id(file.filename or "unknown", kb_id, document_id))
+    _upsert_processing_document(resolved_id, file.filename or "unknown", kb_id, current_user["id"])
+
+    background_tasks.add_task(
+        _run_ingestion_background,
         filename=file.filename or "unknown",
         content=content,
         kb_id=kb_id,
@@ -97,7 +197,13 @@ async def upload_document(
         allowed_roles=allowed_roles,
         document_id=resolved_id,
     )
-    return DocumentUploadResponse(**result)
+
+    return DocumentUploadResponse(
+        document_id=resolved_id,
+        filename=file.filename or "unknown",
+        status="processing",
+        chunk_count=0,
+    )
 
 
 @router.get("", response_model=list[DocumentListItem])
@@ -121,10 +227,33 @@ async def list_documents(
                 status=d.status,
                 kb_id=d.kb_id,
                 chunk_count=d.chunk_count,
+                embedded_chunk_count=d.embedded_chunk_count or 0,
+                error_message=d.error_message or "",
                 created_at=d.created_at,
             )
             for d in docs
         ]
+
+
+@router.delete("/{document_id}")
+def delete_document(document_id: str, current_user: dict = Depends(get_current_user)):
+    can_read_all = current_user["is_admin"] or "doc.read_all" in current_user["permissions"]
+    if "doc.delete" not in current_user["permissions"]:
+        raise HTTPException(status_code=403, detail="Permission denied")
+
+    with get_db_ctx() as session:
+        doc = session.query(Document).filter(Document.document_id == document_id).first()
+        if not doc:
+            raise HTTPException(status_code=404, detail="Document not found")
+        if not can_read_all and doc.owner_id != current_user["id"]:
+            raise HTTPException(status_code=403, detail="Access denied")
+
+        session.query(Chunk).filter(Chunk.document_id == document_id).delete()
+        session.query(DocRoleAccess).filter(DocRoleAccess.document_id == document_id).delete()
+        session.delete(doc)
+        session.commit()
+
+    return {"message": "Document deleted", "document_id": document_id}
 
 
 @router.get("/{document_id}", response_model=DocumentStatusResponse)
@@ -141,4 +270,44 @@ async def get_document(document_id: str, current_user: dict = Depends(get_curren
             filename=record.filename,
             status=record.status,
             chunk_count=record.chunk_count,
+            embedded_chunk_count=record.embedded_chunk_count or 0,
+            error_message=record.error_message or "",
         )
+
+
+@router.get("/events")
+async def document_events(current_user: dict = Depends(get_current_user)):
+    """SSE 文档进度事件流。
+
+    事件类型 `doc_progress`:
+      data: {"document_id": "ab12cd34...", "embedded_chunk_count": 5,
+             "chunk_count": 21, "status": "indexing"}
+
+    客户端用 EventSource 订阅即可。每完成一个 chunk 或最终状态变化时触发。
+    """
+    queue = await subscribe_doc_events()
+
+    async def event_stream() -> AsyncIterator[str]:
+        try:
+            while True:
+                # 等一个事件(超时 30s,超时发心跳保活)
+                try:
+                    event = await asyncio.wait_for(queue.get(), timeout=30.0)
+                except asyncio.TimeoutError:
+                    yield ": keepalive\n\n"
+                    continue
+                yield f"event: doc_progress\ndata: {json.dumps(event, ensure_ascii=False)}\n\n"
+        except asyncio.CancelledError:
+            pass
+        finally:
+            await unsubscribe_doc_events(queue)
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )

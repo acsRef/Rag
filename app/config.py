@@ -49,6 +49,21 @@ class Settings(BaseSettings):
     # Upload
     max_upload_size_mb: int = 50
 
+    # Chunker
+    chunk_max_size: int = 2048
+
+    # Embedding resilience
+    embedding_max_retries: int = 3
+    embedding_backoff_base: float = 1.0
+    embedding_rate_limit_rps: int = 5
+
+    # Logging
+    log_level: str = "INFO"                # env: LOG_LEVEL (DEBUG/INFO/WARNING/ERROR)
+    log_dir: str = "logs"                  # env: LOG_DIR
+    log_max_bytes: int = 10 * 1024 * 1024  # 10MB per file
+    log_backup_count: int = 7              # 保留 7 个 backup 文件
+    log_to_console: bool = True            # 同步输出 stderr 方便开发
+
     # Server
     host: str = "0.0.0.0"
     port: int = 8000

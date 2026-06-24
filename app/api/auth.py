@@ -9,12 +9,19 @@ from app.store.auth_store import (
 )
 from app.middleware.auth import create_access_token, get_current_user
 from app.models.schemas import RegisterRequest, LoginRequest, TokenResponse, UserResponse
+from app.store.db import get_db_ctx, KnowledgeBase
 
 router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
 
 _LOGIN_ATTEMPTS: dict[str, list[float]] = defaultdict(list)
 _LOGIN_WINDOW = 300  # seconds
 _LOGIN_MAX_ATTEMPTS = 10
+
+
+def _get_workspace_kb_id(user_id: str) -> str:
+    with get_db_ctx() as session:
+        kb = session.query(KnowledgeBase).filter(KnowledgeBase.owner_id == user_id).order_by(KnowledgeBase.created_at).first()
+        return kb.id if kb else ""
 
 
 def _check_rate_limit(key: str):
@@ -42,6 +49,17 @@ def register(body: RegisterRequest):
         )
     except IntegrityError:
         raise HTTPException(status_code=409, detail="Username already exists")
+
+    with get_db_ctx() as session:
+        kb = KnowledgeBase(
+            name=f"{user.display_name or user.username}的工作空间",
+            visibility="public",
+            owner_id=user.id,
+        )
+        session.add(kb)
+        session.commit()
+        workspace_kb_id = kb.id
+
     token = create_access_token({"sub": user.id, "username": user.username})
     permissions = get_user_permissions(user.id)
     return TokenResponse(
@@ -52,6 +70,7 @@ def register(body: RegisterRequest):
             is_active=user.is_active, role_ids=role_ids,
             roles=[r.name for r in list_roles() if r.id in role_ids],
             permissions=permissions,
+            workspace_kb_id=workspace_kb_id,
         ),
     )
 
@@ -76,6 +95,7 @@ def login(body: LoginRequest, request: Request):
             is_active=user.is_active, role_ids=role_ids,
             roles=[r.name for r in roles],
             permissions=permissions,
+            workspace_kb_id=_get_workspace_kb_id(user.id),
         ),
     )
 
@@ -92,4 +112,5 @@ def me(current_user: dict = Depends(get_current_user)):
         is_active=user.is_active, role_ids=role_ids,
         roles=[r.name for r in roles],
         permissions=permissions,
+        workspace_kb_id=_get_workspace_kb_id(user.id),
     )

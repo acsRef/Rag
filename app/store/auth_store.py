@@ -1,6 +1,6 @@
 """User & role CRUD operations."""
 from sqlalchemy import text
-from app.store.db import get_session, User, Role, UserRole, RolePermission, KnowledgeBase, new_id, utc_now
+from app.store.db import get_session, User, Role, UserRole, RolePermission, new_id
 from passlib.context import CryptContext
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -156,46 +156,52 @@ def get_user_permissions(user_id: str) -> list[str]:
 def seed_defaults():
     session = get_session()
     try:
-        if session.query(Role).count() > 0:
-            return
-        admin_role = Role(name="admin", description="系统管理员")
-        user_role = Role(name="user", description="普通用户")
-        session.add_all([admin_role, user_role])
-        session.flush()
+        if session.query(Role).count() == 0:
+            admin_role = Role(name="admin", description="系统管理员")
+            user_role = Role(name="user", description="普通用户")
+            session.add_all([admin_role, user_role])
+            session.flush()
 
-        perms = {
-            admin_role.id: ["chat", "doc.upload", "doc.read_all", "kb.create",
-                            "kb.delete", "kb.manage_visibility", "user.manage", "admin"],
-            user_role.id: ["chat", "doc.upload"],
-        }
-        for rid, plist in perms.items():
-            for p in plist:
-                session.add(RolePermission(role_id=rid, permission=p))
+            perms = {
+                admin_role.id: ["chat", "doc.upload", "doc.delete", "doc.read_all", "kb.create",
+                                "kb.delete", "kb.manage_visibility", "user.manage", "admin"],
+                user_role.id: ["chat", "doc.upload", "doc.delete"],
+            }
+            for rid, plist in perms.items():
+                for p in plist:
+                    session.add(RolePermission(role_id=rid, permission=p))
 
-        admin_pw = hash_password("admin123")
-        admin = User(id=new_id(), username="admin", hashed_password=admin_pw,
-                     display_name="Administrator", email="admin@ragent.local")
-        session.add(admin)
-        session.flush()
-        session.add(UserRole(user_id=admin.id, role_id=admin_role.id))
+            admin_pw = hash_password("admin123")
+            admin = User(id=new_id(), username="admin", hashed_password=admin_pw,
+                         display_name="Administrator", email="admin@ragent.local")
+            session.add(admin)
+            session.flush()
+            session.add(UserRole(user_id=admin.id, role_id=admin_role.id))
 
-        # Seed default knowledge base if not exists
-        existing = session.query(KnowledgeBase).filter(KnowledgeBase.id == "default").first()
-        if not existing:
-            session.add(KnowledgeBase(
-                id="default", name="默认知识库", visibility="public",
-                owner_id=admin.id, created_at=utc_now(),
-            ))
-
-        # Seed anonymous user for unauthenticated chat
-        anon = session.query(User).filter(User.id == "anonymous").first()
-        if not anon:
-            anon_pw = hash_password(new_id())
-            session.add(User(
-                id="anonymous", username="anonymous", hashed_password=anon_pw,
-                display_name="Anonymous User", email="", is_active=True,
-            ))
+            # Seed anonymous user for unauthenticated chat
+            anon = session.query(User).filter(User.id == "anonymous").first()
+            if not anon:
+                anon_pw = hash_password(new_id())
+                session.add(User(
+                    id="anonymous", username="anonymous", hashed_password=anon_pw,
+                    display_name="Anonymous User", email="", is_active=True,
+                ))
+        else:
+            _ensure_permission(session, "admin", "doc.delete")
+            _ensure_permission(session, "user", "doc.delete")
 
         session.commit()
     finally:
         session.close()
+
+
+def _ensure_permission(session, role_name: str, permission: str):
+    from app.store.db import Role, RolePermission
+    role = session.query(Role).filter(Role.name == role_name).first()
+    if role:
+        exists = session.query(RolePermission).filter(
+            RolePermission.role_id == role.id,
+            RolePermission.permission == permission,
+        ).first()
+        if not exists:
+            session.add(RolePermission(role_id=role.id, permission=permission))

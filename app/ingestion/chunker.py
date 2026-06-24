@@ -7,6 +7,7 @@ can go up to max_atomic. Overlap borrows last N sentences from previous chunk.
 
 import re
 from dataclasses import dataclass, field
+from app.config import settings
 
 
 
@@ -30,6 +31,7 @@ class TextChunker:
         chunk_size: int = 512,
         overlap_sentences: int = 3,
         max_atomic: int = 1024,
+        max_chunk_size: int | None = None,
         borrow_ratio: float = 0.5,
     ):
         if chunk_size < 1:
@@ -43,6 +45,7 @@ class TextChunker:
         self.chunk_size = chunk_size
         self.overlap_sentences = overlap_sentences
         self.max_atomic = max_atomic
+        self.max_chunk_size = max_chunk_size or settings.chunk_max_size
         self.borrow_ratio = borrow_ratio
 
     def chunk(
@@ -106,6 +109,8 @@ class TextChunker:
         limit = self.max_atomic if is_atomic else self.chunk_size
         if len(text) > limit:
             chunks.extend(self._recursive_split(text, title, section_path))
+        elif len(text) > self.max_chunk_size:
+            chunks.extend(self._hard_split(text, title, section_path))
         else:
             chunks.append(Chunk(text=text, title=title, section_path=list(section_path)))
 
@@ -154,7 +159,11 @@ class TextChunker:
     # ── Recursive split (fallback for oversized blocks) ──────────────────────
 
     def _recursive_split(self, text: str, title: str, section_path: list[str], _depth: int = 0) -> list[Chunk]:
-        if len(text) <= self.chunk_size or _depth >= 32:
+        if _depth >= 32:
+            if len(text) <= self.max_chunk_size:
+                return [Chunk(text=text, title=title, section_path=list(section_path))]
+            return self._hard_split(text, title, section_path)
+        if len(text) <= self.chunk_size:
             return [Chunk(text=text, title=title, section_path=list(section_path))]
 
         for split_fn in [self._split_by_headings, self._split_by_paragraphs,
@@ -167,7 +176,7 @@ class TextChunker:
                 merged = self._merge_small(result)
                 return merged
 
-        return self._split_by_char_boundary(text, title, section_path, _depth + 1)
+        return self._split_by_char_boundary(text, title, section_path)
 
     def _merge_small(self, chunks: list[Chunk]) -> list[Chunk]:
         """Greedily merge adjacent small chunks back up to chunk_size."""
@@ -204,6 +213,18 @@ class TextChunker:
         """Split at sentence-ending punctuation."""
         parts = re.split(r"(?<=[。！？.!?\n])\s*", text)
         return [p.strip() for p in parts if p.strip()]
+
+    def _hard_split(self, text: str, title: str, section_path: list[str]) -> list[Chunk]:
+        """Force-split at max_chunk_size boundary with character-level fallback."""
+        end = self._find_break_point(text, self.max_chunk_size)
+        first = text[:end].strip()
+        rest = text[end:].strip()
+        result = []
+        if first:
+            result.append(Chunk(text=first, title=title, section_path=list(section_path)))
+        if rest:
+            result.extend(self._recursive_split(rest, title, section_path, 0))
+        return result
 
     def _split_by_char_boundary(self, text: str, title: str, section_path: list[str]) -> list[Chunk]:
         """Last resort: split at a preferred break point near chunk_size."""

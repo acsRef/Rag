@@ -1,4 +1,19 @@
-"""Seed PII rules + startup sync to DB."""
+"""Seed PII rules + startup sync to DB.
+
+5 条内置规则:
+  - cn_id_card    :中国身份证号 18 位(权重和 mod 11 校验)
+  - cn_phone      :中国大陆手机号 11 位(前两位 13-19 段位校验)
+  - email         :电子邮箱(基本 `@` + `.` 校验)
+  - cn_bank_card  :银行卡号 15-19 位(Luhn 算法校验)
+  - cn_passport   :中国因私普通护照 9 位(默认未启用)
+
+每条规则包含:
+  - pattern       正则表达式
+  - validation_fn 算法校验函数名(在 `VALIDATORS` 中查找)
+  - strategy      mask / reject / audit
+  - mask_mode     partial(部分) / full(完全)
+  - exclusion_words 防误报关键词列表,前后 20 字符命中即跳过
+"""
 
 import re
 

@@ -7,6 +7,7 @@ to PostgreSQL + pgvector.
 
 import hashlib
 import logging
+import time
 
 from app.store import pgvector_store
 from app.llm.embedding import sf_embedding
@@ -17,6 +18,8 @@ from app.ingestion.metadata import chunk_metadata_generator
 from app.store.db import get_session, Document, new_id, utc_now
 from app.store.pgvector_store import tokenize
 from app.config import settings
+
+logger = logging.getLogger(__name__)
 
 
 def _content_hash(text: str) -> str:
@@ -36,14 +39,39 @@ class DocumentIndexer:
     ) -> dict:
         from app.ingestion.parser import document_parser
 
+        t_total = time.monotonic()
+        # Milestone 1: 入口 — 标识本次摄取的关键字段,doc_id 取前 8 位方便 grep
+        doc_tag = (document_id or "new")[:8]
+        logger.info(
+            "ingest.start doc=%s file=%s kb=%s reindex=%s",
+            doc_tag, filename, kb_id[:8], bool(document_id),
+        )
+
         try:
+            t_parse = time.monotonic()
             text = document_parser.parse_bytes(content, filename)
             text = document_cleaner.clean(text)
+            # Milestone 2: 解析+清洗完成 — 输出文本长度与耗时
+            logger.info(
+                "ingest.parsed_cleaned doc=%s text_len=%d elapsed_ms=%.1f",
+                doc_tag, len(text), (time.monotonic() - t_parse) * 1000,
+            )
         except Exception:
-            logger = logging.getLogger(__name__)
             logger.exception("Parse/clean failed for filename=%s", filename)
             doc_id = document_id or new_id()
             self._save_document(doc_id, user_id, kb_id, filename, 0, "failed", "")
+            # SSE: 推送解析失败状态
+            try:
+                from app.api.documents import emit_doc_progress
+                emit_doc_progress({
+                    "document_id": doc_id,
+                    "embedded_chunk_count": 0,
+                    "chunk_count": 0,
+                    "status": "failed",
+                    "error_message": "解析/清洗失败",
+                })
+            except Exception:
+                pass
             return {
                 "document_id": doc_id,
                 "filename": filename,
@@ -54,13 +82,17 @@ class DocumentIndexer:
 
         # ── PII check ─────────────────────────────────
         if settings.pii_enabled:
-            from app.core.pii_scanner import scan_and_reject, mask_text
+            from app.core.pii_scanner import scan, scan_and_reject, mask_text
             rejects = scan_and_reject(text)
             if rejects:
+                logger.info("ingest.pii_rejected doc=%s rule_count=%d", doc_tag, len(rejects))
                 return self._reject_document(
                     text, rejects, user_id, kb_id, filename,
                 )
+            pii_findings = scan(text)
             text = mask_text(text)
+            # Milestone 4: PII mask 命中数(DEBUG 级,正常文档几乎为 0)
+            logger.debug("ingest.pii_masked doc=%s mask_count=%d", doc_tag, len(pii_findings))
 
         # ── Quick unchanged check ──────────────────────
         if document_id:
@@ -82,12 +114,30 @@ class DocumentIndexer:
                 }
 
         # ── Structure + Chunk ──────────────────────────
+        t_chunk = time.monotonic()
         sections = document_structurer.structure(text)
         chunks: list[Chunk] = text_chunker.chunk(sections)
+        # Milestone 3: 结构化+切块完成
+        logger.info(
+            "ingest.chunked doc=%s sections=%d chunks=%d elapsed_ms=%.1f",
+            doc_tag, len(sections), len(chunks), (time.monotonic() - t_chunk) * 1000,
+        )
 
         if not chunks:
             doc_id = document_id or new_id()
             self._save_document(doc_id, user_id, kb_id, filename, 0, "failed", doc_hash)
+            # SSE: 推送无 chunks 失败状态
+            try:
+                from app.api.documents import emit_doc_progress
+                emit_doc_progress({
+                    "document_id": doc_id,
+                    "embedded_chunk_count": 0,
+                    "chunk_count": 0,
+                    "status": "failed",
+                    "error_message": "文档切块后为空",
+                })
+            except Exception:
+                pass
             return {"document_id": doc_id, "chunk_count": 0, "status": "failed"}
 
         # ── Compute per-chunk hash for reuse ────────────
@@ -105,92 +155,155 @@ class DocumentIndexer:
         new_chunks: list[Chunk] = []
         chunk_index: list[tuple[Chunk, bool]] = []  # (chunk, is_reused)
 
+        # 增量 hash 复用:同 content_hash 跳过 embedding 和 metadata 生成,只复用旧 chunk_id
         for c in chunks:
             if c.content_hash in old_chunks_map:
                 chunk_index.append((c, True))
             else:
                 chunk_index.append((c, False))
                 new_chunks.append(c)
+        # Milestone 5: 复用匹配完成
+        reused_count = sum(1 for _, reused in chunk_index if reused)
+        logger.info(
+            "ingest.reuse_matched doc=%s reused=%d new=%d",
+            doc_tag, reused_count, len(new_chunks),
+        )
 
-        # ── Process new chunks (embed + metadata) ───────
-        new_embeddings: list = []
+        # ── Process new chunks (metadata + embed) ────────
         if new_chunks:
             new_chunks = chunk_metadata_generator.generate(new_chunks)
-            try:
-                new_embeddings = sf_embedding.embed_batch([c.text for c in new_chunks])
-            except Exception:
-                logger = logging.getLogger(__name__)
-                logger.exception("Embedding failed for filename=%s", filename)
-                doc_id = document_id or new_id()
-                self._save_document(doc_id, user_id, kb_id, filename, 0, "failed", doc_hash)
-                return {
-                    "document_id": doc_id,
-                    "filename": filename,
-                    "status": "failed",
-                    "chunk_count": 0,
-                }
+            embed_results = sf_embedding.embed_with_fallback([c.text for c in new_chunks])
+        else:
+            embed_results = []
 
-        # ── Build final chunks_data ─────────────────────
         doc_id = document_id or new_id()
         chunk_seq = 0
         new_idx = 0
         chunks_data = []
+        embedded_count = 0
+        error_messages: list[str] = []
 
-        for c, is_reused in chunk_index:
+        for i, (c, is_reused) in enumerate(chunk_index):
             ch = c.content_hash
             chunk_id = f"{doc_id}_{chunk_seq}"
             chunk_seq += 1
 
             if is_reused:
                 old = old_chunks_map[ch]
-                chunks_data.append({
-                    "chunk_id": chunk_id,
-                    "document_id": doc_id,
-                    "kb_id": kb_id,
-                    "text": c.text,
-                    "embedding": old["embedding"],
-                    "title": old["title"],
-                    "summary": old["summary"],
-                    "questions": old["questions"],
-                    "section_path": old.get("section_path", ""),
-                    "search_text": old.get("search_text", "") or tokenize(c.text),
-                    "content_hash": ch,
-                    "visibility": visibility,
-                    "allowed_roles": old.get("allowed_roles", allowed_roles or []),
-                })
+                embedding = old["embedding"]
+                search_text = old.get("search_text", "") or tokenize(c.text)
+                embedded_count += 1
             else:
-                if new_idx >= len(new_embeddings):
-                    logger = logging.getLogger(__name__)
-                    logger.error("Embedding count mismatch: %d chunks vs %d embeddings, skipping chunk %s",
-                                 len(new_chunks), len(new_embeddings), chunk_id)
-                    break
-                chunks_data.append({
-                    "chunk_id": chunk_id,
-                    "document_id": doc_id,
-                    "kb_id": kb_id,
-                    "text": c.text,
-                    "embedding": new_embeddings[new_idx],
-                    "title": c.title,
-                    "summary": c.summary,
-                    "questions": "; ".join(c.questions),
-                    "section_path": " > ".join(c.section_path) if c.section_path else "",
-                    "search_text": tokenize(c.text),
-                    "content_hash": ch,
-                    "visibility": visibility,
-                    "allowed_roles": allowed_roles or [],
-                })
-                new_idx += 1
+                if new_idx < len(embed_results):
+                    embedding, err = embed_results[new_idx]
+                    new_idx += 1
+                else:
+                    embedding, err = None, None
+                if embedding is not None:
+                    embedded_count += 1
+                elif err:
+                    error_messages.append(err)
+                search_text = tokenize(c.text)
 
-        # ── Atomic replace ──────────────────────────────
+            chunks_data.append({
+                "chunk_id": chunk_id,
+                "document_id": doc_id,
+                "kb_id": kb_id,
+                "text": c.text,
+                "embedding": embedding if embedding is not None else None,
+                "title": c.title or (is_reused and old.get("title", "") or ""),
+                "summary": c.summary or (is_reused and old.get("summary", "") or ""),
+                "questions": "; ".join(c.questions) if c.questions else (is_reused and old.get("questions", "") or ""),
+                "section_path": " > ".join(c.section_path) if c.section_path else "",
+                "search_text": search_text,
+                "content_hash": ch,
+                "visibility": visibility,
+                "allowed_roles": allowed_roles or [],
+            })
+
+            # SSE 推送进度:每个 chunk 处理完 emit 一次
+            # 前端只会更新那一个数字 cell(embedded/total),不会重渲染整行
+            try:
+                from app.api.documents import emit_doc_progress
+                emit_doc_progress({
+                    "document_id": doc_id,
+                    "embedded_chunk_count": embedded_count,
+                    "chunk_count": len(chunk_index),
+                    "status": "indexing",
+                })
+            except Exception:
+                pass
+
+            if not is_reused and i % 10 == 0 and i > 0:
+                self._save_document(doc_id, user_id, kb_id, filename, len(chunks), "indexing", doc_hash,
+                                    embedded_chunk_count=embedded_count, error_message="; ".join(error_messages[-3:]))
+
+        total_new = len(chunk_index) - len(old_chunks_map)
+        failed_count = total_new - (embedded_count - len(old_chunks_map))
+        final_error = "; ".join(error_messages[:3]) if error_messages else ""
+
+        if embedded_count == 0 and not old_chunks_map:
+            self._save_document(doc_id, user_id, kb_id, filename, 0, "failed", doc_hash,
+                                embedded_chunk_count=0, error_message=final_error or "所有分块向量化均失败")
+            # SSE: 推送全失败状态
+            try:
+                from app.api.documents import emit_doc_progress
+                emit_doc_progress({
+                    "document_id": doc_id,
+                    "embedded_chunk_count": 0,
+                    "chunk_count": len(chunks),
+                    "status": "failed",
+                    "error_message": final_error or "所有分块向量化均失败",
+                })
+            except Exception:
+                pass
+            return {
+                "document_id": doc_id,
+                "filename": filename,
+                "status": "failed",
+                "chunk_count": 0,
+            }
+
+        status = "indexed" if failed_count == 0 else "partial"
+
+        # Milestone 6: 持久化前汇总(含总耗时)
+        logger.info(
+            "ingest.persisted doc=%s total=%d embedded=%d reused=%d status=%s total_elapsed_ms=%.1f",
+            doc_id[:8], len(chunks), embedded_count, len(old_chunks_map),
+            status, (time.monotonic() - t_total) * 1000,
+        )
         try:
             if document_id:
                 pgvector_store.delete_chunks_by_document(document_id)
-
             pgvector_store.add_chunks(chunks_data)
-            self._save_document(doc_id, user_id, kb_id, filename, len(chunks), "indexed", doc_hash)
+            self._save_document(doc_id, user_id, kb_id, filename, len(chunks), status, doc_hash,
+                                embedded_chunk_count=embedded_count, error_message=final_error)
+            # SSE: 推送最终状态
+            try:
+                from app.api.documents import emit_doc_progress
+                emit_doc_progress({
+                    "document_id": doc_id,
+                    "embedded_chunk_count": embedded_count,
+                    "chunk_count": len(chunks),
+                    "status": status,
+                    "error_message": final_error,
+                })
+            except Exception:
+                pass
         except Exception:
-            logger = logging.getLogger(__name__)
             logger.exception("Failed to persist chunks/document for doc_id=%s", doc_id)
+            # SSE: 推送持久化失败状态
+            try:
+                from app.api.documents import emit_doc_progress
+                emit_doc_progress({
+                    "document_id": doc_id,
+                    "embedded_chunk_count": embedded_count,
+                    "chunk_count": len(chunks),
+                    "status": "failed",
+                    "error_message": "持久化失败(详见日志)",
+                })
+            except Exception:
+                pass
             return {
                 "document_id": doc_id,
                 "filename": filename,
@@ -201,8 +314,10 @@ class DocumentIndexer:
         return {
             "document_id": doc_id,
             "filename": filename,
-            "status": "indexed",
+            "status": status,
             "chunk_count": len(chunks),
+            "embedded_chunk_count": embedded_count,
+            "message": final_error or "",
         }
 
     def _reject_document(
@@ -249,7 +364,8 @@ class DocumentIndexer:
 
     def _save_document(self, doc_id: str, user_id: str, kb_id: str,
                        filename: str, chunk_count: int, status: str,
-                       content_hash: str):
+                       content_hash: str, embedded_chunk_count: int = 0,
+                       error_message: str = ""):
         session = get_session()
         try:
             existing = session.query(Document).filter(
@@ -258,6 +374,8 @@ class DocumentIndexer:
             if existing:
                 existing.status = status
                 existing.chunk_count = chunk_count
+                existing.embedded_chunk_count = embedded_chunk_count
+                existing.error_message = error_message
                 existing.filename = filename
                 existing.content_hash = content_hash
                 existing.updated_at = utc_now()
@@ -269,6 +387,8 @@ class DocumentIndexer:
                     owner_id=user_id,
                     status=status,
                     chunk_count=chunk_count,
+                    embedded_chunk_count=embedded_chunk_count,
+                    error_message=error_message,
                     content_hash=content_hash,
                     created_at=utc_now(),
                     updated_at=utc_now(),

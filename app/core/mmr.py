@@ -45,6 +45,8 @@ def mmr_select(
     top_k = min(top_k, n)
 
     # 1. Min-max normalise cross-encoder scores to [0, 1]
+    # 归一化原因:cross-encoder score 通常不在 [0,1] 区间(可能是任意实数),
+    # 不归一化就无法与"多样性项"(也是 [0,1] 区间)直接相减组合
     scores = [c["score"] for c in candidates]
     min_s, max_s = min(scores), max(scores)
     if max_s > min_s:
@@ -70,6 +72,7 @@ def mmr_select(
 
             # Diversity term: max cosine similarity to any selected item
             if selected_indices:
+                # 余弦相似度 = 内积,因向量已 L2 归一化(见 retrieval 上游)
                 sims = emb_matrix[idx] @ emb_matrix[selected_indices].T
                 max_sim = float(sims.max())
             else:

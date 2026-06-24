@@ -1,6 +1,6 @@
 """Knowledge Base CRUD API."""
 from fastapi import APIRouter, Depends, HTTPException
-from app.store.db import get_session, KnowledgeBase, KBRoleAccess
+from app.store.db import get_session, KnowledgeBase, KBRoleAccess, Document, Chunk
 from app.middleware.auth import get_current_user
 from app.models.schemas import KBCreateRequest, KBResponse, KBRoleAccessRequest
 
@@ -53,6 +53,8 @@ def delete_kb(kb_id: str, current_user: dict = Depends(get_current_user)):
             raise HTTPException(status_code=404, detail="KB not found")
         if not current_user["is_admin"] and kb.owner_id != current_user["id"]:
             raise HTTPException(status_code=403, detail="无权删除不属于自己的知识库")
+        session.query(Chunk).filter(Chunk.kb_id == kb_id).delete()
+        session.query(Document).filter(Document.kb_id == kb_id).delete()
         session.delete(kb)
         session.commit()
         return {"ok": True}

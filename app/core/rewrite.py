@@ -1,3 +1,14 @@
+"""Query rewrite: pronoun resolution + sub-question splitting.
+
+对用户问题做三件事:
+  1. 代词消解:把"它/它们/这个/那个"等代词替换为对话摘要里的明确术语
+     (例:"它的参数呢?" → "Transformer 注意力机制的参数是什么?")
+  2. 子问题拆分:复合问题拆成多个可独立检索的子问题
+  3. 独立化改写:让改写后的查询脱离对话历史仍可独立理解,适合直接送入 embedding 检索
+
+输出 JSON:{"rewritten_query": "...", "sub_questions": ["...", "..."]}
+LLM 解析失败时回退到原 query,不抛异常。
+"""
 from app.llm.chat import minimax_client
 from app.models.schemas import RewriteResult
 import logging
@@ -49,6 +60,15 @@ REWRITE_PROMPT = """你是一个查询改写助手。请根据对话摘要、最
 
 class QueryRewriteService:
     def rewrite(self, question: str, history: list[dict], summary: str = "") -> RewriteResult:
+        """改写用户问题为自包含的检索查询。
+
+        输入:当前问题 + 最近对话历史 + 已有摘要
+        输出:`RewriteResult(rewritten_query, sub_questions)`
+
+        行为:
+          - 取最近 4 条历史消息进 prompt(避免上下文爆炸)
+          - 若 LLM 返回非 JSON,降级为原 query(不抛异常,保证主流程不中断)
+        """
         summary_str = summary if summary else "暂无对话摘要"
         history_str = "\n".join(f"{m['role']}: {m['content']}" for m in history[-4:]) if history else "暂无最近对话"
         prompt = REWRITE_PROMPT.format(summary=summary_str, history=history_str, question=question)

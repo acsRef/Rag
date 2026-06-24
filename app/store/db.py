@@ -45,6 +45,12 @@ def init_db():
             conn.execute(
                 text("ALTER TABLE documents ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP")
             )
+            conn.execute(
+                text("ALTER TABLE documents ADD COLUMN IF NOT EXISTS embedded_chunk_count INTEGER DEFAULT 0")
+            )
+            conn.execute(
+                text("ALTER TABLE documents ADD COLUMN IF NOT EXISTS error_message VARCHAR(1024) DEFAULT ''")
+            )
             conn.commit()
         except Exception:
             conn.rollback()
@@ -148,6 +154,8 @@ class Document(Base):
     owner_id = Column(String(64), ForeignKey("users.id"), nullable=False)
     status = Column(String(32), default="indexing")
     chunk_count = Column(Integer, default=0)
+    embedded_chunk_count = Column(Integer, default=0)
+    error_message = Column(String(1024), default="")
     content_hash = Column(String(64), default="")
     created_at = Column(DateTime, default=utc_now)
     updated_at = Column(DateTime, nullable=True)

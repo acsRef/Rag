@@ -9,6 +9,7 @@ export interface User {
   role_ids: number[]
   roles: string[]
   permissions: string[]
+  workspace_kb_id: string
 }
 
 export interface LoginRes {

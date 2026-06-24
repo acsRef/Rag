@@ -2,6 +2,11 @@
 
 Uses a single MiniMax API call to generate title / summary / questions
 for ALL chunks in one batch, then writes results back into the Chunk objects.
+
+性能注意:
+  - prompt 已精简(只问 title/summary/questions,不夹带图片说明)
+  - max_tokens=1024(实际输出 ~200 token)避免浪费
+  - 单次 LLM 调用通常 1-2s
 """
 
 import json
@@ -13,21 +18,16 @@ from app.ingestion.chunker import Chunk
 logger = logging.getLogger(__name__)
 
 
-METADATA_PROMPT = """你是一个文档分析助手。为以下每个文本块生成元数据。
+METADATA_PROMPT = """为以下每个文本块生成元数据。每个块输出:
+1. title:5-10 字短标题
+2. summary:1 句话概括
+3. questions:可能回答的 3 个用户问题
 
-对每个文本块，输出：
-1. title：简短的段落标题（5-10字）
-2. summary：1-2句话摘要，概括核心内容
-3. questions：该段落可能回答的3个用户问题
-
-文本块列表：
+文本块:
 {chunks_text}
 
-返回严格 JSON 格式（不要 markdown 包裹）：
-{{"chunks": [
-  {{"index": 0, "title": "...", "summary": "...", "questions": ["?", "?", "?"]}},
-  ...
-]}}"""
+只返回 JSON(无 markdown 包裹):
+{{"chunks":[{{"index":0,"title":"...","summary":"...","questions":["?","?","?"]}}, ...]}}"""
 
 
 class ChunkMetadataGenerator:
@@ -45,7 +45,8 @@ class ChunkMetadataGenerator:
         prompt = METADATA_PROMPT.format(chunks_text=chunks_text)
 
         try:
-            resp = minimax_client.chat([{"role": "user", "content": prompt}])
+            # max_tokens=1024:实际输出 ~200 token,避免浪费
+            resp = minimax_client.chat([{"role": "user", "content": prompt}], max_tokens=1024)
             data = json.loads(resp.strip().removeprefix("```json").removesuffix("```").strip())
             for item in data.get("chunks", []):
                 idx = item.get("index")

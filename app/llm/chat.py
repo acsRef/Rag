@@ -25,7 +25,7 @@ class MiniMaxClient:
             if delta and delta.content:
                 yield delta.content
 
-    def chat(self, messages: list[dict], timeout: int = 120, max_retries: int = 2) -> str:
+    def chat(self, messages: list[dict], timeout: int = 120, max_retries: int = 2, max_tokens: int | None = None) -> str:
         import time
         for attempt in range(max_retries + 1):
             try:
@@ -34,7 +34,7 @@ class MiniMaxClient:
                     messages=messages,
                     stream=False,
                     temperature=0.7,
-                    max_tokens=4096,
+                    max_tokens=max_tokens if max_tokens is not None else 4096,
                     timeout=timeout,
                 )
                 if not response.choices:

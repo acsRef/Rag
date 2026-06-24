@@ -1,3 +1,13 @@
+"""RAG prompt templates: system + KB-answer / system-only fallback.
+
+两种 prompt 形态:
+  - KB 回答(`KB_ANSWER_TEMPLATE`):有检索内容时,把 chunks 注入 prompt,
+    每块标 `[Source N] (标题)`,让 LLM 引用并组织答案
+  - 系统回答(`SYSTEM_ANSWER_TEMPLATE`):无检索内容时,直接调 LLM 自身知识
+
+PII 处理:KB 回答时对每个 chunk 先过 `mask_text` 脱敏,避免敏感内容
+经 RAG 路径二次泄露到 LLM 输出。
+"""
 from app.models.schemas import RetrievedChunk
 from app.config import settings
 from app.core.pii_scanner import mask_text as _mask_text
@@ -47,7 +57,10 @@ class RAGPromptBuilder:
             text = chunk.text
             if settings.pii_enabled:
                 text = _mask_text(text)
-            context_parts.append(f"[Source {i+1}]\n{text}")
+            source_label = f"[Source {i+1}]"
+            if chunk.title:
+                source_label += f" ({chunk.title})"
+            context_parts.append(f"{source_label}\n{text}")
 
         context_str = "\n\n".join(context_parts)
         history_str = self._format_history(history, summary)

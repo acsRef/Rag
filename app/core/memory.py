@@ -1,3 +1,12 @@
+"""Conversation memory: long-term persistence + short-term window + auto-summarization.
+
+设计:
+  - 短期窗口:每次取最近 `history_keep_turns * 2` 条消息进 LLM 上下文(避免 prompt 爆炸)
+  - 长期持久化:所有消息入 `messages` 表,`Conversation.summary` 字段保存压缩摘要
+  - 摘要触发:当单会话消息数 > `history_keep_turns * 2 + history_summary_turns` 时
+    触发 LLM 压缩,摘要上限 `max_summary_tokens` token
+  - 并发安全:每个 conversation_id 一个 `threading.Lock`,避免多 worker 并发触发摘要
+"""
 import threading
 import logging
 
@@ -129,6 +138,7 @@ class ConversationMemory:
 
     def _maybe_summarize(self, conversation_id: str):
         with get_db_ctx() as session:
+            # 超 history_summary_turns 触发压缩,避免 LLM 上下文溢出
             ctx = self._get_summarize_context(conversation_id, session)
             if ctx is None:
                 return

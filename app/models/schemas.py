@@ -33,6 +33,7 @@ class UserResponse(BaseModel):
     role_ids: list[int] = Field(default_factory=list)
     roles: list[str] = Field(default_factory=list)
     permissions: list[str] = Field(default_factory=list)
+    workspace_kb_id: str = ""
 
 
 class ConversationResponse(BaseModel):
@@ -48,6 +49,8 @@ class DocumentListItem(BaseModel):
     status: str
     kb_id: str
     chunk_count: int
+    embedded_chunk_count: int = 0
+    error_message: str = ""
     created_at: datetime | None = None
 
 
@@ -89,6 +92,8 @@ class DocumentStatusResponse(BaseModel):
     filename: str
     status: str
     chunk_count: int
+    embedded_chunk_count: int = 0
+    error_message: str = ""
 
 
 # ── Chat ────────────────────────────────────────────────
@@ -132,3 +137,13 @@ class RetrievedChunk(BaseModel):
     title: str = ""
     summary: str = ""
     section_path: str = ""
+
+
+class SourceInfo(BaseModel):
+    chunk_id: str
+    document_id: str
+    filename: str = ""
+    title: str = ""
+    section_path: str = ""
+    snippet: str = ""
+    score: float = 0.0

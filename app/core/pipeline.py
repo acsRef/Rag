@@ -4,7 +4,7 @@ from app.core.intent import intent_classifier
 from app.core.retrieval import retrieval_engine
 from app.core.prompt import prompt_builder
 from app.llm.chat import minimax_client
-from app.models.schemas import ChatRequest, RetrievedChunk
+from app.models.schemas import ChatRequest, RetrievedChunk, SourceInfo
 from app.config import settings
 from typing import Generator
 import json
@@ -16,6 +16,36 @@ def _pii_safe(text: str) -> str:
         return text
     from app.core.pii_scanner import mask_text
     return mask_text(text)
+
+
+def _build_sources(chunks: list[RetrievedChunk]) -> list[SourceInfo]:
+    """Resolve document filenames and build SourceInfo list for frontend."""
+    if not chunks:
+        return []
+    doc_ids = list({c.document_id for c in chunks if c.document_id})
+    doc_map: dict[str, str] = {}
+    if doc_ids:
+        from app.store.db import get_db_ctx, Document
+        with get_db_ctx() as session:
+            rows = session.query(Document.document_id, Document.filename).filter(
+                Document.document_id.in_(doc_ids)
+            ).all()
+            for row in rows:
+                doc_map[row.document_id] = row.filename
+
+    sources = []
+    for c in chunks:
+        text = c.text[:150].replace("\n", " ")
+        sources.append(SourceInfo(
+            chunk_id=c.chunk_id,
+            document_id=c.document_id,
+            filename=doc_map.get(c.document_id, ""),
+            title=c.title,
+            section_path=c.section_path,
+            snippet=text,
+            score=round(c.score, 4),
+        ))
+    return sources
 
 
 class RAGPipeline:
@@ -88,7 +118,11 @@ class RAGPipeline:
         unique_chunks.sort(key=lambda x: x.score, reverse=True)
         unique_chunks = unique_chunks[:settings.rerank_top_k]
 
-        # Step 4: Build messages
+        # Step 4: Build sources and emit to frontend
+        sources = _build_sources(unique_chunks)
+        yield f"event: sources\ndata: {json.dumps([s.model_dump() for s in sources])}\n\n"
+
+        # Step 5: Build messages
         messages = prompt_builder.build_messages(
             query=req.query,
             history=history,

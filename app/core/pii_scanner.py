@@ -1,4 +1,18 @@
-"""PII scanning engine: regex → algorithm validation → context exclusion → mask/reject."""
+"""PII scanning engine: regex → algorithm validation → context exclusion → mask/reject.
+
+三层防御目的:
+  1. 正则匹配:快速过滤大量候选(身份证 18 位/手机 11 位/邮箱/银行卡 15-19 位)
+  2. 算法校验:用 validation_fn(身份证校验位/手机号段位/银行卡 Luhn)消除误报
+     — 例如 `123456789012345678` 形态合法但校验位错的身份证会被剔除
+  3. 上下文排除:匹配前后 20 字符内若出现 `示例/例如/test/sample` 等关键词,则跳过
+     — 处理文档中"如 13800138000 是示例号码"这类非真实数据
+
+策略:
+  - mask(部分):保留首 3 末 4 位,中间 `*` 替代(手机/身份证默认)
+  - mask(完全):整段替换为 `[已脱敏]`
+  - reject:不入索引,PII 告警入库,管理员审核
+  - audit:只告警,文本不动(预留)
+"""
 
 import re
 import time
@@ -103,6 +117,11 @@ def scan(text: str) -> list[PiiMatch]:
     """Run all active rules against text: regex → validation → context exclusion.
 
     Returns list of PiiMatch tuples (sorted by position).
+
+    三层防御(每条规则):
+      1. 正则 `rule["pattern"].finditer` 找出候选
+      2. 算法校验 `validator(matched)` 验证(身份证校验位/Luhn/手机号段位)
+      3. 上下文 `_has_exclusion(...)` 检查前后 20 字符是否含示例关键词
     """
     if not text:
         return []
@@ -113,6 +132,7 @@ def scan(text: str) -> list[PiiMatch]:
     for rule in rules:
         if not rule["pattern"]:
             continue
+        # 三层防御:re.match → validation_fn → exclusion_words 过滤示例文本
         for m in rule["pattern"].finditer(text):
             matched = m.group()
             # Algorithm validation

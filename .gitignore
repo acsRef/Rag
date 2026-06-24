@@ -21,6 +21,10 @@ ragent.db
 # Temp
 *.tmp
 
+# Logs
+logs/
+*.log
+
 # Frontend
 frontend/node_modules/
 frontend/dist/

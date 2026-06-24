@@ -22,6 +22,7 @@ const routes = [
       { path: 'kb', component: KBView },
     ],
   },
+  { path: '/:pathMatch(.*)*', redirect: '/chat' },
 ]
 
 const router = createRouter({
@@ -29,8 +30,11 @@ const router = createRouter({
   routes,
 })
 
-router.beforeEach((to, _from, next) => {
+router.beforeEach(async (to, _from, next) => {
   const auth = useAuthStore()
+  if (auth.isLoggedIn) {
+    await auth.checkSession()
+  }
   if (to.meta.auth && !auth.isLoggedIn) {
     next('/login')
   } else if (to.meta.guest && auth.isLoggedIn) {

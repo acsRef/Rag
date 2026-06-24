@@ -22,6 +22,18 @@ class StructuredSection:
     elements: list[Element] = field(default_factory=list)
 
 
+# 标题黑名单:这些是 PDF 头部/末尾的"非真正章节",遇到就跳过
+# (并连同后面跟着的"声明段落"一起丢弃,直到下一个真正的标题)
+_TITLE_BLACKLIST = (
+    "注意事项", "前言", "目录", "公告", "声明",
+    "编者按", "版权", "本报告以", "本刊以", "免责声明",
+)
+
+
+def _is_blacklist_title(title: str) -> bool:
+    return any(black in title for black in _TITLE_BLACKLIST)
+
+
 class DocumentStructurer:
     def structure(self, text: str) -> list[StructuredSection]:
         sections: list[StructuredSection] = []
@@ -39,10 +51,19 @@ class DocumentStructurer:
             # New section on heading
             heading_match = re.match(r"^(#{1,6})\s+(.+)$", stripped)
             if heading_match:
-                if current_section.elements:
-                    sections.append(current_section)
                 level = len(heading_match.group(1))
                 title = heading_match.group(2)
+                # 标题黑名单:跳过该标题 + 后面到下一个真标题之间的"声明段落"
+                if _is_blacklist_title(title):
+                    i += 1  # 跳过标题行
+                    while i < len(lines):
+                        nxt = lines[i].strip()
+                        if re.match(r"^#{1,6}\s+", nxt):
+                            break
+                        i += 1
+                    continue
+                if current_section.elements:
+                    sections.append(current_section)
                 current_section = StructuredSection(title=title, level=level)
                 current_section.elements.append(Element("heading", stripped, level=level))
                 i += 1

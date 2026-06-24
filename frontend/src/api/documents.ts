@@ -6,6 +6,8 @@ export interface DocumentItem {
   status: string
   kb_id: string
   chunk_count: number
+  embedded_chunk_count: number
+  error_message: string
   created_at: string
 }
 
@@ -14,6 +16,8 @@ export interface UploadRes {
   filename: string
   status: string
   chunk_count: number
+  embedded_chunk_count?: number
+  message?: string
 }
 
 export const documentApi = {
@@ -26,7 +30,11 @@ export const documentApi = {
     const form = new FormData()
     form.append('file', file)
     form.append('kb_id', kbId)
-    const res = await api.post<UploadRes>('/documents/upload', form)
+    const res = await api.post<UploadRes>('/documents/upload', form, { timeout: 300000 })
+    return res.data
+  },
+  async remove(documentId: string) {
+    const res = await api.delete(`/documents/${documentId}`)
     return res.data
   },
 }

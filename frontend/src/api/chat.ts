@@ -7,6 +7,16 @@ export interface Conversation {
   updated_at: string
 }
 
+export interface SourceInfo {
+  chunk_id: string
+  document_id: string
+  filename: string
+  title: string
+  section_path: string
+  snippet: string
+  score: number
+}
+
 export interface ChatMessage {
   role: 'user' | 'assistant'
   content: string
@@ -27,6 +37,7 @@ export const chatApi = {
     knowledgeBaseIds: string[] | null,
     onToken: (token: string) => void,
     onMetadata: (data: { conversation_id: string }) => void,
+    onSources: (sources: SourceInfo[]) => void,
     onDone: () => void,
     onError: (err: string) => void,
   ): AbortController {
@@ -47,6 +58,7 @@ export const chatApi = {
       if (!reader) return
       const decoder = new TextDecoder()
       let buffer = ''
+      let lastEventType = ''
       while (true) {
         const { done, value } = await reader.read()
         if (done) break
@@ -55,15 +67,25 @@ export const chatApi = {
         buffer = lines.pop() || ''
         for (const line of lines) {
           if (line.startsWith('event: ')) {
-            const eventType = line.slice(7).trim()
-            if (eventType === 'metadata') {
-              // next line will be data
-            } else if (eventType === 'done') {
+            lastEventType = line.slice(7).trim()
+            if (lastEventType === 'done') {
               onDone()
             }
           } else if (line.startsWith('data: ')) {
             const data = line.slice(6).trim()
-            if (data.startsWith('{')) {
+            if (lastEventType === 'error') {
+              lastEventType = ''
+              try { const parsed = JSON.parse(data); onError(parsed.error || data) }
+              catch { onError(data) }
+            } else if (lastEventType === 'sources') {
+              lastEventType = ''
+              try { onSources(JSON.parse(data)) }
+              catch { /* ignore */ }
+            } else if (lastEventType === 'metadata') {
+              lastEventType = ''
+              try { const parsed = JSON.parse(data); onMetadata(parsed) }
+              catch { /* ignore */ }
+            } else if (data.startsWith('{')) {
               try {
                 const parsed = JSON.parse(data)
                 if (parsed.conversation_id) {

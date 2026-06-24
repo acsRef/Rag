@@ -27,6 +27,18 @@
           <div class="message-avatar">{{ m.role === 'user' ? (auth.user?.display_name?.[0] || 'U') : 'R' }}</div>
           <div class="message-body">
             <div class="message-bubble">{{ m.content }}</div>
+            <div v-if="m.sources?.length" class="sources-bar">
+              <button class="sources-toggle" @click="m._sourcesOpen = !m._sourcesOpen">
+                ▸ 参考来源 ({{ m.sources.length }})
+              </button>
+              <div v-if="m._sourcesOpen" class="sources-list">
+                <div v-for="(s, si) in m.sources" :key="s.chunk_id" class="source-item">
+                  <div class="source-header">{{ si + 1 }}. {{ s.filename || s.title || '未命名文档' }}</div>
+                  <div v-if="s.section_path" class="source-section">{{ s.section_path }}</div>
+                  <div class="source-snippet">{{ s.snippet }}</div>
+                </div>
+              </div>
+            </div>
             <div class="message-time">{{ m.time || '' }}</div>
           </div>
         </div>
@@ -75,9 +87,9 @@
 </template>
 
 <script setup lang="ts">
-import { ref, nextTick, watch } from 'vue'
+import { ref, nextTick, watch, onUnmounted } from 'vue'
 import { useAuthStore } from '../stores/auth'
-import { chatApi } from '../api/chat'
+import { chatApi, type SourceInfo } from '../api/chat'
 
 const auth = useAuthStore()
 
@@ -92,9 +104,11 @@ const emit = defineEmits<{
 }>()
 
 const input = ref('')
-const messages = ref<{ role: 'user' | 'assistant'; content: string; time?: string }[]>([])
+interface ChatMsg { role: 'user' | 'assistant'; content: string; time?: string; sources?: SourceInfo[]; _sourcesOpen?: boolean }
+const messages = ref<ChatMsg[]>([])
 const streaming = ref(false)
 const streamingContent = ref('')
+const currentSources = ref<SourceInfo[]>([])
 const streamDone = ref(false)
 const loadingMsgs = ref(false)
 const msgContainer = ref<HTMLElement | null>(null)
@@ -105,8 +119,16 @@ function now() {
   return new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
 }
 
+function abortStream() {
+  if (abortController) {
+    abortController.abort()
+    abortController = null
+  }
+}
+
 watch(() => props.currentConvId, (id) => {
   if (id !== currentConvId.value) {
+    abortStream()
     currentConvId.value = id
     if (id) {
       loadingMsgs.value = true
@@ -115,8 +137,11 @@ watch(() => props.currentConvId, (id) => {
     messages.value = []
     streamingContent.value = ''
     streamDone.value = false
+    streaming.value = false
   }
 })
+
+onUnmounted(abortStream)
 
 async function send() {
   const q = input.value.trim()
@@ -129,6 +154,7 @@ async function send() {
 
   streaming.value = true
   streamingContent.value = ''
+  currentSources.value = []
   streamDone.value = false
 
   abortController = chatApi.streamChat(
@@ -136,7 +162,7 @@ async function send() {
     currentConvId.value,
     null,
     (token) => {
-      streamingContent.value += token
+      streamingContent.value += token.replace(/\\n/g, '\n')
       scrollToBottom()
     },
     (meta) => {
@@ -144,8 +170,11 @@ async function send() {
       emit('switch-conv', meta.conversation_id)
       emit('update-conv-list')
     },
+    (sources) => {
+      currentSources.value = sources
+    },
     () => {
-      messages.value.push({ role: 'assistant', content: streamingContent.value, time: now() })
+      messages.value.push({ role: 'assistant', content: streamingContent.value, sources: [...currentSources.value], time: now() })
       streaming.value = false
       streamingContent.value = ''
       streamDone.value = true

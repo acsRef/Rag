@@ -1,7 +1,21 @@
-"""pgvector-based vector search + BM25 lexical search with permission filtering."""
+"""pgvector-based vector search + BM25 lexical search with permission filtering.
+
+检索方法:
+  - `search`: 纯向量余弦相似度检索
+  - `bm25_search`: PostgreSQL ts_rank + jieba 分词的全文检索
+  - `hybrid_search`: 上述两者用 RRF 倒数排名融合
+
+权限过滤:每个 chunk 在 SQL 层带 `visibility` / `allowed_roles`,按用户角色过滤。
+  过滤逻辑对所有检索方法一致:admin (can_read_all=True) 跳过,否则只返回
+  visibility='public' 或 allowed_roles 与用户角色有交集的 chunk。
+"""
+import logging
+import time
 import jieba
 from sqlalchemy import text
 from app.store.db import get_session, Chunk, utc_now
+
+logger = logging.getLogger(__name__)
 
 
 def add_chunks(chunks_data: list[dict]):
@@ -79,6 +93,8 @@ def search(
       - allowed_roles overlaps with user_role_ids (PostgreSQL && operator)
     """
     session = get_session()
+    t0 = time.monotonic()
+    logger.debug("vector.search.start kb_count=%d top_k=%d can_read_all=%s", len(kb_ids), top_k, can_read_all)
     try:
         sql = """
             SELECT chunk_id, document_id, text, embedding, title, summary,
@@ -115,6 +131,7 @@ def search(
         ]
     finally:
         session.close()
+        logger.debug("vector.search.done row_count=%d elapsed_ms=%.1f", len(rows), (time.monotonic() - t0) * 1000)
 
 
 def tokenize(text: str) -> str:
@@ -132,6 +149,8 @@ def bm25_search(
     """BM25-style lexical search using PostgreSQL ts_rank + jieba tokenization."""
     query_tokens = tokenize(query)
     session = get_session()
+    t0 = time.monotonic()
+    logger.debug("bm25.search.start kb_count=%d top_k=%d", len(kb_ids), top_k)
     try:
         sql = """
             SELECT chunk_id, document_id, text, embedding, title, summary,
@@ -171,6 +190,7 @@ def bm25_search(
         ]
     finally:
         session.close()
+        logger.debug("bm25.search.done row_count=%d elapsed_ms=%.1f", len(rows), (time.monotonic() - t0) * 1000)
 
 
 def hybrid_search(
@@ -186,8 +206,12 @@ def hybrid_search(
     """Hybrid vector + BM25 search with RRF merge.
 
     Combines cosine similarity (semantic) and ts_rank (lexical) results
-    using Reciprocal Rank Fusion.
+    using Reciprocal Rank Fusion (RRF).
+
+    RRF 公式: `score = Σ 1 / (k + rank + 1)`,其中 k 默认 60(平滑长尾排名);
+    一个文档在两路检索中排名都靠前 → 累加分高,反之被压低。
     """
+    t0 = time.monotonic()
     vector_results = search(
         kb_ids, embedding, user_role_ids, can_read_all, top_k=fetch_k,
     )
@@ -196,6 +220,7 @@ def hybrid_search(
     )
 
     rrf_scores: dict[str, float] = {}
+    # RRF: 1/(k+rank+1) 累加;k 默认 60 平滑长尾排名,使 top1 与 top10 的差距不过于悬殊
     for rank, r in enumerate(vector_results):
         rrf_scores[r["chunk_id"]] = 1.0 / (rrf_k + rank + 1)
     for rank, r in enumerate(bm25_results):
@@ -211,6 +236,11 @@ def hybrid_search(
     for r in ranked:
         r["score"] = rrf_scores[r["chunk_id"]]
 
+    logger.info(
+        "hybrid.search.done vec_rows=%d bm25_rows=%d merged=%d rrf_k=%d elapsed_ms=%.1f",
+        len(vector_results), len(bm25_results), len(merged), rrf_k,
+        (time.monotonic() - t0) * 1000,
+    )
     return ranked[:top_k]
 
 
