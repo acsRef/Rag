@@ -1,6 +1,7 @@
 """Document upload & status API with auth."""
 from app.ingestion.pipeline import ingestion_pipeline
 from app.store.db import get_db_ctx, Document
+from app.config import settings
 
 from app.models.schemas import DocumentUploadResponse, DocumentStatusResponse, DocumentListItem
 from app.middleware.auth import get_current_user
@@ -15,7 +16,7 @@ def _get_kb_visibility(kb_id: str) -> tuple[str, list[int]]:
     with get_db_ctx() as session:
         kb = session.query(KnowledgeBase).filter(KnowledgeBase.id == kb_id).first()
         if not kb:
-            return "public", []
+            raise HTTPException(status_code=404, detail="知识库不存在")
         roles = session.query(KBRoleAccess.role_id).filter(KBRoleAccess.kb_id == kb_id).all()
         return kb.visibility, [r[0] for r in roles]
 
@@ -29,10 +30,11 @@ def _resolve_document_id(filename: str, kb_id: str, client_doc_id: str | None) -
     if client_doc_id:
         with get_db_ctx() as session:
             doc = session.query(Document).filter(
-                Document.document_id == client_doc_id
+                Document.document_id == client_doc_id,
+                Document.kb_id == kb_id,
             ).first()
             if not doc:
-                raise HTTPException(status_code=404, detail="Document not found")
+                raise HTTPException(status_code=404, detail="Document not found in this KB")
             return client_doc_id
 
     with get_db_ctx() as session:
@@ -41,7 +43,6 @@ def _resolve_document_id(filename: str, kb_id: str, client_doc_id: str | None) -
             .filter(
                 Document.filename == filename,
                 Document.kb_id == kb_id,
-                Document.status.in_(["indexed", "failed"]),
             )
             .order_by(Document.created_at.desc())
             .all()
@@ -67,10 +68,23 @@ async def upload_document(
     document_id: str | None = Form(default=None),
     current_user: dict = Depends(get_current_user),
 ):
+    can_read_all = current_user["is_admin"] or "doc.read_all" in current_user["permissions"]
     if "doc.upload" not in current_user["permissions"]:
         raise HTTPException(status_code=403, detail="Permission denied")
+    if not can_read_all:
+        from app.store.db import KnowledgeBase
+        with get_db_ctx() as session:
+            kb = session.query(KnowledgeBase).filter(KnowledgeBase.id == kb_id).first()
+            if not kb or kb.owner_id != current_user["id"]:
+                raise HTTPException(status_code=403, detail="无权向该知识库上传文档")
 
+    max_bytes = settings.max_upload_size_mb * 1024 * 1024
     content = await file.read()
+    if len(content) > max_bytes:
+        raise HTTPException(
+            status_code=413,
+            detail=f"文件过大（{len(content)//1024//1024}MB），最大允许 {settings.max_upload_size_mb}MB",
+        )
     visibility, allowed_roles = _get_kb_visibility(kb_id)
     resolved_id = _resolve_document_id(file.filename or "unknown", kb_id, document_id)
 
@@ -87,13 +101,19 @@ async def upload_document(
 
 
 @router.get("", response_model=list[DocumentListItem])
-async def list_documents(current_user: dict = Depends(get_current_user)):
+async def list_documents(
+    current_user: dict = Depends(get_current_user),
+    limit: int = 50,
+    offset: int = 0,
+):
+    limit = min(max(1, limit), 200)
+    offset = max(0, offset)
     with get_db_ctx() as session:
         can_read_all = current_user["is_admin"] or "doc.read_all" in current_user["permissions"]
         query = session.query(Document)
         if not can_read_all:
             query = query.filter(Document.owner_id == current_user["id"])
-        docs = query.order_by(Document.created_at.desc()).limit(50).all()
+        docs = query.order_by(Document.created_at.desc()).offset(offset).limit(limit).all()
         return [
             DocumentListItem(
                 document_id=d.document_id,
@@ -113,7 +133,8 @@ async def get_document(document_id: str, current_user: dict = Depends(get_curren
         record = session.query(Document).filter_by(document_id=document_id).first()
         if not record:
             raise HTTPException(status_code=404, detail="Document not found")
-        if not current_user["is_admin"] and record.owner_id != current_user["id"]:
+        can_read_all = current_user["is_admin"] or "doc.read_all" in current_user["permissions"]
+        if not can_read_all and record.owner_id != current_user["id"]:
             raise HTTPException(status_code=403, detail="Access denied")
         return DocumentStatusResponse(
             document_id=record.document_id,

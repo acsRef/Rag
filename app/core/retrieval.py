@@ -59,26 +59,28 @@ class RetrievalEngine:
     def retrieve(
         self,
         query: str,
-        intent: IntentResult,
+        intent: IntentResult | None,
         user_role_ids: list[int] | None = None,
         can_read_all: bool = False,
     ) -> list[RetrievedChunk]:
         top_k = settings.vector_search_top_k
-        if not intent.matches:
-            return []
 
         query_emb = sf_embedding.embed(query)
-        target_kb_ids = [m.kb_id for m in intent.matches]
+        if intent and intent.matches:
+            target_kb_ids = [m.kb_id for m in intent.matches]
+        else:
+            target_kb_ids = pgvector_store.list_kb_ids()
         seen_ids: set[str] = set()
         results: list[dict] = []
 
         _collect_results(target_kb_ids, query_emb, query, user_role_ids, can_read_all, top_k, seen_ids, results)
 
-        min_confidence = min(m.score for m in intent.matches) if intent.matches else 0
-        if len(results) < top_k and min_confidence < 0.6:
-            all_kb_ids = pgvector_store.list_kb_ids()
-            fallback = [k for k in all_kb_ids if k not in target_kb_ids]
-            _collect_results(fallback, query_emb, query, user_role_ids, can_read_all, top_k, seen_ids, results)
+        if intent and intent.matches:
+            min_confidence = min(m.score for m in intent.matches)
+            if len(results) < top_k and min_confidence < 0.6:
+                all_kb_ids = pgvector_store.list_kb_ids()
+                fallback = [k for k in all_kb_ids if k not in target_kb_ids]
+                _collect_results(fallback, query_emb, query, user_role_ids, can_read_all, top_k, seen_ids, results)
 
         results.sort(key=lambda x: x["score"], reverse=True)
         candidate_k = settings.mmr_candidate_k if settings.mmr_enabled else top_k
@@ -88,7 +90,7 @@ class RetrievalEngine:
             texts = [r["text"] for r in results]
             try:
                 reranked = sf_rerank.rerank(query, texts)
-                reranked_ids = [r["index"] for r in reranked]
+                reranked_ids = [r["index"] for r in reranked if 0 <= r["index"] < len(results)]
                 results = [results[i] for i in reranked_ids]
             except Exception:
                 logger.exception("Rerank failed for query=%s", query)

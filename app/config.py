@@ -46,6 +46,9 @@ class Settings(BaseSettings):
     pii_cache_ttl: int = 300
     pii_encryption_key: str = "change-me-to-a-random-key"
 
+    # Upload
+    max_upload_size_mb: int = 50
+
     # Server
     host: str = "0.0.0.0"
     port: int = 8000

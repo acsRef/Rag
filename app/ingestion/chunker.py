@@ -8,7 +8,7 @@ can go up to max_atomic. Overlap borrows last N sentences from previous chunk.
 import re
 from dataclasses import dataclass, field
 
-from app.ingestion.structurer import Element
+
 
 
 @dataclass
@@ -32,15 +32,22 @@ class TextChunker:
         max_atomic: int = 1024,
         borrow_ratio: float = 0.5,
     ):
+        if chunk_size < 1:
+            raise ValueError("chunk_size must be >= 1")
+        if overlap_sentences < 0:
+            raise ValueError("overlap_sentences must be >= 0")
+        if max_atomic < 1:
+            raise ValueError("max_atomic must be >= 1")
+        if not 0.0 <= borrow_ratio <= 1.0:
+            raise ValueError("borrow_ratio must be between 0.0 and 1.0")
         self.chunk_size = chunk_size
         self.overlap_sentences = overlap_sentences
-        self.max_atomic = max_atomic  # max chars an atomic block can occupy alone
-        self.borrow_ratio = borrow_ratio  # fraction of chunk_size used to decide buffer trimming before atomic merge
+        self.max_atomic = max_atomic
+        self.borrow_ratio = borrow_ratio
 
     def chunk(
         self,
         sections: list,
-        use_semantic: bool = False,
     ) -> list[Chunk]:
         """Main entry point: iterate sections, accumulate a buffer, emit chunks when buffer exceeds chunk_size.
 
@@ -53,29 +60,28 @@ class TextChunker:
         chunks: list[Chunk] = []
         section_path: list[str] = []
         buffer = ""
-        chunk_title = ""   # title captured when buffer started
-        current_title = ""  # most recent heading
+        chunk_title = ""
+        current_title = ""
 
         for sec in sections:
             if sec.title:
-                section_path = section_path[: sec.level - 1] + [sec.title]
+                level = max(0, sec.level - 1) if hasattr(sec, "level") else 0
+                section_path = section_path[:level] + [sec.title]
                 current_title = sec.title
 
             for elem in sec.elements:
-                elem_text = elem.text.strip()
+                elem_text = (elem.text or "").strip()
                 if not elem_text:
                     continue
 
                 if not buffer:
                     chunk_title = current_title
                     if elem.is_atomic:
-                        # Atomic block with no buffer → emit as standalone chunk
-                        self._emit_chunk(chunks, elem_text, current_title, section_path)
+                        self._emit_chunk(chunks, elem_text, current_title, section_path, is_atomic=True)
                     else:
                         buffer = elem_text
                 else:
                     if elem.is_atomic:
-                        # Atomic block at end of buffer → try to merge, borrow context if needed
                         buffer = self._merge_atomic(buffer, elem_text, chunks, chunk_title, section_path)
                         chunk_title = current_title
                     else:
@@ -83,12 +89,12 @@ class TextChunker:
                         if len(combined) <= self.chunk_size:
                             buffer = combined
                         else:
-                            chunks.append(Chunk(text=buffer.strip(), title=chunk_title, section_path=list(section_path)))
+                            self._emit_chunk(chunks, buffer.strip(), chunk_title, section_path)
                             buffer = elem_text
                             chunk_title = current_title
 
         if buffer.strip():
-            chunks.append(Chunk(text=buffer.strip(), title=chunk_title, section_path=list(section_path)))
+            self._emit_chunk(chunks, buffer.strip(), chunk_title, section_path)
 
         # Add overlap between consecutive chunks
         if len(chunks) > 1:
@@ -96,8 +102,12 @@ class TextChunker:
 
         return chunks
 
-    def _emit_chunk(self, chunks: list[Chunk], text: str, title: str, section_path: list[str]):
-        chunks.append(Chunk(text=text, title=title, section_path=list(section_path)))
+    def _emit_chunk(self, chunks: list[Chunk], text: str, title: str, section_path: list[str], is_atomic: bool = False):
+        limit = self.max_atomic if is_atomic else self.chunk_size
+        if len(text) > limit:
+            chunks.extend(self._recursive_split(text, title, section_path))
+        else:
+            chunks.append(Chunk(text=text, title=title, section_path=list(section_path)))
 
     def _merge_atomic(
         self, buffer: str, atomic: str, chunks: list[Chunk],
@@ -113,10 +123,10 @@ class TextChunker:
             overlap_text = self._extract_last_sentences(buffer, self.overlap_sentences)
             trimmed = buffer[: -len(overlap_text)].strip() if overlap_text else buffer
             if trimmed:
-                chunks.append(Chunk(text=trimmed, title=title, section_path=list(section_path)))
+                self._emit_chunk(chunks, trimmed, title, section_path)
             return overlap_text + "\n" + atomic if overlap_text else atomic
         else:
-            chunks.append(Chunk(text=buffer.strip(), title=title, section_path=list(section_path)))
+            self._emit_chunk(chunks, buffer.strip(), title, section_path)
             return atomic
 
     def _add_overlap(self, chunks: list[Chunk]) -> list[Chunk]:
@@ -132,18 +142,19 @@ class TextChunker:
 
     def _extract_last_sentences(self, text: str, n: int) -> str:
         """Return the last N sentences of text by splitting on sentence-ending punctuation."""
+        if n <= 0 or not text:
+            return ""
         sentences = re.split(r"(?<=[。！？.!?\n])\s*", text)
         sentences = [s.strip() for s in sentences if s.strip()]
         if len(sentences) <= n:
             return text
         tail = "\n".join(sentences[-n:])
-        return tail if tail.strip() else ""
+        return tail if tail.strip() else text
 
     # ── Recursive split (fallback for oversized blocks) ──────────────────────
 
-    def _recursive_split(self, text: str, title: str, section_path: list[str]) -> list[Chunk]:
-        """Recursively split text using heading → paragraph → line → sentence priority."""
-        if len(text) <= self.chunk_size:
+    def _recursive_split(self, text: str, title: str, section_path: list[str], _depth: int = 0) -> list[Chunk]:
+        if len(text) <= self.chunk_size or _depth >= 32:
             return [Chunk(text=text, title=title, section_path=list(section_path))]
 
         for split_fn in [self._split_by_headings, self._split_by_paragraphs,
@@ -152,11 +163,11 @@ class TextChunker:
             if len(parts) > 1:
                 result = []
                 for p in parts:
-                    result.extend(self._recursive_split(p, title, section_path))
+                    result.extend(self._recursive_split(p, title, section_path, _depth + 1))
                 merged = self._merge_small(result)
                 return merged
 
-        return self._split_by_char_boundary(text, title, section_path)
+        return self._split_by_char_boundary(text, title, section_path, _depth + 1)
 
     def _merge_small(self, chunks: list[Chunk]) -> list[Chunk]:
         """Greedily merge adjacent small chunks back up to chunk_size."""
@@ -176,7 +187,7 @@ class TextChunker:
 
     def _split_by_headings(self, text: str) -> list[str]:
         """Split at Markdown headings (##, etc.)."""
-        parts = re.split(r"(?=\n#{1,6}\s)", text)
+        parts = re.split(r"(?=(?:^|\n)#{1,6}\s)", text)
         return [p.strip() for p in parts if p.strip()]
 
     def _split_by_paragraphs(self, text: str) -> list[str]:

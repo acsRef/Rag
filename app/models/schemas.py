@@ -1,8 +1,7 @@
 from datetime import datetime
 from pydantic import BaseModel, Field
-from typing import Optional
+from typing import Optional, Literal
 
-_DATE_ENCODER = {datetime: lambda v: v.isoformat() if v else ""}
 
 
 # ── Auth ────────────────────────────────────────────────
@@ -10,13 +9,13 @@ _DATE_ENCODER = {datetime: lambda v: v.isoformat() if v else ""}
 class RegisterRequest(BaseModel):
     username: str = Field(min_length=2, max_length=64)
     password: str = Field(min_length=6, max_length=128)
-    display_name: str = ""
-    email: str = ""
+    display_name: str = Field(default="", max_length=128)
+    email: str = Field(default="", max_length=256, pattern=r"^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$|^$")
 
 
 class LoginRequest(BaseModel):
-    username: str
-    password: str
+    username: str = Field(min_length=1)
+    password: str = Field(min_length=1)
 
 
 class TokenResponse(BaseModel):
@@ -31,13 +30,12 @@ class UserResponse(BaseModel):
     display_name: str
     email: str
     is_active: bool
-    role_ids: list[int] = []
-    roles: list[str] = []
-    permissions: list[str] = []
+    role_ids: list[int] = Field(default_factory=list)
+    roles: list[str] = Field(default_factory=list)
+    permissions: list[str] = Field(default_factory=list)
 
 
 class ConversationResponse(BaseModel):
-    model_config = {"json_encoders": _DATE_ENCODER}
     conversation_id: str
     title: str
     created_at: datetime | None = None
@@ -45,7 +43,6 @@ class ConversationResponse(BaseModel):
 
 
 class DocumentListItem(BaseModel):
-    model_config = {"json_encoders": _DATE_ENCODER}
     document_id: str
     filename: str
     status: str
@@ -61,16 +58,16 @@ class UserRoleUpdateRequest(BaseModel):
 # ── Knowledge Base ──────────────────────────────────────
 
 class KBCreateRequest(BaseModel):
-    name: str
-    visibility: str = "public"
+    name: str = Field(min_length=1, max_length=128)
+    visibility: Literal["public", "internal", "restricted"] = "public"
 
 
 class KBResponse(BaseModel):
     id: str
     name: str
-    visibility: str
+    visibility: Literal["public", "internal", "restricted"]
     owner_id: str
-    allowed_role_ids: list[int] = []
+    allowed_role_ids: list[int] = Field(default_factory=list)
 
 
 class KBRoleAccessRequest(BaseModel):
@@ -97,12 +94,11 @@ class DocumentStatusResponse(BaseModel):
 # ── Chat ────────────────────────────────────────────────
 
 class ChatRequest(BaseModel):
-    user_id: str = "anonymous"
     conversation_id: Optional[str] = None
-    query: str
+    query: str = Field(min_length=1, max_length=4096)
     knowledge_base_ids: Optional[list[str]] = None
-    temperature: float = 0.7
-    top_p: float = 0.9
+    temperature: float = Field(default=0.7, ge=0.0, le=2.0)
+    top_p: float = Field(default=0.9, ge=0.0, le=1.0)
 
 
 class ChatMessage(BaseModel):

@@ -1,5 +1,8 @@
 """Auth API: register, login, me."""
-from fastapi import APIRouter, Depends, HTTPException, status
+import time
+from collections import defaultdict
+from fastapi import APIRouter, Depends, HTTPException, status, Request
+from sqlalchemy.exc import IntegrityError
 from app.store.auth_store import (
     create_user, get_user_by_username, get_user_by_id,
     get_user_role_ids, get_user_permissions, list_roles, verify_password, seed_defaults,
@@ -9,6 +12,19 @@ from app.models.schemas import RegisterRequest, LoginRequest, TokenResponse, Use
 
 router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
 
+_LOGIN_ATTEMPTS: dict[str, list[float]] = defaultdict(list)
+_LOGIN_WINDOW = 300  # seconds
+_LOGIN_MAX_ATTEMPTS = 10
+
+
+def _check_rate_limit(key: str):
+    now = time.time()
+    window = _LOGIN_ATTEMPTS[key]
+    window[:] = [t for t in window if now - t < _LOGIN_WINDOW]
+    if len(window) >= _LOGIN_MAX_ATTEMPTS:
+        raise HTTPException(status_code=429, detail="登录尝试过于频繁，请稍后再试")
+    window.append(now)
+
 
 @router.post("/register", response_model=TokenResponse)
 def register(body: RegisterRequest):
@@ -16,13 +32,16 @@ def register(body: RegisterRequest):
         raise HTTPException(status_code=400, detail="Username already exists")
     user_role = next((r for r in list_roles() if r.name == "user"), None)
     role_ids = [user_role.id] if user_role else []
-    user = create_user(
-        username=body.username,
-        password=body.password,
-        display_name=body.display_name or body.username,
-        email=body.email,
-        role_ids=role_ids,
-    )
+    try:
+        user = create_user(
+            username=body.username,
+            password=body.password,
+            display_name=body.display_name or body.username,
+            email=body.email,
+            role_ids=role_ids,
+        )
+    except IntegrityError:
+        raise HTTPException(status_code=409, detail="Username already exists")
     token = create_access_token({"sub": user.id, "username": user.username})
     permissions = get_user_permissions(user.id)
     return TokenResponse(
@@ -31,14 +50,15 @@ def register(body: RegisterRequest):
             id=user.id, username=user.username,
             display_name=user.display_name, email=user.email,
             is_active=user.is_active, role_ids=role_ids,
-            roles=[r.name for r in (list_roles() if False else [])],
+            roles=[r.name for r in list_roles() if r.id in role_ids],
             permissions=permissions,
         ),
     )
 
 
 @router.post("/login", response_model=TokenResponse)
-def login(body: LoginRequest):
+def login(body: LoginRequest, request: Request):
+    _check_rate_limit(request.client.host)
     user = get_user_by_username(body.username)
     if not user or not verify_password(body.password, user.hashed_password):
         raise HTTPException(status_code=401, detail="Invalid username or password")

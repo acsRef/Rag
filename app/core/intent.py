@@ -1,7 +1,10 @@
 from app.llm.chat import minimax_client
 from app.models.schemas import IntentResult, IntentMatch
 from app.config import settings
+import logging
 import json
+
+logger = logging.getLogger(__name__)
 
 
 INTENT_CLASSIFIER_PROMPT = """你是一个意图分类器。根据用户的问题和可用的知识库列表，判断哪些知识库与问题相关。
@@ -62,6 +65,7 @@ class IntentClassifier:
                 intent_type=data.get("intent_type", "KB"),
             )
         except json.JSONDecodeError:
+            logger.warning("Intent classification returned invalid JSON (first 200 chars): %s", result[:200])
             return IntentResult(sub_question=question, matches=[], intent_type="KB")
 
 

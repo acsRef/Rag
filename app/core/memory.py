@@ -1,7 +1,14 @@
+import threading
+import logging
+
 from app.store.db import get_db_ctx, Message, Conversation, new_id
 from app.config import settings
 from app.llm.chat import minimax_client
 from datetime import datetime, timezone
+
+logger = logging.getLogger(__name__)
+_summary_locks: dict[str, threading.Lock] = {}
+_summary_locks_lock = threading.Lock()
 
 SUMMARY_UPDATE_PROMPT = """你是一个对话摘要助手。请根据已有的摘要和新的对话轮次，生成更新后的摘要。
 
@@ -81,7 +88,7 @@ class ConversationMemory:
     def get_summary(self, conversation_id: str) -> str:
         with get_db_ctx() as session:
             conv = session.query(Conversation).filter_by(conversation_id=conversation_id).first()
-            return conv.summary if conv else ""
+            return conv.summary if conv and conv.summary else ""
 
     def add_message(self, conversation_id: str, role: str, content: str, user_id: str = "default_user"):
         with get_db_ctx() as session:
@@ -98,17 +105,17 @@ class ConversationMemory:
                 conv.updated_at = datetime.now(timezone.utc)
             session.commit()
 
-            self._maybe_summarize(conversation_id, session)
+        self._maybe_summarize(conversation_id)
 
-    def _maybe_summarize(self, conversation_id: str, session):
+    def _get_summarize_context(self, conversation_id: str, session):
         total = session.query(Message).filter_by(conversation_id=conversation_id).count()
         keep_count = settings.history_keep_turns * 2
         if total <= keep_count + settings.history_summary_turns:
-            return
+            return None
 
         conv = session.query(Conversation).filter_by(conversation_id=conversation_id).first()
         if not conv:
-            return
+            return None
 
         older = (
             session.query(Message)
@@ -118,34 +125,55 @@ class ConversationMemory:
             .all()
         )
 
-        if conv.summary:
-            new_turns_text = "\n".join(
-                f"{m.role}: {m.content}" for m in older
-                if not conv.last_summary_at or (m.created_at and m.created_at > conv.last_summary_at)
-            )
-            if not new_turns_text.strip():
-                return
-            prompt = SUMMARY_UPDATE_PROMPT.format(
-                existing_summary=conv.summary,
-                new_turns=new_turns_text,
-                max_tokens=settings.max_summary_tokens,
-            )
-        else:
-            conversation_text = "\n".join(f"{m.role}: {m.content}" for m in older)
-            prompt = SUMMARY_FRESH_PROMPT.format(
-                conversation_text=conversation_text,
-                max_tokens=settings.max_summary_tokens,
-            )
+        return conv, older
 
-        new_summary = minimax_client.chat([{"role": "user", "content": prompt}])
-
-        conv.summary = new_summary.strip()
-        conv.last_summary_at = datetime.now(timezone.utc)
-        session.commit()
-
-    def summarize(self, conversation_id: str):
+    def _maybe_summarize(self, conversation_id: str):
         with get_db_ctx() as session:
-            self._maybe_summarize(conversation_id, session)
+            ctx = self._get_summarize_context(conversation_id, session)
+            if ctx is None:
+                return
+            conv, older = ctx
+
+            if conv.summary:
+                new_turns_text = "\n".join(
+                    f"{m.role}: {m.content}" for m in older
+                    if not conv.last_summary_at or (m.created_at and m.created_at > conv.last_summary_at)
+                )
+                if not new_turns_text.strip():
+                    return
+                prompt = SUMMARY_UPDATE_PROMPT.format(
+                    existing_summary=conv.summary,
+                    new_turns=new_turns_text,
+                    max_tokens=settings.max_summary_tokens,
+                )
+            else:
+                conversation_text = "\n".join(f"{m.role}: {m.content}" for m in older)
+                prompt = SUMMARY_FRESH_PROMPT.format(
+                    conversation_text=conversation_text,
+                    max_tokens=settings.max_summary_tokens,
+                )
+
+        lock = _summary_locks_lock
+        with lock:
+            if conversation_id not in _summary_locks:
+                _summary_locks[conversation_id] = threading.Lock()
+        conv_lock = _summary_locks[conversation_id]
+
+        if not conv_lock.acquire(blocking=False):
+            return
+
+        try:
+            new_summary = minimax_client.chat([{"role": "user", "content": prompt}])
+            with get_db_ctx() as session:
+                conv = session.query(Conversation).filter_by(conversation_id=conversation_id).first()
+                if conv:
+                    conv.summary = new_summary.strip()
+                    conv.last_summary_at = datetime.now(timezone.utc)
+                    session.commit()
+        except Exception:
+            logger.exception("Summary generation failed for conversation %s", conversation_id)
+        finally:
+            conv_lock.release()
 
 
 conversation_memory = ConversationMemory()

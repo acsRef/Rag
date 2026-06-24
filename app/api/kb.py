@@ -51,6 +51,8 @@ def delete_kb(kb_id: str, current_user: dict = Depends(get_current_user)):
         kb = session.query(KnowledgeBase).filter(KnowledgeBase.id == kb_id).first()
         if not kb:
             raise HTTPException(status_code=404, detail="KB not found")
+        if not current_user["is_admin"] and kb.owner_id != current_user["id"]:
+            raise HTTPException(status_code=403, detail="无权删除不属于自己的知识库")
         session.delete(kb)
         session.commit()
         return {"ok": True}
@@ -64,6 +66,9 @@ def set_kb_role_access(kb_id: str, body: KBRoleAccessRequest, current_user: dict
         raise HTTPException(status_code=403, detail="Permission denied")
     session = get_session()
     try:
+        kb = session.query(KnowledgeBase).filter(KnowledgeBase.id == kb_id).first()
+        if not kb:
+            raise HTTPException(status_code=404, detail="知识库不存在")
         session.query(KBRoleAccess).filter(KBRoleAccess.kb_id == kb_id).delete()
         for rid in body.role_ids:
             session.add(KBRoleAccess(kb_id=kb_id, role_id=rid))

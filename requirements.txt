@@ -14,3 +14,4 @@ psycopg2-binary
 pgvector
 python-jose[cryptography]
 passlib[bcrypt]
+ftfy>=6.0

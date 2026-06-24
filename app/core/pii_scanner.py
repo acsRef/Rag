@@ -138,6 +138,10 @@ def scan(text: str) -> list[PiiMatch]:
 
 def _partial_mask(value: str) -> str:
     """Partially mask sensitive data: keep first 3 and last 4 chars."""
+    if len(value) <= 1:
+        return value
+    if len(value) <= 3:
+        return value[0] + "*" * (len(value) - 1)
     if len(value) <= 7:
         return value[0] + "*" * (len(value) - 2) + value[-1]
     return value[:3] + "*" * (len(value) - 7) + value[-4:]

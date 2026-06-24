@@ -16,9 +16,10 @@ async def stream_chat(
 ):
     from fastapi.responses import StreamingResponse
     user_id = current_user["id"] if current_user else "anonymous"
-    req.user_id = user_id
+    user_role_ids = current_user.get("role_ids") if current_user else None
+    can_read_all = bool(current_user and (current_user["is_admin"] or "doc.read_all" in current_user["permissions"]))
     return StreamingResponse(
-        rag_pipeline.execute(req),
+        rag_pipeline.execute(req, user_id=user_id, user_role_ids=user_role_ids, can_read_all=can_read_all),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
@@ -29,13 +30,20 @@ async def stream_chat(
 
 
 @router.get("/conversations", response_model=list[ConversationResponse])
-def list_conversations(current_user: dict = Depends(get_current_user)):
+def list_conversations(
+    current_user: dict = Depends(get_current_user),
+    limit: int = 50,
+    offset: int = 0,
+):
+    limit = min(max(1, limit), 200)
+    offset = max(0, offset)
     with get_db_ctx() as session:
         convs = (
             session.query(Conversation)
             .filter(Conversation.user_id == current_user["id"])
             .order_by(Conversation.updated_at.desc())
-            .limit(50)
+            .offset(offset)
+            .limit(limit)
             .all()
         )
         return [

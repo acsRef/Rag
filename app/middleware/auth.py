@@ -7,13 +7,14 @@ from jose import JWTError, jwt
 from app.config import settings
 from app.store.auth_store import get_user_by_id, get_user_role_ids, get_user_permissions
 
-bearer_scheme = HTTPBearer(auto_error=False)
+bearer_required = HTTPBearer(auto_error=True)
+bearer_optional = HTTPBearer(auto_error=False)
 
 
 def create_access_token(data: dict) -> str:
     to_encode = data.copy()
     expire = datetime.now(timezone.utc) + timedelta(minutes=settings.access_token_expire_minutes)
-    to_encode.update({"exp": expire})
+    to_encode.update({"exp": int(expire.timestamp())})
     return jwt.encode(to_encode, settings.jwt_secret, algorithm=settings.jwt_algorithm)
 
 
@@ -53,7 +54,7 @@ def _resolve_token(credentials: HTTPAuthorizationCredentials | None) -> dict | N
 
 
 async def get_current_user(
-    credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
+    credentials: HTTPAuthorizationCredentials = Depends(bearer_required),
 ) -> dict:
     """FastAPI dependency: returns {id, username, display_name, role_ids, permissions, is_admin}.
 
@@ -65,8 +66,8 @@ async def get_current_user(
     return result
 
 
-async def get_optional_user(
-    credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
+def get_optional_user(
+    credentials: HTTPAuthorizationCredentials | None = Depends(bearer_optional),
 ) -> dict | None:
     """Like get_current_user but returns None instead of 401."""
     return _resolve_token(credentials)

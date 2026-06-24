@@ -6,6 +6,7 @@ to PostgreSQL + pgvector.
 """
 
 import hashlib
+import logging
 
 from app.store import pgvector_store
 from app.llm.embedding import sf_embedding
@@ -35,8 +36,20 @@ class DocumentIndexer:
     ) -> dict:
         from app.ingestion.parser import document_parser
 
-        text = document_parser.parse_bytes(content, filename)
-        text = document_cleaner.clean(text)
+        try:
+            text = document_parser.parse_bytes(content, filename)
+            text = document_cleaner.clean(text)
+        except Exception:
+            logger = logging.getLogger(__name__)
+            logger.exception("Parse/clean failed for filename=%s", filename)
+            doc_id = document_id or new_id()
+            self._save_document(doc_id, user_id, kb_id, filename, 0, "failed", "")
+            return {
+                "document_id": doc_id,
+                "filename": filename,
+                "status": "failed",
+                "chunk_count": 0,
+            }
         doc_hash = _content_hash(text)
 
         # ── PII check ─────────────────────────────────
@@ -103,7 +116,19 @@ class DocumentIndexer:
         new_embeddings: list = []
         if new_chunks:
             new_chunks = chunk_metadata_generator.generate(new_chunks)
-            new_embeddings = sf_embedding.embed_batch([c.text for c in new_chunks])
+            try:
+                new_embeddings = sf_embedding.embed_batch([c.text for c in new_chunks])
+            except Exception:
+                logger = logging.getLogger(__name__)
+                logger.exception("Embedding failed for filename=%s", filename)
+                doc_id = document_id or new_id()
+                self._save_document(doc_id, user_id, kb_id, filename, 0, "failed", doc_hash)
+                return {
+                    "document_id": doc_id,
+                    "filename": filename,
+                    "status": "failed",
+                    "chunk_count": 0,
+                }
 
         # ── Build final chunks_data ─────────────────────
         doc_id = document_id or new_id()
@@ -130,10 +155,15 @@ class DocumentIndexer:
                     "section_path": old.get("section_path", ""),
                     "search_text": old.get("search_text", "") or tokenize(c.text),
                     "content_hash": ch,
-                    "visibility": old.get("visibility", visibility),
+                    "visibility": visibility,
                     "allowed_roles": old.get("allowed_roles", allowed_roles or []),
                 })
             else:
+                if new_idx >= len(new_embeddings):
+                    logger = logging.getLogger(__name__)
+                    logger.error("Embedding count mismatch: %d chunks vs %d embeddings, skipping chunk %s",
+                                 len(new_chunks), len(new_embeddings), chunk_id)
+                    break
                 chunks_data.append({
                     "chunk_id": chunk_id,
                     "document_id": doc_id,
@@ -152,11 +182,21 @@ class DocumentIndexer:
                 new_idx += 1
 
         # ── Atomic replace ──────────────────────────────
-        if document_id:
-            pgvector_store.delete_chunks_by_document(document_id)
+        try:
+            if document_id:
+                pgvector_store.delete_chunks_by_document(document_id)
 
-        self._save_document(doc_id, user_id, kb_id, filename, len(chunks), "indexed", doc_hash)
-        pgvector_store.add_chunks(chunks_data)
+            pgvector_store.add_chunks(chunks_data)
+            self._save_document(doc_id, user_id, kb_id, filename, len(chunks), "indexed", doc_hash)
+        except Exception:
+            logger = logging.getLogger(__name__)
+            logger.exception("Failed to persist chunks/document for doc_id=%s", doc_id)
+            return {
+                "document_id": doc_id,
+                "filename": filename,
+                "status": "failed",
+                "chunk_count": 0,
+            }
 
         return {
             "document_id": doc_id,
@@ -173,21 +213,30 @@ class DocumentIndexer:
         session = get_session()
         try:
             for r in rejects:
+                start = max(0, r.start)
+                end = min(len(text), r.end)
+                if end <= start:
+                    end = start + 1
+                ctx_start = max(0, start - 30)
+                ctx_end = min(len(text), end + 30)
                 session.add(PiiAlert(
                     source_type="document", source_id=doc_id,
                     rule_name=r.rule_name,
                     matched_text=r.matched_text,
-                    context_snippet=text[max(0, r.start-30):r.end+30],
+                    context_snippet=text[ctx_start:ctx_end],
                     strategy=r.strategy,
                     status="pending",
                 ))
             session.add(PiiHold(
                 source_type="document", source_id=doc_id,
-                encrypted_text=text,
+                content=text,
                 status="pending",
             ))
             self._save_document(doc_id, user_id, kb_id, filename, 0, "pending_review", "")
             session.commit()
+        except Exception:
+            session.rollback()
+            raise
         finally:
             session.close()
         return {
@@ -225,6 +274,9 @@ class DocumentIndexer:
                     updated_at=utc_now(),
                 ))
             session.commit()
+        except Exception:
+            session.rollback()
+            raise
         finally:
             session.close()
 

@@ -1,6 +1,9 @@
 from app.llm.chat import minimax_client
 from app.models.schemas import RewriteResult
+import logging
 import json
+
+logger = logging.getLogger(__name__)
 
 
 REWRITE_PROMPT = """你是一个查询改写助手。请根据对话摘要、最近对话历史和当前用户问题，完成以下任务：
@@ -57,6 +60,7 @@ class QueryRewriteService:
                 sub_questions=data.get("sub_questions", [question]),
             )
         except json.JSONDecodeError:
+            logger.warning("Query rewrite returned invalid JSON (first 200 chars): %s", result[:200])
             return RewriteResult(
                 rewritten_query=question,
                 sub_questions=[question],

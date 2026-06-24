@@ -16,35 +16,39 @@ SessionLocal = sessionmaker(bind=engine)
 def init_db():
     Base.metadata.create_all(engine)
     with engine.connect() as conn:
-        conn.execute(
-            text("ALTER TABLE conversations ADD COLUMN IF NOT EXISTS summary TEXT DEFAULT ''")
-        )
-        conn.execute(
-            text("ALTER TABLE conversations ADD COLUMN IF NOT EXISTS last_summary_at TIMESTAMP")
-        )
-        conn.execute(
-            text("ALTER TABLE chunks ADD COLUMN IF NOT EXISTS search_text TEXT DEFAULT ''")
-        )
-        conn.execute(
-            text("CREATE INDEX IF NOT EXISTS idx_chunks_search_text ON chunks "
-                 "USING GIN (to_tsvector('simple', search_text))")
-        )
-        conn.execute(
-            text("CREATE INDEX IF NOT EXISTS idx_pii_alerts_status ON pii_alerts (status)")
-        )
-        conn.execute(
-            text("CREATE INDEX IF NOT EXISTS idx_pii_hold_status ON pii_hold (status)")
-        )
-        conn.execute(
-            text("ALTER TABLE chunks ADD COLUMN IF NOT EXISTS content_hash VARCHAR(64) DEFAULT ''")
-        )
-        conn.execute(
-            text("ALTER TABLE documents ADD COLUMN IF NOT EXISTS content_hash VARCHAR(64) DEFAULT ''")
-        )
-        conn.execute(
-            text("ALTER TABLE documents ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP")
-        )
-        conn.commit()
+        try:
+            conn.execute(
+                text("ALTER TABLE conversations ADD COLUMN IF NOT EXISTS summary TEXT DEFAULT ''")
+            )
+            conn.execute(
+                text("ALTER TABLE conversations ADD COLUMN IF NOT EXISTS last_summary_at TIMESTAMP")
+            )
+            conn.execute(
+                text("ALTER TABLE chunks ADD COLUMN IF NOT EXISTS search_text TEXT DEFAULT ''")
+            )
+            conn.execute(
+                text("CREATE INDEX IF NOT EXISTS idx_chunks_search_text ON chunks "
+                     "USING GIN (to_tsvector('simple', search_text))")
+            )
+            conn.execute(
+                text("CREATE INDEX IF NOT EXISTS idx_pii_alerts_status ON pii_alerts (status)")
+            )
+            conn.execute(
+                text("CREATE INDEX IF NOT EXISTS idx_pii_hold_status ON pii_hold (status)")
+            )
+            conn.execute(
+                text("ALTER TABLE chunks ADD COLUMN IF NOT EXISTS content_hash VARCHAR(64) DEFAULT ''")
+            )
+            conn.execute(
+                text("ALTER TABLE documents ADD COLUMN IF NOT EXISTS content_hash VARCHAR(64) DEFAULT ''")
+            )
+            conn.execute(
+                text("ALTER TABLE documents ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP")
+            )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
 
 
 from contextlib import contextmanager
@@ -91,7 +95,7 @@ class User(Base):
     hashed_password = Column(String(256), nullable=False)
     display_name = Column(String(128), default="")
     email = Column(String(128), default="")
-    is_active = Column(Boolean, default=True)
+    is_active = Column(Boolean, nullable=False, default=True)
     created_at = Column(DateTime, default=utc_now)
 
 
@@ -172,7 +176,7 @@ class Chunk(Base):
     search_text = Column(Text, default="")
     content_hash = Column(String(64), default="")
     visibility = Column(String(16), default="public")
-    allowed_roles = Column(ARRAY(Integer), default=[])
+    allowed_roles = Column(ARRAY(Integer), default=list)
     created_at = Column(DateTime, default=utc_now)
 
 
@@ -198,7 +202,7 @@ class Message(Base):
     user_id = Column(String(64), ForeignKey("users.id"), nullable=False)
     role = Column(String(16), nullable=False)
     content = Column(Text, nullable=False)
-    metadata_json = Column(JSON, default={})
+    metadata_json = Column(JSON, default=dict)
     created_at = Column(DateTime, default=utc_now)
 
 
@@ -239,6 +243,6 @@ class PiiHold(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     source_type = Column(String(16), nullable=False)  # document / chat
     source_id = Column(String(64), nullable=False, index=True)
-    encrypted_text = Column(Text, nullable=False)
+    content = Column(Text, nullable=False)
     status = Column(String(16), nullable=False, default="pending")  # pending / released / deleted
     created_at = Column(DateTime, default=utc_now)

@@ -187,6 +187,15 @@ def seed_defaults():
                 owner_id=admin.id, created_at=utc_now(),
             ))
 
+        # Seed anonymous user for unauthenticated chat
+        anon = session.query(User).filter(User.id == "anonymous").first()
+        if not anon:
+            anon_pw = hash_password(new_id())
+            session.add(User(
+                id="anonymous", username="anonymous", hashed_password=anon_pw,
+                display_name="Anonymous User", email="", is_active=True,
+            ))
+
         session.commit()
     finally:
         session.close()

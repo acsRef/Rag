@@ -11,6 +11,7 @@ import io
 import os
 import re
 import tempfile
+import codecs
 
 import chardet
 from docling.document_converter import DocumentConverter
@@ -50,7 +51,12 @@ class DocumentParser:
         handler = getattr(self, f"_handle_{file_type}", None)
         if handler is None:
             raise ValueError(f"Unsupported file type: {suffix}")
-        return handler(content, filename)
+        try:
+            return handler(content, filename)
+        except Exception:
+            import logging
+            logging.getLogger(__name__).exception("Handler %s failed for %s", file_type, filename)
+            raise
 
     # ── Encoding ──────────────────────────────────────────
 
@@ -60,6 +66,10 @@ class DocumentParser:
         encoding = result.get("encoding", "utf-8") or "utf-8"
         encoding = encoding.lower().replace("-", "_")
         encoding = encoding.replace("gb2312", "gbk").replace("gb_2312", "gbk")
+        try:
+            codecs.lookup(encoding)
+        except LookupError:
+            encoding = "utf-8"
         return encoding
 
     def _ensure_utf8(self, content: bytes) -> bytes:
@@ -67,17 +77,27 @@ class DocumentParser:
         encoding = self._detect_encoding(content)
         if encoding in ("utf_8", "ascii"):
             return content
-        text = content.decode(encoding, errors="replace")
+        try:
+            text = content.decode(encoding, errors="replace")
+        except (LookupError, UnicodeDecodeError):
+            text = content.decode("utf-8", errors="replace")
         return text.encode("utf-8")
 
     # ── Temp file helper ──────────────────────────────────
 
     def _to_tempfile(self, content: bytes, filename: str) -> str:
         """Write bytes to a temp file for Docling (needs filesystem path)."""
-        suffix = os.path.splitext(filename)[1] or ".tmp"
-        with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as f:
-            f.write(content)
-            return f.name
+        suffix = os.path.splitext(filename)[1] or ".pdf"
+        tmp = tempfile.NamedTemporaryFile(suffix=suffix, delete=False)
+        try:
+            tmp.write(content)
+            return tmp.name
+        except Exception:
+            tmp.close()
+            os.unlink(tmp.name)
+            raise
+        finally:
+            tmp.close()
 
     # ── Docling based parsing ─────────────────────────────
 
@@ -126,24 +146,28 @@ class DocumentParser:
                 continue
 
         if not images_to_describe:
-            return self._IMG_PATTERN.sub("", md)
+            return md
 
         descriptions = image_describer.describe_batch(images_to_describe)
 
         result_md = md
         for batch_idx, pic_idx in pic_to_match_idx.items():
             placeholder = matches[pic_idx].group(0)
-            desc = f"[图片：{descriptions[batch_idx]}]"
+            desc = f"[图片：{descriptions[batch_idx]}]" if batch_idx < len(descriptions) else "[图片描述失败]"
             result_md = result_md.replace(placeholder, desc, 1)
 
-        result_md = self._IMG_PATTERN.sub("", result_md)
         return result_md
 
     # ── Image file handler (pure image, no Docling) ───────
 
     def _handle_image(self, content: bytes, filename: str) -> str:
         """Standalone image file → describe via vision API (no Docling involved)."""
-        return image_describer.describe(content, filename)
+        try:
+            return image_describer.describe(content, filename)
+        except Exception:
+            import logging
+            logging.getLogger(__name__).exception("Vision API failed for %s", filename)
+            return "[图片描述失败]"
 
     # ── Text-like file handlers (with encoding detection) ─
 
@@ -153,15 +177,12 @@ class DocumentParser:
         return content.decode(encoding, errors="replace")
 
     def _handle_json(self, content: bytes, filename: str) -> str:
-        content = self._ensure_utf8(content)
         return self._parse_via_docling(content, filename)
 
     def _handle_xml(self, content: bytes, filename: str) -> str:
-        content = self._ensure_utf8(content)
         return self._parse_via_docling(content, filename)
 
     def _handle_html(self, content: bytes, filename: str) -> str:
-        content = self._ensure_utf8(content)
         return self._parse_via_docling(content, filename)
 
     # ── Doc handlers ──────────────────────────────────────

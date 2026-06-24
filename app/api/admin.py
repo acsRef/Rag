@@ -1,17 +1,16 @@
 """Admin API: user & role management + PII review."""
 from fastapi import APIRouter, Depends, HTTPException
 from app.store.auth_store import (
-    list_users, get_user_by_id, get_user_role_ids, set_user_roles,
+    get_user_role_ids, set_user_roles,
     list_roles, create_role, set_role_permissions, get_role_permissions,
-    seed_defaults,
 )
-from app.store.db import RolePermission
-from app.store.db import get_db_ctx, PiiAlert, PiiHold, utc_now
+from app.store.db import get_db_ctx, get_session, PiiAlert, PiiHold, utc_now, User, Role
 from app.middleware.auth import get_current_user
 from app.models.schemas import UserResponse, UserRoleUpdateRequest
 from app.core.pii_scanner import invalidate_cache
 from datetime import datetime
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel
+from typing import Literal
 
 router = APIRouter(prefix="/api/v1/admin", tags=["admin"])
 
@@ -21,25 +20,21 @@ def require_admin(user: dict):
         raise HTTPException(status_code=403, detail="Admin access required")
 
 
+class CreateRoleRequest(BaseModel):
+    name: str
+    description: str = ""
+    permissions: list[str] = []
+
+
 @router.get("/users", response_model=list[UserResponse])
 def list_all_users(current_user: dict = Depends(get_current_user)):
     require_admin(current_user)
-    from app.store.db import User, UserRole
     with get_db_ctx() as session:
-        users = (
-            session.query(User)
-            .outerjoin(UserRole)
-            .order_by(User.created_at.desc())
-            .all()
-        )
+        users = session.query(User).order_by(User.created_at.desc()).all()
     all_roles = {r.id: r for r in list_roles()}
     result = []
-    seen = set()
     for u in users:
-        if u.id in seen:
-            continue
-        seen.add(u.id)
-        role_ids = [ur.role_id for ur in u.user_roles] if hasattr(u, 'user_roles') else get_user_role_ids(u.id)
+        role_ids = get_user_role_ids(u.id)
         roles = [all_roles[rid].name for rid in role_ids if rid in all_roles]
         result.append(UserResponse(
             id=u.id, username=u.username,
@@ -53,11 +48,20 @@ def list_all_users(current_user: dict = Depends(get_current_user)):
 @router.put("/users/{user_id}/roles")
 def update_user_roles(user_id: str, body: UserRoleUpdateRequest, current_user: dict = Depends(get_current_user)):
     require_admin(current_user)
-    user = get_user_by_id(user_id)
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-    set_user_roles(user_id, body.role_ids)
-    return {"ok": True}
+    session = get_session()
+    try:
+        user = session.query(User).filter(User.id == user_id).first()
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+        if body.role_ids:
+            existing_role_ids = {r.id for r in session.query(Role).all()}
+            for rid in body.role_ids:
+                if rid not in existing_role_ids:
+                    raise HTTPException(status_code=400, detail=f"角色 {rid} 不存在")
+        set_user_roles(user_id, body.role_ids)
+        return {"ok": True}
+    finally:
+        session.close()
 
 
 @router.get("/roles")
@@ -72,19 +76,14 @@ def list_all_roles(current_user: dict = Depends(get_current_user)):
 
 
 @router.post("/roles")
-def create_new_role(name: str, description: str = "", permissions: list[str] = [],
-                    current_user: dict = Depends(get_current_user)):
+def create_new_role(body: CreateRoleRequest, current_user: dict = Depends(get_current_user)):
     require_admin(current_user)
-    role = create_role(name, description)
-    if permissions:
-        set_role_permissions(role.id, permissions)
+    role = create_role(body.name, body.description)
+    if body.permissions:
+        set_role_permissions(role.id, body.permissions)
     return {"id": role.id, "name": role.name}
 
-
-# ── PII Audit ────────────────────────────────────────────
-
 class PiiAlertItem(BaseModel):
-    model_config = ConfigDict(json_encoders={datetime: lambda v: v.isoformat() if v else ""})
     id: int
     source_type: str
     source_id: str
@@ -94,10 +93,13 @@ class PiiAlertItem(BaseModel):
     status: str
     created_at: datetime | None = None
 
+VALID_PII_STATUSES = {"pending", "confirmed", "false_positive"}
 
 @router.get("/pii-alerts", response_model=list[PiiAlertItem])
 def list_pii_alerts(status: str = "pending", current_user: dict = Depends(get_current_user)):
     require_admin(current_user)
+    if status not in VALID_PII_STATUSES:
+        raise HTTPException(status_code=400, detail=f"无效的状态值: {status}")
     with get_db_ctx() as session:
         alerts = (
             session.query(PiiAlert)
@@ -128,10 +130,12 @@ def confirm_pii_alert(alert_id: int, current_user: dict = Depends(get_current_us
         alert = session.query(PiiAlert).filter(PiiAlert.id == alert_id).first()
         if not alert:
             raise HTTPException(status_code=404, detail="Alert not found")
+        if alert.status != "pending":
+            raise HTTPException(status_code=400, detail=f"Alert is already {alert.status}")
         alert.status = "confirmed"
         alert.resolved_at = utc_now()
         session.commit()
-        return {"ok": True}
+        return {"ok": True, "alert_id": alert_id, "new_status": "confirmed"}
 
 
 @router.post("/pii-alerts/{alert_id}/false-positive")
@@ -141,9 +145,10 @@ def false_positive_pii_alert(alert_id: int, current_user: dict = Depends(get_cur
         alert = session.query(PiiAlert).filter(PiiAlert.id == alert_id).first()
         if not alert:
             raise HTTPException(status_code=404, detail="Alert not found")
+        if alert.status != "pending":
+            raise HTTPException(status_code=400, detail=f"Alert is already {alert.status}")
         alert.status = "false_positive"
         alert.resolved_at = utc_now()
-        session.commit()
 
         hold = (
             session.query(PiiHold)
@@ -156,8 +161,8 @@ def false_positive_pii_alert(alert_id: int, current_user: dict = Depends(get_cur
         )
         if hold:
             hold.status = "released"
-            session.commit()
-        return {"ok": True}
+        session.commit()
+        return {"ok": True, "alert_id": alert_id, "new_status": "false_positive"}
 
 
 @router.post("/pii-alerts/{alert_id}/whitelist")
@@ -176,15 +181,13 @@ def whitelist_pii_alert(alert_id: int, current_user: dict = Depends(get_current_
             raise HTTPException(status_code=404, detail="Rule not found")
 
         existing = (rule.exclusion_words or "").split(";")
-        word = alert.matched_text[:20]
+        word = alert.matched_text[:20].split(";")[0]
         if word not in existing:
             existing.append(word)
             rule.exclusion_words = ";".join(w for w in existing if w.strip())
-            session.commit()
 
         alert.status = "false_positive"
         alert.resolved_at = utc_now()
-        session.commit()
 
         hold = (
             session.query(PiiHold)
@@ -197,7 +200,7 @@ def whitelist_pii_alert(alert_id: int, current_user: dict = Depends(get_current_
         )
         if hold:
             hold.status = "released"
-            session.commit()
+        session.commit()
 
         invalidate_cache()
         return {"ok": True, "whitelisted": word}

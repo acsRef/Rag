@@ -25,15 +25,26 @@ class MiniMaxClient:
             if delta and delta.content:
                 yield delta.content
 
-    def chat(self, messages: list[dict]) -> str:
-        response = self.client.chat.completions.create(
-            model=self.model,
-            messages=messages,
-            stream=False,
-            temperature=0.7,
-            max_tokens=4096,
-        )
-        return response.choices[0].message.content or ""
+    def chat(self, messages: list[dict], timeout: int = 120, max_retries: int = 2) -> str:
+        import time
+        for attempt in range(max_retries + 1):
+            try:
+                response = self.client.chat.completions.create(
+                    model=self.model,
+                    messages=messages,
+                    stream=False,
+                    temperature=0.7,
+                    max_tokens=4096,
+                    timeout=timeout,
+                )
+                if not response.choices:
+                    return ""
+                return response.choices[0].message.content or ""
+            except Exception as e:
+                if attempt < max_retries:
+                    time.sleep(2 ** attempt)
+                    continue
+                raise RuntimeError(f"MiniMax chat 调用失败: {e}") from e
 
 
 minimax_client = MiniMaxClient()
