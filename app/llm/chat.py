@@ -1,6 +1,7 @@
 """MiniMax M3 chat client with circuit breaker."""
 
 import logging
+import re
 import time
 from typing import Generator
 
@@ -10,6 +11,11 @@ from app.config import settings
 from app.llm.base import CircuitOpenError, jittered_backoff, provider_health
 
 logger = logging.getLogger(__name__)
+
+
+def strip_think(text: str) -> str:
+    """Remove <think>...</think> block that reasoning models prepend."""
+    return re.sub(r"<think>.*?</think>", "", text, count=1, flags=re.DOTALL).strip()
 
 
 class MiniMaxClient:
@@ -94,8 +100,9 @@ class MiniMaxClient:
                 if not response.choices:
                     self._on_success()
                     return ""
+                content = response.choices[0].message.content or ""
                 self._on_success()
-                return response.choices[0].message.content or ""
+                return strip_think(content)
             except CircuitOpenError:
                 raise
             except Exception as e:

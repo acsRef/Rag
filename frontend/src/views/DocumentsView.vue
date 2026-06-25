@@ -147,7 +147,9 @@ function applyDocEvent(ev: {
 
 function startEventSource() {
   if (eventSource) return
-  eventSource = new EventSource('/api/v1/documents/events')
+  const token = localStorage.getItem('token')
+  const url = token ? `/api/v1/documents/events?token=${token}` : '/api/v1/documents/events'
+  eventSource = new EventSource(url)
   eventSource.addEventListener('doc_progress', (e) => {
     try {
       const data = JSON.parse((e as MessageEvent).data)
@@ -174,11 +176,6 @@ async function load() {
     kbs.value = await kbApi.list()
   } catch { /* ignore */ }
   loading.value = false
-  // 保留 hasProcessingDocs 供其他逻辑用
-    startPoll()
-  } else {
-    stopPoll()
-  }
 }
 
 function triggerUpload() {

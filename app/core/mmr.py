@@ -6,7 +6,20 @@ Designed to slot after cross-encoder rerank:
 Embedding vectors must be L2-normalized (cosine similarity = dot product).
 """
 
+import json as _json
+
 import numpy as np
+
+
+def _embedding_to_list(raw) -> list[float]:
+    """Convert pgvector string / list / np.ndarray to list[float]."""
+    if raw is None:
+        return []
+    if isinstance(raw, str):
+        return _json.loads(raw)
+    if isinstance(raw, np.ndarray):
+        return raw.tolist()
+    return list(raw)
 
 
 def mmr_select(
@@ -56,7 +69,7 @@ def mmr_select(
 
     # Pre-extract document IDs and build embedding matrix (n, dim)
     doc_ids = [c["document_id"] for c in candidates]
-    emb_matrix = np.array([c["embedding"] for c in candidates], dtype=np.float32)
+    emb_matrix = np.array([_embedding_to_list(c["embedding"]) for c in candidates], dtype=np.float32)
 
     selected_indices: list[int] = []
     remaining = set(range(n))

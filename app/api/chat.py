@@ -71,3 +71,30 @@ def delete_conversation(conversation_id: str, current_user: dict = Depends(get_c
         session.delete(conv)
         session.commit()
         return {"ok": True}
+
+
+@router.get("/conversations/{conversation_id}/messages")
+def get_messages(conversation_id: str, current_user: dict = Depends(get_current_user)):
+    from app.store.db import Message
+
+    with get_db_ctx() as session:
+        conv = session.query(Conversation).filter(
+            Conversation.conversation_id == conversation_id,
+            Conversation.user_id == current_user["id"],
+        ).first()
+        if not conv:
+            raise HTTPException(status_code=404, detail="Conversation not found")
+        msgs = (
+            session.query(Message)
+            .filter(Message.conversation_id == conversation_id)
+            .order_by(Message.created_at.asc())
+            .all()
+        )
+        return [
+            {
+                "role": m.role,
+                "content": m.content,
+                "created_at": m.created_at.isoformat() if m.created_at else "",
+            }
+            for m in msgs
+        ]

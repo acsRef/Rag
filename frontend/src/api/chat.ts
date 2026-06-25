@@ -20,7 +20,7 @@ export interface SourceInfo {
 export interface ChatMessage {
   role: 'user' | 'assistant'
   content: string
-  conversation_id?: string
+  created_at?: string
 }
 
 export const chatApi = {
@@ -31,6 +31,10 @@ export const chatApi = {
   async deleteConversation(id: string) {
     await api.delete(`/chat/conversations/${id}`)
   },
+  async getMessages(conversationId: string): Promise<ChatMessage[]> {
+    const res = await api.get(`/chat/conversations/${conversationId}/messages`)
+    return res.data
+  },
   streamChat(
     query: string,
     conversationId: string | null,
@@ -40,6 +44,7 @@ export const chatApi = {
     onSources: (sources: SourceInfo[]) => void,
     onDone: () => void,
     onError: (err: string) => void,
+    onStatus?: (phase: string, message: string) => void,
   ): AbortController {
     const controller = new AbortController()
     const token = localStorage.getItem('token') || ''
@@ -85,6 +90,12 @@ export const chatApi = {
               lastEventType = ''
               try { const parsed = JSON.parse(data); onMetadata(parsed) }
               catch { /* ignore */ }
+            } else if (lastEventType === 'status') {
+              lastEventType = ''
+              try {
+                const parsed = JSON.parse(data)
+                if (onStatus) onStatus(parsed.phase, parsed.message)
+              } catch { /* ignore */ }
             } else if (data.startsWith('{')) {
               try {
                 const parsed = JSON.parse(data)

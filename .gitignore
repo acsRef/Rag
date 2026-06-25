@@ -28,6 +28,9 @@ logs/
 # Diagnostics
 diagnostics/
 
+# Test data
+test-docs/
+
 # Frontend
 frontend/node_modules/
 frontend/dist/

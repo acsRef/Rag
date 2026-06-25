@@ -99,11 +99,12 @@ class RetrievalEngine:
             embed_elapsed = (time.monotonic() - t_embed) * 1000
         except CircuitOpenError:
             embedding_degraded = True
-            logger.warning(
-                "retrieve.embedding.degraded — circuit open, using zero-vector (BM25-only fallback)"
-            )
-            # Zero vector: vector cosine scores will be meaningless,
-            # but RRF merge still picks up BM25 results.
+            logger.warning("retrieve.embedding.degraded — circuit open, using zero-vector (BM25-only fallback)")
+            query_emb = [0.0] * settings.embedding_dimension
+            embed_elapsed = (time.monotonic() - t_embed) * 1000
+        except Exception:
+            embedding_degraded = True
+            logger.warning("retrieve.embedding.failed — using zero-vector (BM25-only fallback)")
             query_emb = [0.0] * settings.embedding_dimension
             embed_elapsed = (time.monotonic() - t_embed) * 1000
         # Milestone 2: query 嵌入完成(DEBUG,因为正常路径会调无数次)

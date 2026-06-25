@@ -4,7 +4,7 @@ from app.core.intent import intent_classifier
 from app.core.retrieval import retrieval_engine
 from app.core.prompt import prompt_builder
 from app.core.diagnostics import DiagContext
-from app.llm.chat import minimax_client
+from app.llm.chat import minimax_client, strip_think
 from app.llm.base import CircuitOpenError, provider_health
 from app.models.schemas import ChatRequest, RetrievedChunk, SourceInfo
 from app.config import settings
@@ -51,6 +51,21 @@ def _build_sources(chunks: list[RetrievedChunk]) -> list[SourceInfo]:
     return sources
 
 
+_PRONOUN_PATTERNS = ("它", "其", "这", "那", "该", "上述", "上面", "前面", "下面", "这个", "那个", "这些", "那些")
+_COMPLEX_PATTERNS = ("和", "与", "以及", "区别", "对比", "比较", "相比", "还有", "差异", "分别")
+
+
+def _is_simple_query(query: str) -> bool:
+    """Return True if query needs no LLM rewrite/intent -- no pronouns, single clause."""
+    for p in _PRONOUN_PATTERNS:
+        if p in query:
+            return False
+    for p in _COMPLEX_PATTERNS:
+        if p in query:
+            return False
+    return True
+
+
 class RAGPipeline:
     def execute(
         self,
@@ -64,7 +79,6 @@ class RAGPipeline:
         )
         yield f"event: metadata\ndata: {json.dumps({'conversation_id': conv_id})}\n\n"
 
-        # Diagnostics context
         ctx: DiagContext | None = None
         if settings.diagnostics_enabled:
             ctx = DiagContext(query=req.query)
@@ -98,54 +112,66 @@ class RAGPipeline:
 
         history = conversation_memory.get_history(conv_id)
         summary = conversation_memory.get_summary(conv_id)
-
-        # Step 1: Rewrite query
-        rewrite_result = query_rewrite_service.rewrite(req.query, history, summary)
-        if ctx:
-            ctx.record("rewrite",
-                original=req.query,
-                rewritten=rewrite_result.rewritten_query,
-                sub_questions=rewrite_result.sub_questions,
-            )
-
-        # Step 2: Classify intents for each sub-question
-        all_chunks: list[RetrievedChunk] = []
         all_kb_ids = req.knowledge_base_ids
-        has_retrieval = False
-        for sub_q in rewrite_result.sub_questions:
-            intent = intent_classifier.classify(sub_q, all_kb_ids)
+
+        simple = _is_simple_query(req.query)
+        if simple:
+            # Fast path: no LLM rewrite/intent, search all KBs directly
+            sub_queries = [req.query]
+        else:
+            rewrite_result = query_rewrite_service.rewrite(req.query, history, summary)
             if ctx:
-                ctx.append("intent", {
-                    "sub_query": sub_q,
-                    "kbs": [
-                        {"name": m.kb_name, "kb_id": m.kb_id, "confidence": m.score}
-                        for m in (intent.matches or [])
-                    ],
-                    "intent_type": intent.intent_type,
-                })
-            if intent.intent_type == "SYSTEM":
-                continue
+                ctx.record("rewrite",
+                    original=req.query,
+                    rewritten=rewrite_result.rewritten_query,
+                    sub_questions=rewrite_result.sub_questions,
+                )
+            sub_queries = rewrite_result.sub_questions
+
+        # --- Retrieve ---
+        yield "event: status\ndata: {\"phase\":\"retrieving\",\"message\":\"正在检索知识库...\"}\n\n"
+        all_chunks: list[RetrievedChunk] = []
+        has_retrieval = False
+        for sub_q in sub_queries:
+            intent = None
+            if not simple:
+                intent = intent_classifier.classify(sub_q, all_kb_ids)
+                if ctx:
+                    ctx.append("intent", {
+                        "sub_query": sub_q,
+                        "kbs": [
+                            {"name": m.kb_name, "kb_id": m.kb_id, "confidence": m.score}
+                            for m in (intent.matches or [])
+                        ],
+                        "intent_type": intent.intent_type,
+                    })
+                if intent.intent_type == "SYSTEM":
+                    continue
             has_retrieval = True
-            chunks = retrieval_engine.retrieve(
-                sub_q, intent,
-                user_role_ids=user_role_ids,
-                can_read_all=can_read_all,
-                ctx=ctx,
-            )
+            try:
+                chunks = retrieval_engine.retrieve(
+                    sub_q, intent,
+                    user_role_ids=user_role_ids,
+                    can_read_all=can_read_all,
+                    ctx=ctx,
+                )
+            except Exception:
+                chunks = []
             all_chunks.extend(chunks)
 
         if not has_retrieval:
-            history = conversation_memory.get_history(conv_id)
-            summary = conversation_memory.get_summary(conv_id)
-            chunks = retrieval_engine.retrieve(
-                req.query, None,
-                user_role_ids=user_role_ids,
-                can_read_all=can_read_all,
-                ctx=ctx,
-            )
+            try:
+                chunks = retrieval_engine.retrieve(
+                    req.query, None,
+                    user_role_ids=user_role_ids,
+                    can_read_all=can_read_all,
+                    ctx=ctx,
+                )
+            except Exception:
+                chunks = []
             all_chunks.extend(chunks)
 
-        # Step 3: Deduplicate
+        # Dedup + sort
         seen = set()
         unique_chunks = []
         for c in all_chunks:
@@ -155,11 +181,9 @@ class RAGPipeline:
         unique_chunks.sort(key=lambda x: x.score, reverse=True)
         unique_chunks = unique_chunks[:settings.rerank_top_k]
 
-        # Step 4: Build sources and emit to frontend
         sources = _build_sources(unique_chunks)
         yield f"event: sources\ndata: {json.dumps([s.model_dump() for s in sources])}\n\n"
 
-        # Step 5: Build messages
         messages = prompt_builder.build_messages(
             query=req.query,
             history=history,
@@ -167,36 +191,32 @@ class RAGPipeline:
             retrieved_chunks=unique_chunks,
         )
 
-        # Record TopK and Prompt diagnostics
         if ctx:
             ctx.record("topk", chunks=[
-                {
-                    "chunk_id": c.chunk_id,
-                    "document_id": c.document_id,
-                    "title": c.title,
-                    "section_path": c.section_path,
-                    "score": round(c.score, 4),
-                    "source": sources[i].filename if i < len(sources) else "",
-                    "text_preview": c.text[:200],
-                }
+                dict(chunk_id=c.chunk_id, document_id=c.document_id, title=c.title,
+                     section_path=c.section_path, score=round(c.score, 4),
+                     source=sources[i].filename if i < len(sources) else "",
+                     text_preview=c.text[:200])
                 for i, c in enumerate(unique_chunks)
             ])
-            total_chars = sum(len(m.get("content") or "") for m in messages)
-            system_len = len(messages[0].get("content") or "") if messages else 0
+            total_chars = sum(len(m.get("content", "")) for m in messages)
             ctx.record("prompt",
-                system_prompt_chars=system_len,
+                system_prompt_chars=len(messages[0].get("content", "")) if messages else 0,
                 total_chars=total_chars,
                 message_count=len(messages),
                 topk_chars=sum(len(c.text) for c in unique_chunks),
             )
 
-        # Step 5: Stream LLM response
+        # --- Stream LLM ---
         conversation_memory.add_message(conv_id, "user", _pii_safe(req.query), user_id)
+
+        yield "event: status\ndata: {\"phase\":\"thinking\",\"message\":\"AI 正在思考...\"}\n\n"
 
         full_response = ""
         stream_start = time.monotonic()
         first_token = True
         chat_degraded = False
+
         try:
             for token in minimax_client.chat_stream(
                 messages,
@@ -214,10 +234,9 @@ class RAGPipeline:
             chat_degraded = True
             import logging as _log
             _log.getLogger(__name__).warning("Chat circuit breaker open, returning degraded response")
-            # Fall through — stream with empty response and degradation hint
         except GeneratorExit:
             if full_response:
-                conversation_memory.add_message(conv_id, "assistant", _pii_safe(full_response), user_id)
+                conversation_memory.add_message(conv_id, "assistant", strip_think(_pii_safe(full_response)), user_id)
             if ctx:
                 ctx.update("stream", total_tokens=len(full_response), total_ms=round((time.monotonic() - stream_start) * 1000, 1))
                 ctx.save()
@@ -227,7 +246,7 @@ class RAGPipeline:
             logging.getLogger(__name__).exception("Chat stream failed")
             chat_degraded = True
             if full_response:
-                conversation_memory.add_message(conv_id, "assistant", _pii_safe(full_response), user_id)
+                conversation_memory.add_message(conv_id, "assistant", strip_think(_pii_safe(full_response)), user_id)
             if ctx:
                 ctx.update("stream", error="Chat stream failed", total_tokens=len(full_response), total_ms=round((time.monotonic() - stream_start) * 1000, 1))
                 ctx.save()
@@ -236,12 +255,11 @@ class RAGPipeline:
             return
 
         if full_response:
-            conversation_memory.add_message(conv_id, "assistant", _pii_safe(full_response), user_id)
+            conversation_memory.add_message(conv_id, "assistant", strip_think(_pii_safe(full_response)), user_id)
         elif chat_degraded:
             conversation_memory.add_message(conv_id, "assistant",
                 "抱歉，AI 服务暂时不可用，请稍后重试。您仍可浏览已上传的文档信息。", user_id)
 
-        # Emit degradation hint before done
         degraded_providers = provider_health.is_degraded()
         if settings.degradation_hint_enabled and degraded_providers:
             yield f"event: degraded\ndata: {json.dumps({'providers': degraded_providers})}\n\n"

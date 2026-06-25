@@ -56,8 +56,14 @@ export const useAuthStore = defineStore('auth', () => {
       user.value = res.data
       save()
       return true
-    } catch {
-      clear()
+    } catch (err: any) {
+      // 仅 401 才清 token(明确 token 无效);其他错误(网络/超时/5xx)只返回 false,
+      // 不踢用户回登录页 — 避免后端偶发 5xx 把人踢出去
+      if (err?.response?.status === 401) {
+        clear()
+        return false
+      }
+      // 非 401:保持现有 token,等下次再试
       return false
     }
   }

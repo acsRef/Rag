@@ -11,7 +11,7 @@ from app.config import settings
 
 from app.models.schemas import DocumentUploadResponse, DocumentStatusResponse, DocumentListItem
 from app.middleware.auth import get_current_user
-from fastapi import APIRouter, UploadFile, File, Form, Depends, HTTPException, BackgroundTasks
+from fastapi import APIRouter, UploadFile, File, Form, Depends, HTTPException, BackgroundTasks, Request
 from fastapi.responses import StreamingResponse
 
 logger = logging.getLogger(__name__)
@@ -26,6 +26,43 @@ _doc_event_subscribers: list[asyncio.Queue] = []
 _subscribers_lock = asyncio.Lock()
 _main_loop: Optional[asyncio.AbstractEventLoop] = None
 _main_loop_lock = threading.Lock()
+
+
+def _resolve_sse_user(request: Request) -> dict | None:
+    """Resolve user from Bearer header, falling back to ?token= query param.
+
+    EventSource 无法设置 Authorization header,故支持 token query param。
+    """
+    from app.middleware.auth import decode_token
+    from app.store.auth_store import get_user_by_id, get_user_role_ids, get_user_permissions
+
+    auth = request.headers.get("Authorization")
+    token_str: str | None = None
+    if auth and auth.startswith("Bearer "):
+        token_str = auth[7:]
+    else:
+        token_str = request.query_params.get("token")
+
+    if not token_str:
+        return None
+    payload = decode_token(token_str)
+    if not payload:
+        return None
+    user_id = payload.get("sub")
+    if not user_id:
+        return None
+    user = get_user_by_id(user_id)
+    if not user or not user.is_active:
+        return None
+    role_ids = get_user_role_ids(user.id)
+    permissions = get_user_permissions(user.id)
+    return {
+        "id": user.id, "username": user.username,
+        "display_name": user.display_name,
+        "role_ids": role_ids,
+        "permissions": permissions,
+        "is_admin": "admin" in permissions,
+    }
 
 
 def set_main_loop(loop: asyncio.AbstractEventLoop) -> None:
@@ -262,41 +299,23 @@ def delete_document(document_id: str, current_user: dict = Depends(get_current_u
     return {"message": "Document deleted", "document_id": document_id}
 
 
-@router.get("/{document_id}", response_model=DocumentStatusResponse)
-async def get_document(document_id: str, current_user: dict = Depends(get_current_user)):
-    with get_db_ctx() as session:
-        record = session.query(Document).filter_by(document_id=document_id).first()
-        if not record:
-            raise HTTPException(status_code=404, detail="Document not found")
-        can_read_all = current_user["is_admin"] or "doc.read_all" in current_user["permissions"]
-        if not can_read_all and record.owner_id != current_user["id"]:
-            raise HTTPException(status_code=403, detail="Access denied")
-        return DocumentStatusResponse(
-            document_id=record.document_id,
-            filename=record.filename,
-            status=record.status,
-            chunk_count=record.chunk_count,
-            embedded_chunk_count=record.embedded_chunk_count or 0,
-            error_message=record.error_message or "",
-        )
-
-
 @router.get("/events")
-async def document_events(current_user: dict = Depends(get_current_user)):
+async def document_events(request: Request):
     """SSE 文档进度事件流。
 
     事件类型 `doc_progress`:
       data: {"document_id": "ab12cd34...", "embedded_chunk_count": 5,
              "chunk_count": 21, "status": "indexing"}
 
+    认证: Bearer header 优先,回退到 `?token=` query param(适配 EventSource)。
     客户端用 EventSource 订阅即可。每完成一个 chunk 或最终状态变化时触发。
     """
+    user = _resolve_sse_user(request)
     queue = await subscribe_doc_events()
 
     async def event_stream() -> AsyncIterator[str]:
         try:
             while True:
-                # 等一个事件(超时 30s,超时发心跳保活)
                 try:
                     event = await asyncio.wait_for(queue.get(), timeout=30.0)
                 except asyncio.TimeoutError:
@@ -317,3 +336,22 @@ async def document_events(current_user: dict = Depends(get_current_user)):
             "X-Accel-Buffering": "no",
         },
     )
+
+
+@router.get("/{document_id}", response_model=DocumentStatusResponse)
+async def get_document(document_id: str, current_user: dict = Depends(get_current_user)):
+    with get_db_ctx() as session:
+        record = session.query(Document).filter_by(document_id=document_id).first()
+        if not record:
+            raise HTTPException(status_code=404, detail="Document not found")
+        can_read_all = current_user["is_admin"] or "doc.read_all" in current_user["permissions"]
+        if not can_read_all and record.owner_id != current_user["id"]:
+            raise HTTPException(status_code=403, detail="Access denied")
+        return DocumentStatusResponse(
+            document_id=record.document_id,
+            filename=record.filename,
+            status=record.status,
+            chunk_count=record.chunk_count,
+            embedded_chunk_count=record.embedded_chunk_count or 0,
+            error_message=record.error_message or "",
+        )

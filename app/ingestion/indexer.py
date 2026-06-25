@@ -15,7 +15,7 @@ from app.ingestion.chunker import text_chunker, Chunk
 from app.ingestion.cleaner import document_cleaner
 from app.ingestion.structurer import document_structurer
 from app.ingestion.metadata import chunk_metadata_generator
-from app.store.db import get_session, Document, new_id, utc_now
+from app.store.db import get_db_ctx, get_session, Document, new_id, utc_now
 from app.store.pgvector_store import tokenize
 from app.config import settings
 
@@ -87,14 +87,12 @@ class DocumentIndexer:
             text = mask_text(text)
             logger.debug("ingest.pii_masked doc=%s mask_count=%d", u_tag, len(pii_findings))
 
+        existing = None
         if document_id:
-            session = get_session()
-            try:
+            with get_db_ctx() as session:
                 existing = session.query(Document).filter(
                     Document.document_id == document_id
                 ).first()
-            finally:
-                session.close()
             if existing and existing.content_hash == doc_hash:
                 return {
                     "document_id": document_id,

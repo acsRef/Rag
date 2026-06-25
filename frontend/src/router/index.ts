@@ -32,8 +32,9 @@ const router = createRouter({
 
 router.beforeEach(async (to, _from, next) => {
   const auth = useAuthStore()
+  // Fire-and-forget:不等 checkSession 完成就放行,避免 /auth/me 临时失败阻塞跳转
   if (auth.isLoggedIn) {
-    await auth.checkSession()
+    auth.checkSession()
   }
   if (to.meta.auth && !auth.isLoggedIn) {
     next('/login')
