@@ -6,7 +6,7 @@ import threading
 from typing import AsyncIterator, Optional
 
 from app.ingestion.pipeline import ingestion_pipeline
-from app.store.db import get_db_ctx, Document, Chunk, DocRoleAccess, new_id, utc_now
+from app.store.db import get_db_ctx, Document, Chunk, DocRoleAccess, PiiAlert, PiiHold, new_id, utc_now
 from app.config import settings
 
 from app.models.schemas import DocumentUploadResponse, DocumentStatusResponse, DocumentListItem
@@ -250,6 +250,12 @@ def delete_document(document_id: str, current_user: dict = Depends(get_current_u
 
         session.query(Chunk).filter(Chunk.document_id == document_id).delete()
         session.query(DocRoleAccess).filter(DocRoleAccess.document_id == document_id).delete()
+        session.query(PiiAlert).filter(
+            PiiAlert.source_id == document_id, PiiAlert.source_type == "document"
+        ).delete()
+        session.query(PiiHold).filter(
+            PiiHold.source_id == document_id, PiiHold.source_type == "document"
+        ).delete()
         session.delete(doc)
         session.commit()
 

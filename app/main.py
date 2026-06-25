@@ -1,14 +1,16 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from app.api.chat import router as chat_router
 from app.api.documents import router as documents_router
 from app.api.auth import router as auth_router
 from app.api.admin import router as admin_router
 from app.api.kb import router as kb_router
-from app.store.db import init_db
+from app.store.db import init_db, get_session, Document
 from app.store.auth_store import seed_defaults
 from app.core.pii_rules import seed_pii_rules
 from app.config import settings
+from pathlib import Path
 import asyncio
 import logging
 import uvicorn
@@ -29,6 +31,11 @@ app.include_router(kb_router)
 app.include_router(documents_router)
 app.include_router(chat_router)
 
+# Mount diagnostics static directory (for JSON records + HTML page)
+_diag_dir = Path(settings.diagnostics_dir)
+_diag_dir.mkdir(parents=True, exist_ok=True)
+app.mount("/diagnostics", StaticFiles(directory=str(_diag_dir), html=True), name="diagnostics")
+
 
 @app.on_event("startup")
 def startup():
@@ -46,6 +53,27 @@ def startup():
     init_db()
     seed_defaults()
     seed_pii_rules()
+    # 恢复上次中断时遗留在 processing 状态的文档
+    session = None
+    try:
+        session = get_session()
+        stuck = session.query(Document).filter(Document.status.in_(["processing", "indexing"])).all()
+        if stuck:
+            logger.warning(
+                "Recovering %d documents stuck in processing/indexing state (previous restart)",
+                len(stuck),
+            )
+            for doc in stuck:
+                doc.status = "failed"
+                doc.error_message = "服务重启中断"
+            session.commit()
+    except Exception:
+        if session:
+            session.rollback()
+        logger.exception("Failed to recover stuck documents")
+    finally:
+        if session:
+            session.close()
     logger.info("RAGent-py startup complete")
 
 

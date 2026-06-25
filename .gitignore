@@ -25,6 +25,9 @@ ragent.db
 logs/
 *.log
 
+# Diagnostics
+diagnostics/
+
 # Frontend
 frontend/node_modules/
 frontend/dist/

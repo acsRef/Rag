@@ -40,27 +40,24 @@ class DocumentIndexer:
         from app.ingestion.parser import document_parser
 
         t_total = time.monotonic()
-        # Milestone 1: 入口 — 标识本次摄取的关键字段,doc_id 取前 8 位方便 grep
-        doc_tag = (document_id or "new")[:8]
+        u_tag = (document_id or "new")[:8]
         logger.info(
             "ingest.start doc=%s file=%s kb=%s reindex=%s",
-            doc_tag, filename, kb_id[:8], bool(document_id),
+            u_tag, filename, kb_id[:8], bool(document_id),
         )
 
         try:
             t_parse = time.monotonic()
             text = document_parser.parse_bytes(content, filename)
             text = document_cleaner.clean(text)
-            # Milestone 2: 解析+清洗完成 — 输出文本长度与耗时
             logger.info(
                 "ingest.parsed_cleaned doc=%s text_len=%d elapsed_ms=%.1f",
-                doc_tag, len(text), (time.monotonic() - t_parse) * 1000,
+                u_tag, len(text), (time.monotonic() - t_parse) * 1000,
             )
         except Exception:
             logger.exception("Parse/clean failed for filename=%s", filename)
             doc_id = document_id or new_id()
             self._save_document(doc_id, user_id, kb_id, filename, 0, "failed", "")
-            # SSE: 推送解析失败状态
             try:
                 from app.api.documents import emit_doc_progress
                 emit_doc_progress({
@@ -80,21 +77,16 @@ class DocumentIndexer:
             }
         doc_hash = _content_hash(text)
 
-        # ── PII check ─────────────────────────────────
         if settings.pii_enabled:
             from app.core.pii_scanner import scan, scan_and_reject, mask_text
             rejects = scan_and_reject(text)
             if rejects:
-                logger.info("ingest.pii_rejected doc=%s rule_count=%d", doc_tag, len(rejects))
-                return self._reject_document(
-                    text, rejects, user_id, kb_id, filename,
-                )
+                logger.info("ingest.pii_rejected doc=%s rule_count=%d", u_tag, len(rejects))
+                return self._reject_document(text, rejects, user_id, kb_id, filename)
             pii_findings = scan(text)
             text = mask_text(text)
-            # Milestone 4: PII mask 命中数(DEBUG 级,正常文档几乎为 0)
-            logger.debug("ingest.pii_masked doc=%s mask_count=%d", doc_tag, len(pii_findings))
+            logger.debug("ingest.pii_masked doc=%s mask_count=%d", u_tag, len(pii_findings))
 
-        # ── Quick unchanged check ──────────────────────
         if document_id:
             session = get_session()
             try:
@@ -103,7 +95,6 @@ class DocumentIndexer:
                 ).first()
             finally:
                 session.close()
-
             if existing and existing.content_hash == doc_hash:
                 return {
                     "document_id": document_id,
@@ -113,20 +104,17 @@ class DocumentIndexer:
                     "message": "文档内容无变化，跳过索引",
                 }
 
-        # ── Structure + Chunk ──────────────────────────
         t_chunk = time.monotonic()
         sections = document_structurer.structure(text)
         chunks: list[Chunk] = text_chunker.chunk(sections)
-        # Milestone 3: 结构化+切块完成
         logger.info(
             "ingest.chunked doc=%s sections=%d chunks=%d elapsed_ms=%.1f",
-            doc_tag, len(sections), len(chunks), (time.monotonic() - t_chunk) * 1000,
+            u_tag, len(sections), len(chunks), (time.monotonic() - t_chunk) * 1000,
         )
 
         if not chunks:
             doc_id = document_id or new_id()
             self._save_document(doc_id, user_id, kb_id, filename, 0, "failed", doc_hash)
-            # SSE: 推送无 chunks 失败状态
             try:
                 from app.api.documents import emit_doc_progress
                 emit_doc_progress({
@@ -140,36 +128,29 @@ class DocumentIndexer:
                 pass
             return {"document_id": doc_id, "chunk_count": 0, "status": "failed"}
 
-        # ── Compute per-chunk hash for reuse ────────────
         for c in chunks:
             c.content_hash = _content_hash(c.text)
 
-        # ── Load old chunks for reuse matching ──────────
         old_chunks_map: dict[str, dict] = {}
         if document_id:
             for oc in pgvector_store.get_chunks_by_document(document_id):
                 if oc.get("content_hash"):
                     old_chunks_map[oc["content_hash"]] = oc
 
-        # ── Separate reused vs new chunks ───────────────
         new_chunks: list[Chunk] = []
-        chunk_index: list[tuple[Chunk, bool]] = []  # (chunk, is_reused)
-
-        # 增量 hash 复用:同 content_hash 跳过 embedding 和 metadata 生成,只复用旧 chunk_id
+        chunk_index: list[tuple[Chunk, bool]] = []
         for c in chunks:
             if c.content_hash in old_chunks_map:
                 chunk_index.append((c, True))
             else:
                 chunk_index.append((c, False))
                 new_chunks.append(c)
-        # Milestone 5: 复用匹配完成
         reused_count = sum(1 for _, reused in chunk_index if reused)
         logger.info(
             "ingest.reuse_matched doc=%s reused=%d new=%d",
-            doc_tag, reused_count, len(new_chunks),
+            u_tag, reused_count, len(new_chunks),
         )
 
-        # ── Process new chunks (metadata + embed) ────────
         if new_chunks:
             new_chunks = chunk_metadata_generator.generate(new_chunks)
             embed_results = sf_embedding.embed_with_fallback([c.text for c in new_chunks])
@@ -205,12 +186,17 @@ class DocumentIndexer:
                     error_messages.append(err)
                 search_text = tokenize(c.text)
 
+            # Skip chunks whose embedding permanently failed — they would be invisible
+            # to vector search and storing NULL would cause pgvector issues.
+            if not is_reused and embedding is None:
+                continue
+
             chunks_data.append({
                 "chunk_id": chunk_id,
                 "document_id": doc_id,
                 "kb_id": kb_id,
                 "text": c.text,
-                "embedding": embedding if embedding is not None else None,
+                "embedding": embedding,
                 "title": c.title or (is_reused and old.get("title", "") or ""),
                 "summary": c.summary or (is_reused and old.get("summary", "") or ""),
                 "questions": "; ".join(c.questions) if c.questions else (is_reused and old.get("questions", "") or ""),
@@ -221,8 +207,6 @@ class DocumentIndexer:
                 "allowed_roles": allowed_roles or [],
             })
 
-            # SSE 推送进度:每个 chunk 处理完 emit 一次
-            # 前端只会更新那一个数字 cell(embedded/total),不会重渲染整行
             try:
                 from app.api.documents import emit_doc_progress
                 emit_doc_progress({
@@ -245,7 +229,6 @@ class DocumentIndexer:
         if embedded_count == 0 and not old_chunks_map:
             self._save_document(doc_id, user_id, kb_id, filename, 0, "failed", doc_hash,
                                 embedded_chunk_count=0, error_message=final_error or "所有分块向量化均失败")
-            # SSE: 推送全失败状态
             try:
                 from app.api.documents import emit_doc_progress
                 emit_doc_progress({
@@ -266,7 +249,6 @@ class DocumentIndexer:
 
         status = "indexed" if failed_count == 0 else "partial"
 
-        # Milestone 6: 持久化前汇总(含总耗时)
         logger.info(
             "ingest.persisted doc=%s total=%d embedded=%d reused=%d status=%s total_elapsed_ms=%.1f",
             doc_id[:8], len(chunks), embedded_count, len(old_chunks_map),
@@ -278,7 +260,6 @@ class DocumentIndexer:
             pgvector_store.add_chunks(chunks_data)
             self._save_document(doc_id, user_id, kb_id, filename, len(chunks), status, doc_hash,
                                 embedded_chunk_count=embedded_count, error_message=final_error)
-            # SSE: 推送最终状态
             try:
                 from app.api.documents import emit_doc_progress
                 emit_doc_progress({
@@ -292,7 +273,6 @@ class DocumentIndexer:
                 pass
         except Exception:
             logger.exception("Failed to persist chunks/document for doc_id=%s", doc_id)
-            # SSE: 推送持久化失败状态
             try:
                 from app.api.documents import emit_doc_progress
                 emit_doc_progress({

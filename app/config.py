@@ -57,12 +57,25 @@ class Settings(BaseSettings):
     embedding_backoff_base: float = 1.0
     embedding_rate_limit_rps: int = 5
 
+    # Circuit breaker
+    circuit_breaker_enabled: bool = True     # env: CIRCUIT_BREAKER_ENABLED
+    circuit_breaker_threshold: int = 10      # consecutive failures before OPEN
+    circuit_breaker_cooldown: float = 30.0   # seconds before HALF_OPEN probe
+
+    # Degradation hints
+    degradation_hint_enabled: bool = True    # env: DEGRADATION_HINT_ENABLED
+
     # Logging
     log_level: str = "INFO"                # env: LOG_LEVEL (DEBUG/INFO/WARNING/ERROR)
     log_dir: str = "logs"                  # env: LOG_DIR
     log_max_bytes: int = 10 * 1024 * 1024  # 10MB per file
     log_backup_count: int = 7              # 保留 7 个 backup 文件
     log_to_console: bool = True            # 同步输出 stderr 方便开发
+
+    # Diagnostics
+    diagnostics_enabled: bool = True       # env: DIAGNOSTICS_ENABLED
+    diagnostics_dir: str = "diagnostics"   # env: DIAGNOSTICS_DIR
+    diagnostics_max_index: int = 500       # env: DIAGNOSTICS_MAX_INDEX
 
     # Server
     host: str = "0.0.0.0"
