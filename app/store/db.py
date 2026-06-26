@@ -51,6 +51,12 @@ def init_db():
             conn.execute(
                 text("ALTER TABLE documents ADD COLUMN IF NOT EXISTS error_message VARCHAR(1024) DEFAULT ''")
             )
+            conn.execute(
+                text("ALTER TABLE messages ADD COLUMN IF NOT EXISTS thinking_content TEXT")
+            )
+            conn.execute(
+                text("ALTER TABLE messages ADD COLUMN IF NOT EXISTS status VARCHAR(16) DEFAULT 'completed'")
+            )
             conn.commit()
         except Exception:
             conn.rollback()
@@ -209,7 +215,9 @@ class Message(Base):
     conversation_id = Column(String(64), ForeignKey("conversations.conversation_id"), nullable=False, index=True)
     user_id = Column(String(64), ForeignKey("users.id"), nullable=False)
     role = Column(String(16), nullable=False)
-    content = Column(Text, nullable=False)
+    content = Column(Text, nullable=False, default="")
+    thinking_content = Column(Text, default=None, nullable=True)
+    status = Column(String(16), default="completed")  # streaming | completed | interrupted
     metadata_json = Column(JSON, default=dict)
     created_at = Column(DateTime, default=utc_now)
 

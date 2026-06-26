@@ -30,10 +30,10 @@
             <div v-if="m._think" class="think-block">
               <details>
                 <summary>💭 思考过程</summary>
-                <div class="think-content">{{ m._think }}</div>
+                <div class="think-content" v-text="m._think"></div>
               </details>
             </div>
-            <div class="message-bubble">{{ m.content }}</div>
+            <div class="message-bubble" v-html="renderMd(m.content)"></div>
             <div v-if="m.sources?.length" class="sources-bar">
               <button class="sources-toggle" @click="m._sourcesOpen = !m._sourcesOpen">
                 ▸ 参考来源 ({{ m.sources.length }})
@@ -55,11 +55,12 @@
             <div v-if="thinkText" class="think-block think-streaming">
               <details open>
                 <summary>💭 思考过程</summary>
-                <div class="think-content">{{ thinkText }}</div>
+                <div class="think-content" v-text="thinkText"></div>
               </details>
             </div>
             <div class="message-bubble">
-              {{ streamingContent }}<span v-if="streamingContent && !streamDone" class="cursor-blink">▍</span>
+              <div v-if="streamingContent" v-html="renderMd(streamingContent)"></div>
+              <span v-if="streamingContent && !streamDone" class="cursor-blink">▍</span>
               <div v-if="!streamingContent && !thinkText && statusMsg" class="thinking-hint">{{ statusMsg }}</div>
               <div v-if="!streamingContent && !thinkText && !statusMsg" class="thinking-dots">
                 <span /><span /><span />
@@ -95,6 +96,7 @@
 import { ref, nextTick, watch, onUnmounted, onMounted } from 'vue'
 import { useAuthStore } from '../stores/auth'
 import { chatApi, type SourceInfo } from '../api/chat'
+import { marked } from 'marked'
 
 const auth = useAuthStore()
 
@@ -107,6 +109,15 @@ const emit = defineEmits<{
   'update-conv-list': []
   'switch-conv': [id: string]
 }>()
+
+function renderMd(text: string): string {
+  if (!text) return ''
+  try {
+    return marked.parse(text, { async: false }) as string
+  } catch {
+    return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+  }
+}
 
 const input = ref('')
 interface ChatMsg { role: 'user' | 'assistant'; content: string; time?: string; sources?: SourceInfo[]; _sourcesOpen?: boolean; _think?: string }
@@ -140,12 +151,15 @@ async function loadMessages(cid: string) {
   try {
     const msgs = await chatApi.getMessages(cid)
     messages.value = msgs.map(m => {
+      // Backend now stores thinking_content separately; also support legacy <think> tags
       const thinkMatch = m.content.match(/<think>(.*?)<\/think>/s)
+      const think = thinkMatch ? thinkMatch[1].trim() : undefined
+      const clean = m.content.replace(/<think>.*?<\/think>/s, '').trim()
       return {
         role: m.role,
-        content: m.content.replace(/<think>.*?<\/think>/s, '').trim(),
+        content: clean,
         time: m.created_at ? new Date(m.created_at).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }) : '',
-        _think: thinkMatch ? thinkMatch[1].trim() : undefined,
+        _think: think,
       }
     })
   } catch { messages.value = [] }
@@ -163,6 +177,7 @@ watch(() => props.currentConvId, async (id) => {
     streaming.value = false
     statusPhase.value = ''
     statusMsg.value = ''
+    thinkText.value = ''
     if (id) {
       await loadMessages(id)
     } else {
@@ -202,18 +217,9 @@ async function send() {
     currentConvId.value,
     null,
     (token) => {
+      // Token event — answer text only (thinking comes via onThinking)
       const t = token.replace(/\\n/g, '\n')
-      const combined = streamingContent.value + t
-      const thinkOpen = combined.indexOf('<think>')
-      const thinkClose = combined.indexOf('</think>')
-      if (thinkOpen !== -1 && thinkClose !== -1 && thinkClose > thinkOpen) {
-        thinkText.value = combined.substring(thinkOpen + 7, thinkClose).trim()
-        streamingContent.value = combined.substring(0, thinkOpen) + combined.substring(thinkClose + 8)
-      } else if (thinkOpen !== -1 && thinkClose === -1) {
-        streamingContent.value = combined
-      } else {
-        streamingContent.value = combined
-      }
+      streamingContent.value += t
       scrollToBottom()
     },
     (meta) => {
@@ -225,10 +231,9 @@ async function send() {
       currentSources.value = sources
     },
     () => {
-      const final = streamingContent.value.replace(/<think>.*?<\/think>/s, '').trim()
       messages.value.push({
         role: 'assistant',
-        content: final,
+        content: streamingContent.value,
         sources: [...currentSources.value],
         time: now(),
         _think: thinkText.value || undefined,
@@ -245,6 +250,11 @@ async function send() {
       messages.value.push({ role: 'assistant', content: `错误：${err}`, time: now() })
       streaming.value = false
       streamingContent.value = ''
+    },
+    (thinking) => {
+      // SSE thinking event — separate from answer text
+      thinkText.value += thinking.replace(/\\n/g, '\n')
+      scrollToBottom()
     },
     (phase, message) => {
       statusPhase.value = phase
@@ -288,6 +298,55 @@ function scrollToBottom() {
   50% { opacity: 0; }
 }
 
+/* --- Markdown in message-bubble --- */
+.message-bubble :deep(p) { margin: 0.4em 0; }
+.message-bubble :deep(p:first-child) { margin-top: 0; }
+.message-bubble :deep(p:last-child) { margin-bottom: 0; }
+.message-bubble :deep(code) {
+  background: rgba(0,0,0,0.06);
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-size: 0.92em;
+  font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+}
+.message-bubble :deep(pre) {
+  background: rgba(0,0,0,0.04);
+  padding: 10px 14px;
+  border-radius: 8px;
+  overflow-x: auto;
+  font-size: 0.9em;
+  line-height: 1.4;
+  margin: 0.5em 0;
+}
+.message-bubble :deep(pre code) {
+  background: none;
+  padding: 0;
+  font-size: inherit;
+}
+.message-bubble :deep(ul), .message-bubble :deep(ol) {
+  padding-left: 1.4em;
+  margin: 0.3em 0;
+}
+.message-bubble :deep(li) { margin: 0.15em 0; }
+.message-bubble :deep(blockquote) {
+  border-left: 3px solid var(--accent);
+  margin: 0.4em 0;
+  padding: 2px 10px;
+  color: var(--text-secondary);
+}
+.message-bubble :deep(table) {
+  border-collapse: collapse;
+  margin: 0.4em 0;
+  font-size: 0.9em;
+}
+.message-bubble :deep(th), .message-bubble :deep(td) {
+  border: 1px solid var(--border);
+  padding: 4px 8px;
+  text-align: left;
+}
+.message-bubble :deep(th) { background: rgba(0,0,0,0.03); }
+.message-bubble :deep(a) { color: var(--accent); }
+
 .think-block details {
   margin-bottom: 6px;
 }
@@ -308,7 +367,6 @@ function scrollToBottom() {
 .think-content {
   font-size: 12px;
   color: var(--text-tertiary);
-  font-style: italic;
   padding: 6px 10px;
   margin-top: 4px;
   border-left: 2px solid var(--border);

@@ -44,6 +44,7 @@ export const chatApi = {
     onSources: (sources: SourceInfo[]) => void,
     onDone: () => void,
     onError: (err: string) => void,
+    onThinking?: (text: string) => void,
     onStatus?: (phase: string, message: string) => void,
   ): AbortController {
     const controller = new AbortController()
@@ -96,6 +97,9 @@ export const chatApi = {
                 const parsed = JSON.parse(data)
                 if (onStatus) onStatus(parsed.phase, parsed.message)
               } catch { /* ignore */ }
+            } else if (lastEventType === 'thinking') {
+              lastEventType = ''
+              if (onThinking) onThinking(data)
             } else if (data.startsWith('{')) {
               try {
                 const parsed = JSON.parse(data)

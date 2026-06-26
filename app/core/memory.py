@@ -1,14 +1,18 @@
-"""Conversation memory: long-term persistence + short-term window + auto-summarization.
+"""Token-budget conversation memory — sliding window + auto-summarization.
 
-设计:
-  - 短期窗口:每次取最近 `history_keep_turns * 2` 条消息进 LLM 上下文(避免 prompt 爆炸)
-  - 长期持久化:所有消息入 `messages` 表,`Conversation.summary` 字段保存压缩摘要
-  - 摘要触发:当单会话消息数 > `history_keep_turns * 2 + history_summary_turns` 时
-    触发 LLM 压缩,摘要上限 `max_summary_tokens` token
-  - 并发安全:每个 conversation_id 一个 `threading.Lock`,避免多 worker 并发触发摘要
+Design:
+  - 所有消息入库(messages 表),不做截断
+  - 每次构建上下文时,从最新→最旧逐条累加 token,到 budget 停止
+  - 超出窗口的旧消息,累积一定 token 量后触发 LLM 摘要压缩
+  - 摘要存于 conversations.summary 列,每条消息 token 数运行时按 len/1.5 估算(Chinese-mixed)
+
+Token budget layout (config.py):
+  system(prompt.py) → summary(800) → history(2000) → chunks(6000) → query(~700)
+  Total capped at prompt_max_tokens(10000),超出时按 chunks→history→summary 倒序裁剪.
 """
-import threading
+
 import logging
+import threading
 
 from app.store.db import get_db_ctx, Message, Conversation, new_id
 from app.config import settings
@@ -16,59 +20,62 @@ from app.llm.chat import minimax_client
 from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
+
 _summary_locks: dict[str, threading.Lock] = {}
-_summary_locks_lock = threading.Lock()
+_locks_guard = threading.Lock()
 
-SUMMARY_UPDATE_PROMPT = """你是一个对话摘要助手。请根据已有的摘要和新的对话轮次，生成更新后的摘要。
+_SUMMARY_FRESH = (
+    "请总结以下对话,保存关键信息:\n"
+    " - 讨论的核心主题和关键结论\n"
+    " - 重要术语、技术名词、数据\n"
+    " - 用户的偏好和意图\n"
+    " - 后续可能被代词引用(它、这个、那个、上面说的)的关键概念\n"
+    "\n"
+    "对话内容:\n"
+    "{text}\n"
+    "\n"
+    "控制在 {max_tokens} token 以内。只输出摘要,不要额外解释。"
+    "如果对话内容为空,输出「暂无对话内容」。"
+)
 
-已有的摘要：
-{existing_summary}
+_SUMMARY_UPDATE = (
+    "请根据已有的摘要和新增的对话,生成更新后的摘要:\n"
+    "\n"
+    "已有摘要:\n"
+    "{existing}\n"
+    "\n"
+    "新增对话:\n"
+    "{new_turns}\n"
+    "\n"
+    "控制在 {max_tokens} token 以内。保留所有关键信息,不要丢失原有要点。\n"
+    "只输出摘要,不要额外解释。"
+)
 
-新的对话轮次：
-{new_turns}
 
-要求：
-1. 将新信息合并到已有摘要中，不要丢失原有重要内容
-2. 保留关键的技术术语、专有名词、用户偏好和已做出的决策
-3. 保持"活跃话题"和"关键术语"两部分
-4. 控制摘要长度在 {max_tokens} token 以内
-5. 如果后续对话可能用代词引用某个概念（它、它们、这个、那个、其、上述等），请确保该概念在摘要中有明确的术语名称，便于消歧
-6. 只输出摘要文本，不要额外解释
+def _estimate_tokens(text: str) -> int:
+    """Rough token estimator for mixed Chinese/English.
 
-输出格式示例：
-用户询问了 Transformer 注意力机制的原理，已解释 QKV 计算方式。
-
-活跃话题：注意力机制、Transformer、QKV
-关键术语：self-attention, scaled dot-product, softmax"""
-
-SUMMARY_FRESH_PROMPT = """请总结以下对话。需要保留以下内容：
-
-- 讨论的关键主题和做出的决策
-- 重要的事实、技术术语和专有名词
-- 用户的偏好和意图
-- 结尾处的活跃话题
-- 后续可能被代词引用的关键术语
-
-对话内容：
-{conversation_text}
-
-输出格式（控制在 {max_tokens} token 以内）：
-[摘要正文]
-
-活跃话题：话题1、话题2、...
-关键术语：术语1、术语2、...
-
-要求：
-- 只输出摘要内容，不要额外解释
-- 如果对话内容为空，直接输出"暂无对话内容"
-- 不要编造对话中不存在的信息"""
+    Chinese ~1 char/token, English ~4 chars/token. We use 1.5 as the
+    divisor — conservative for Chinese-heavy content.
+    """
+    if not text:
+        return 0
+    return max(1, int(len(text) / 1.5))
 
 
 class ConversationMemory:
-    def get_or_create_conversation(self, conversation_id: str | None, user_id: str = "default_user") -> str:
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+
+    def get_or_create_conversation(
+        self, conversation_id: str | None, user_id: str = "default_user"
+    ) -> str:
         with get_db_ctx() as session:
             if conversation_id:
-                conv = session.query(Conversation).filter_by(conversation_id=conversation_id).first()
+                conv = session.query(Conversation).filter_by(
+                    conversation_id=conversation_id
+                ).first()
                 if conv:
                     return conversation_id
             conv = Conversation(
@@ -80,110 +87,196 @@ class ConversationMemory:
             session.commit()
             return conv.conversation_id
 
-    def get_history(self, conversation_id: str, turns: int | None = None) -> list[dict]:
-        if turns is None:
-            turns = settings.history_keep_turns
+    def get_history(self, conversation_id: str) -> list[dict]:
+        """Return recent messages within token budget (history_max_tokens).
+
+        Walks newest→oldest, accumulating token estimates, stops before
+        exceeding the budget.  This replaces the old turn-based window.
+        """
         with get_db_ctx() as session:
-            messages = (
+            all_msgs = (
                 session.query(Message)
                 .filter_by(conversation_id=conversation_id)
-                .order_by(Message.created_at.desc())
-                .limit(turns * 2)
+                .order_by(Message.created_at.asc())
                 .all()
             )
-            messages.reverse()
-            return [{"role": m.role, "content": m.content} for m in messages]
+        if not all_msgs:
+            return []
+
+        selected: list[dict] = []
+        token_total = 0
+        for m in reversed(all_msgs):  # newest-first scan
+            t = _estimate_tokens(m.content or "")
+            if token_total + t > settings.history_max_tokens:
+                break
+            selected.append({"role": m.role, "content": m.content})
+            token_total += t
+        selected.reverse()  # back to chronological
+        return selected
 
     def get_summary(self, conversation_id: str) -> str:
         with get_db_ctx() as session:
-            conv = session.query(Conversation).filter_by(conversation_id=conversation_id).first()
-            return conv.summary if conv and conv.summary else ""
+            conv = session.query(Conversation).filter_by(
+                conversation_id=conversation_id
+            ).first()
+            return (conv.summary or "") if conv else ""
 
-    def add_message(self, conversation_id: str, role: str, content: str, user_id: str = "default_user"):
+    def get_context(self, conversation_id: str) -> tuple[list[dict], str]:
+        """Return (history_messages, summary) — ready for prompt injection."""
+        return self.get_history(conversation_id), self.get_summary(conversation_id)
+
+    def add_message(
+        self,
+        conversation_id: str,
+        role: str,
+        content: str = "",
+        thinking_content: str | None = None,
+        status: str = "completed",
+        user_id: str = "default_user",
+    ) -> None:
         with get_db_ctx() as session:
-            msg = Message(
-                message_id=new_id(),
-                conversation_id=conversation_id,
-                user_id=user_id,
-                role=role,
-                content=content,
-            )
-            session.add(msg)
-            conv = session.query(Conversation).filter_by(conversation_id=conversation_id).first()
+            conv = session.query(Conversation).filter_by(
+                conversation_id=conversation_id
+            ).first()
+            # Upsert for streaming messages — same conversation+role, update in place
+            if status == "streaming":
+                existing = (
+                    session.query(Message)
+                    .filter_by(conversation_id=conversation_id, status="streaming")
+                    .first()
+                )
+                if existing:
+                    existing.content = content
+                    existing.thinking_content = thinking_content
+                    existing.metadata_json = existing.metadata_json or {}
+            else:
+                msg = Message(
+                    message_id=new_id(),
+                    conversation_id=conversation_id,
+                    user_id=user_id,
+                    role=role,
+                    content=content,
+                    thinking_content=thinking_content,
+                    status=status,
+                )
+                session.add(msg)
             if conv:
                 conv.updated_at = datetime.now(timezone.utc)
             session.commit()
 
         self._maybe_summarize(conversation_id)
 
-    def _get_summarize_context(self, conversation_id: str, session):
-        total = session.query(Message).filter_by(conversation_id=conversation_id).count()
-        keep_count = settings.history_keep_turns * 2
-        if total <= keep_count + settings.history_summary_turns:
-            return None
+    # ------------------------------------------------------------------
+    # Auto-summarization — trigger by accumulated token overflow
+    # ------------------------------------------------------------------
 
-        conv = session.query(Conversation).filter_by(conversation_id=conversation_id).first()
-        if not conv:
-            return None
+    def _maybe_summarize(self, conversation_id: str) -> None:
+        """Check if old messages overflow the budget and trigger summarization.
 
-        older = (
-            session.query(Message)
-            .filter_by(conversation_id=conversation_id)
-            .order_by(Message.created_at.asc())
-            .limit(total - keep_count)
-            .all()
-        )
-
-        return conv, older
-
-    def _maybe_summarize(self, conversation_id: str):
+        Old messages = those that fall OUTSIDE the recent-window budget.
+        If their total estimated tokens exceed summary_trigger_tokens,
+        invoke LLM to generate/update the summary.
+        """
         with get_db_ctx() as session:
-            # 超 history_summary_turns 触发压缩,避免 LLM 上下文溢出
-            ctx = self._get_summarize_context(conversation_id, session)
-            if ctx is None:
+            msgs = (
+                session.query(Message)
+                .filter_by(conversation_id=conversation_id)
+                .order_by(Message.created_at.asc())
+                .all()
+            )
+            conv = session.query(Conversation).filter_by(
+                conversation_id=conversation_id
+            ).first()
+            if not conv or not msgs:
                 return
-            conv, older = ctx
 
-            if conv.summary:
-                new_turns_text = "\n".join(
-                    f"{m.role}: {m.content}" for m in older
-                    if not conv.last_summary_at or (m.created_at and m.created_at > conv.last_summary_at)
-                )
-                if not new_turns_text.strip():
-                    return
-                prompt = SUMMARY_UPDATE_PROMPT.format(
-                    existing_summary=conv.summary,
-                    new_turns=new_turns_text,
-                    max_tokens=settings.max_summary_tokens,
-                )
-            else:
-                conversation_text = "\n".join(f"{m.role}: {m.content}" for m in older)
-                prompt = SUMMARY_FRESH_PROMPT.format(
-                    conversation_text=conversation_text,
-                    max_tokens=settings.max_summary_tokens,
-                )
-
-        lock = _summary_locks_lock
-        with lock:
-            if conversation_id not in _summary_locks:
-                _summary_locks[conversation_id] = threading.Lock()
-        conv_lock = _summary_locks[conversation_id]
-
-        if not conv_lock.acquire(blocking=False):
+        outside_msgs = _get_outside_window(msgs)
+        if not outside_msgs:
             return
 
+        token_outside = sum(_estimate_tokens(m.content or "") for m in outside_msgs)
+        if token_outside < settings.summary_trigger_tokens:
+            return
+
+        # Build the appropriate prompt (fresh vs incremental update)
+        if conv.summary:
+            new_turns = "\n".join(
+                f"{m.role}: {m.content}"
+                for m in outside_msgs
+                if (not conv.last_summary_at)
+                or (m.created_at and m.created_at > conv.last_summary_at)
+            )
+            if not new_turns.strip():
+                return
+            prompt = _SUMMARY_UPDATE.format(
+                existing=conv.summary,
+                new_turns=new_turns,
+                max_tokens=settings.summary_max_tokens,
+            )
+        else:
+            conversation_text = "\n".join(
+                f"{m.role}: {m.content}" for m in outside_msgs
+            )
+            prompt = _SUMMARY_FRESH.format(
+                text=conversation_text,
+                max_tokens=settings.summary_max_tokens,
+            )
+
+        # Per-conversation lock — at most one summarization at a time
+        lock = _acquire_lock(conversation_id)
+        if lock is None:
+            return  # another thread is already summarizing
+
         try:
-            new_summary = minimax_client.chat([{"role": "user", "content": prompt}])
+            new_summary = minimax_client.chat(
+                [{"role": "user", "content": prompt}]
+            )
             with get_db_ctx() as session:
-                conv = session.query(Conversation).filter_by(conversation_id=conversation_id).first()
-                if conv:
-                    conv.summary = new_summary.strip()
-                    conv.last_summary_at = datetime.now(timezone.utc)
+                conv2 = (
+                    session.query(Conversation)
+                    .filter_by(conversation_id=conversation_id)
+                    .first()
+                )
+                if conv2:
+                    conv2.summary = new_summary.strip()
+                    conv2.last_summary_at = datetime.now(timezone.utc)
                     session.commit()
+            logger.info(
+                "summary.updated conv=%s outside=%d tokens=%d",
+                conversation_id[:8], len(outside_msgs), token_outside,
+            )
         except Exception:
-            logger.exception("Summary generation failed for conversation %s", conversation_id)
+            logger.exception("Summary failed for conv=%s", conversation_id[:8])
         finally:
-            conv_lock.release()
+            lock.release()
+
+
+# ------------------------------------------------------------------
+# Helpers
+# ------------------------------------------------------------------
+
+def _get_outside_window(all_msgs: list) -> list:
+    """Return messages that fall outside the token-budget window.
+
+    Walks newest→oldest, accumulating tokens; everything beyond the
+    budget goes into the 'outside' bucket (candidates for summarization).
+    """
+    token_acc = 0
+    for i in range(len(all_msgs) - 1, -1, -1):
+        token_acc += _estimate_tokens(all_msgs[i].content or "")
+        if token_acc > settings.history_max_tokens:
+            return list(all_msgs[: i + 1])
+    return []
+
+
+def _acquire_lock(conversation_id: str) -> threading.Lock | None:
+    with _locks_guard:
+        if conversation_id not in _summary_locks:
+            _summary_locks[conversation_id] = threading.Lock()
+        lock = _summary_locks[conversation_id]
+    if not lock.acquire(blocking=False):
+        return None
+    return lock
 
 
 conversation_memory = ConversationMemory()

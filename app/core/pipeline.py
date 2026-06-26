@@ -4,12 +4,13 @@ from app.core.intent import intent_classifier
 from app.core.retrieval import retrieval_engine
 from app.core.prompt import prompt_builder
 from app.core.diagnostics import DiagContext
-from app.llm.chat import minimax_client, strip_think
+from app.llm.chat import minimax_client
 from app.llm.base import CircuitOpenError, provider_health
 from app.models.schemas import ChatRequest, RetrievedChunk, SourceInfo
 from app.config import settings
 from typing import Generator
 import json
+import re
 import time
 
 
@@ -64,6 +65,24 @@ def _is_simple_query(query: str) -> bool:
         if p in query:
             return False
     return True
+
+
+def _parse_stream_tag(buffer: str) -> tuple[str, str]:
+    """Classify buffered text into event type: 'think' | 'token'.
+
+    Scans for <think> and </think> boundaries in the accumulating buffer.
+    Returns (event_type, text_to_emit).
+    """
+    if "<think>" in buffer:
+        return ("token", buffer.split("<think>", 1)[0])
+    if "</think>" in buffer:
+        parts = buffer.split("</think>", 1)
+        return ("think", parts[0])
+    # No boundary found — emit everything if it doesn't start with potential tag start
+    if buffer.startswith("<"):
+        # Could be opening a tag — buffer and wait
+        return ("buffer", "")
+    return ("token", buffer)
 
 
 class RAGPipeline:
@@ -208,17 +227,27 @@ class RAGPipeline:
             )
 
         # --- Stream LLM ---
-        conversation_memory.add_message(conv_id, "user", _pii_safe(req.query), user_id)
+        conversation_memory.add_message(conv_id, "user", _pii_safe(req.query), user_id,
+                                        status="completed")
 
         yield "event: status\ndata: {\"phase\":\"thinking\",\"message\":\"AI 正在思考...\"}\n\n"
 
-        full_response = ""
+        full_buffer = ""      # raw accumulation for diagnostics
+        thinking_text = ""    # content inside <think>...</think>
+        answer_text = ""      # content outside <think> or inside <answer>
         stream_start = time.monotonic()
         first_token = True
         chat_degraded = False
 
+        # Tag-state machine
+        _STATE_NORMAL = 0
+        _STATE_IN_THINK = 1
+        _STATE_AFTER_THINK = 2
+        tag_state = _STATE_NORMAL
+        tag_buffer = ""  # short buffer for partial tag matching
+
         try:
-            for token in minimax_client.chat_stream(
+            for raw_token in minimax_client.chat_stream(
                 messages,
                 temperature=req.temperature,
                 top_p=req.top_p,
@@ -227,38 +256,117 @@ class RAGPipeline:
                     if ctx:
                         ctx.record("stream", first_token_ms=round((time.monotonic() - stream_start) * 1000, 1))
                     first_token = False
-                full_response += token
-                safe_token = token.replace("\n", "\\n")
-                yield f"event: token\ndata: {safe_token}\n\n"
+
+                full_buffer += raw_token
+                tag_buffer += raw_token
+
+                if tag_state == _STATE_NORMAL:
+                    idx = tag_buffer.find("<think>")
+                    if idx >= 0:
+                        # Flush text before <think> as normal token
+                        before = tag_buffer[:idx]
+                        if before.strip():
+                            answer_text += before
+                            yield f"event: token\ndata: {before.replace(chr(10), '\\n')}\n\n"
+                        tag_buffer = tag_buffer[idx + 7:]  # skip "<think>"
+                        tag_state = _STATE_IN_THINK
+                    elif len(tag_buffer) > 7 and "<" not in tag_buffer[-8:]:
+                        # No tag start possible — safe to emit
+                        answer_text += tag_buffer[:-3] if len(tag_buffer) > 3 else tag_buffer
+                        chunk = tag_buffer
+                        tag_buffer = ""
+                        if chunk.strip():
+                            yield f"event: token\ndata: {chunk.replace(chr(10), '\\n')}\n\n"
+                    elif len(tag_buffer) > 20:
+                        # Still buffering but it's long enough — force emit
+                        answer_text += tag_buffer
+                        chunk = tag_buffer
+                        tag_buffer = ""
+                        if chunk.strip():
+                            yield f"event: token\ndata: {chunk.replace(chr(10), '\\n')}\n\n"
+
+                elif tag_state == _STATE_IN_THINK:
+                    idx = tag_buffer.find("</think>")
+                    if idx >= 0:
+                        think_chunk = tag_buffer[:idx]
+                        thinking_text += think_chunk
+                        if think_chunk.strip():
+                            yield f"event: thinking\ndata: {think_chunk.replace(chr(10), '\\n')}\n\n"
+                        tag_buffer = tag_buffer[idx + 8:]  # skip "</think>"
+                        tag_state = _STATE_AFTER_THINK
+                    elif len(tag_buffer) > 3 and "<" not in tag_buffer[-4:]:
+                        # Safe to emit a chunk of thinking
+                        emit_chunk = tag_buffer[:-2] if len(tag_buffer) > 2 else ""
+                        thinking_text += emit_chunk
+                        if emit_chunk.strip():
+                            yield f"event: thinking\ndata: {emit_chunk.replace(chr(10), '\\n')}\n\n"
+                        tag_buffer = tag_buffer[-2:] if len(tag_buffer) > 2 else tag_buffer
+
+                elif tag_state == _STATE_AFTER_THINK:
+                    # Everything after </think> is answer
+                    answer_text += tag_buffer
+                    if tag_buffer.strip():
+                        yield f"event: token\ndata: {tag_buffer.replace(chr(10), '\\n')}\n\n"
+                    tag_buffer = ""
+
         except CircuitOpenError:
             chat_degraded = True
             import logging as _log
             _log.getLogger(__name__).warning("Chat circuit breaker open, returning degraded response")
+
         except GeneratorExit:
-            if full_response:
-                conversation_memory.add_message(conv_id, "assistant", strip_think(_pii_safe(full_response)), user_id)
+            # User interrupted or connection lost
+            if answer_text or thinking_text:
+                conversation_memory.add_message(
+                    conv_id, "assistant",
+                    content=_pii_safe(answer_text),
+                    thinking_content=_pii_safe(thinking_text) if thinking_text else None,
+                    status="interrupted",
+                    user_id=user_id,
+                )
             if ctx:
-                ctx.update("stream", total_tokens=len(full_response), total_ms=round((time.monotonic() - stream_start) * 1000, 1))
+                ctx.update("stream", total_tokens=len(full_buffer),
+                           total_ms=round((time.monotonic() - stream_start) * 1000, 1))
                 ctx.save()
             return
+
         except Exception:
             import logging
             logging.getLogger(__name__).exception("Chat stream failed")
             chat_degraded = True
-            if full_response:
-                conversation_memory.add_message(conv_id, "assistant", strip_think(_pii_safe(full_response)), user_id)
+            if answer_text or thinking_text:
+                conversation_memory.add_message(
+                    conv_id, "assistant",
+                    content=_pii_safe(answer_text),
+                    thinking_content=_pii_safe(thinking_text) if thinking_text else None,
+                    status="interrupted",
+                    user_id=user_id,
+                )
             if ctx:
-                ctx.update("stream", error="Chat stream failed", total_tokens=len(full_response), total_ms=round((time.monotonic() - stream_start) * 1000, 1))
+                ctx.update("stream", error="Chat stream failed",
+                           total_tokens=len(full_buffer),
+                           total_ms=round((time.monotonic() - stream_start) * 1000, 1))
                 ctx.save()
             yield "event: error\ndata: {\"error\":\"生成回复时发生错误，请重试\"}\n\n"
             yield "event: done\ndata: {}\n\n"
             return
 
-        if full_response:
-            conversation_memory.add_message(conv_id, "assistant", strip_think(_pii_safe(full_response)), user_id)
+        # Normal completion
+        if answer_text:
+            conversation_memory.add_message(
+                conv_id, "assistant",
+                content=_pii_safe(answer_text),
+                thinking_content=_pii_safe(thinking_text) if thinking_text else None,
+                status="completed",
+                user_id=user_id,
+            )
         elif chat_degraded:
-            conversation_memory.add_message(conv_id, "assistant",
-                "抱歉，AI 服务暂时不可用，请稍后重试。您仍可浏览已上传的文档信息。", user_id)
+            conversation_memory.add_message(
+                conv_id, "assistant",
+                content="抱歉，AI 服务暂时不可用，请稍后重试。您仍可浏览已上传的文档信息。",
+                status="completed",
+                user_id=user_id,
+            )
 
         degraded_providers = provider_health.is_degraded()
         if settings.degradation_hint_enabled and degraded_providers:
@@ -266,8 +374,13 @@ class RAGPipeline:
             if ctx:
                 ctx.record("degraded", providers=degraded_providers, chat_degraded=chat_degraded)
 
+        # Emit stream status
+        yield f"event: status\ndata: {json.dumps({'phase':'done','thinking_tokens':len(thinking_text),'answer_tokens':len(answer_text)})}\n\n"
+
         if ctx:
-            ctx.update("stream", total_tokens=len(full_response), total_ms=round((time.monotonic() - stream_start) * 1000, 1))
+            ctx.update("stream", total_tokens=len(full_buffer),
+                       total_ms=round((time.monotonic() - stream_start) * 1000, 1),
+                       thinking_chars=len(thinking_text), answer_chars=len(answer_text))
             ctx.save()
         yield "event: done\ndata: {}\n\n"
 

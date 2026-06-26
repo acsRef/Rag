@@ -27,9 +27,6 @@ class Settings(BaseSettings):
     rerank_top_k: int = 5
     intent_min_score: float = 0.35
     max_intent_count: int = 3
-    history_keep_turns: int = 4
-    history_summary_turns: int = 10  # 多少轮之前的消息触发摘要压缩
-    max_summary_tokens: int = 800    # 摘要最大 token 数（超出时再压缩）
     hybrid_search_enabled: bool = True
     hybrid_search_top_k: int = 20  # 单路搜多取一些用于 RRF 合并
     hybrid_rrf_k: int = 60  # RRF 常数
@@ -40,6 +37,14 @@ class Settings(BaseSettings):
     mmr_candidate_k: int = 30
     mmr_max_per_doc: int = 2
     mmr_doc_penalty: float = 0.05
+
+    # Token budget — 控制注入 LLM 的 prompt 各部分大小
+    # 默认值基于 MiniMax M3 128K 上下文,留足余量
+    prompt_max_tokens: int = 10000      # 总预算(不含 LLM 输出预留)
+    history_max_tokens: int = 2000      # 近期对话的 token 预算
+    summary_max_tokens: int = 800       # 历史摘要的最大 token 数
+    summary_trigger_tokens: int = 2000  # 旧消息累积超过此值时触发摘要
+    chunks_max_tokens: int = 6000       # 检索 chunks 的最大 token 预算
 
     # PII / Sensitive data
     pii_enabled: bool = True
