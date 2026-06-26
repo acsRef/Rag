@@ -1,11 +1,10 @@
-"""MiniMax M3 chat client with circuit breaker."""
+"""MiniMax M3 chat client with circuit breaker — async."""
 
+import asyncio
 import logging
-import re
-import time
-from typing import Generator
+from typing import AsyncGenerator
 
-from openai import OpenAI
+from openai import AsyncOpenAI
 
 from app.config import settings
 from app.llm.base import CircuitOpenError, jittered_backoff, provider_health
@@ -13,27 +12,26 @@ from app.llm.base import CircuitOpenError, jittered_backoff, provider_health
 logger = logging.getLogger(__name__)
 
 
-def strip_think(text: str) -> str:
-    """Remove <think>...</think> block that reasoning models prepend."""
-    return re.sub(r"<think>.*?</think>", "", text, count=1, flags=re.DOTALL).strip()
-
-
 class MiniMaxClient:
     provider = "minimax"
 
     def __init__(self):
-        self.client = OpenAI(
+        self.client = AsyncOpenAI(
             api_key=settings.minimax_api_key,
             base_url=settings.minimax_base_url,
         )
         self.model = settings.minimax_model
+
+    # ------------------------------------------------------------------
+    # Circuit breaker helpers
+    # ------------------------------------------------------------------
 
     def _check_breaker(self) -> None:
         if not settings.circuit_breaker_enabled:
             return
         breaker = provider_health.get(self.provider)
         if not breaker.allow_request():
-            raise CircuitOpenError(f"MiniMax circuit breaker is open")
+            raise CircuitOpenError("MiniMax circuit breaker is open")
 
     def _on_success(self) -> None:
         if settings.circuit_breaker_enabled:
@@ -47,16 +45,16 @@ class MiniMaxClient:
     # Public API
     # ------------------------------------------------------------------
 
-    def chat_stream(
+    async def chat_stream(
         self,
         messages: list[dict],
         temperature: float = 0.7,
         top_p: float = 0.9,
-    ) -> Generator[str, None, None]:
-        """Streaming chat with circuit breaker guard."""
+    ) -> AsyncGenerator[str, None]:
+        """Streaming chat — async generator."""
         self._check_breaker()
         try:
-            response = self.client.chat.completions.create(
+            response = await self.client.chat.completions.create(
                 model=self.model,
                 messages=messages,
                 stream=True,
@@ -65,7 +63,7 @@ class MiniMaxClient:
                 max_tokens=4096,
             )
             first_token = True
-            for chunk in response:
+            async for chunk in response:
                 if first_token:
                     self._on_success()
                     first_token = False
@@ -78,18 +76,18 @@ class MiniMaxClient:
             self._on_failure()
             raise
 
-    def chat(
+    async def chat(
         self,
         messages: list[dict],
         timeout: int = 120,
         max_retries: int = 2,
         max_tokens: int | None = None,
     ) -> str:
-        """Sync chat with retry and circuit breaker."""
+        """Sync-style chat — async under the hood."""
         for attempt in range(max_retries + 1):
             self._check_breaker()
             try:
-                response = self.client.chat.completions.create(
+                response = await self.client.chat.completions.create(
                     model=self.model,
                     messages=messages,
                     stream=False,
@@ -100,15 +98,14 @@ class MiniMaxClient:
                 if not response.choices:
                     self._on_success()
                     return ""
-                content = response.choices[0].message.content or ""
                 self._on_success()
-                return strip_think(content)
+                return response.choices[0].message.content or ""
             except CircuitOpenError:
                 raise
             except Exception as e:
                 self._on_failure()
                 if attempt < max_retries:
-                    time.sleep(jittered_backoff(attempt))
+                    await asyncio.sleep(jittered_backoff(attempt))
                     continue
                 raise RuntimeError(f"MiniMax chat 调用失败: {e}") from e
 

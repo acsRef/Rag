@@ -65,7 +65,7 @@ def _collect_results(
 
 
 class RetrievalEngine:
-    def retrieve(
+    async def retrieve(
         self,
         query: str,
         intent: IntentResult | None,
@@ -95,7 +95,7 @@ class RetrievalEngine:
         t_embed = time.monotonic()
         embedding_degraded = False
         try:
-            query_emb = sf_embedding.embed(query)
+            query_emb = await sf_embedding.embed(query)
             embed_elapsed = (time.monotonic() - t_embed) * 1000
         except CircuitOpenError:
             embedding_degraded = True
@@ -153,7 +153,7 @@ class RetrievalEngine:
             texts = [r["text"] for r in results]
             try:
                 t_rerank = time.monotonic()
-                reranked = sf_rerank.rerank(query, texts)
+                reranked = await sf_rerank.rerank(query, texts)
                 reranked_ids = [r["index"] for r in reranked if 0 <= r["index"] < len(results)]
                 results = [results[i] for i in reranked_ids]
                 rerank_elapsed = (time.monotonic() - t_rerank) * 1000

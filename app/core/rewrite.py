@@ -59,7 +59,7 @@ REWRITE_PROMPT = """你是一个查询改写助手。请根据对话摘要、最
 
 
 class QueryRewriteService:
-    def rewrite(self, question: str, history: list[dict], summary: str = "") -> RewriteResult:
+    async def rewrite(self, question: str, history: list[dict], summary: str = "") -> RewriteResult:
         """改写用户问题为自包含的检索查询。
 
         输入:当前问题 + 最近对话历史 + 已有摘要
@@ -72,7 +72,7 @@ class QueryRewriteService:
         summary_str = summary if summary else "暂无对话摘要"
         history_str = "\n".join(f"{m['role']}: {m['content']}" for m in history[-4:]) if history else "暂无最近对话"
         prompt = REWRITE_PROMPT.format(summary=summary_str, history=history_str, question=question)
-        result = minimax_client.chat([{"role": "user", "content": prompt}])
+        result = await minimax_client.chat([{"role": "user", "content": prompt}])
         try:
             data = json.loads(result.strip().removeprefix("```json").removesuffix("```").strip())
             return RewriteResult(

@@ -8,7 +8,8 @@ from app.llm.chat import minimax_client
 from app.llm.base import CircuitOpenError, provider_health
 from app.models.schemas import ChatRequest, RetrievedChunk, SourceInfo
 from app.config import settings
-from typing import Generator
+from typing import AsyncGenerator
+import asyncio
 import json
 import re
 import time
@@ -86,15 +87,16 @@ def _parse_stream_tag(buffer: str) -> tuple[str, str]:
 
 
 class RAGPipeline:
-    def execute(
+    async def execute(
         self,
         req: ChatRequest,
         user_id: str = "anonymous",
         user_role_ids: list[int] | None = None,
         can_read_all: bool = False,
-    ) -> Generator[str, None, None]:
-        conv_id = conversation_memory.get_or_create_conversation(
-            req.conversation_id, user_id
+    ) -> AsyncGenerator[str, None]:
+        conv_id = await asyncio.to_thread(
+            conversation_memory.get_or_create_conversation,
+            req.conversation_id, user_id,
         )
         yield f"event: metadata\ndata: {json.dumps({'conversation_id': conv_id})}\n\n"
 
@@ -129,8 +131,8 @@ class RAGPipeline:
                 yield "event: done\ndata: {}\n\n"
                 return
 
-        history = conversation_memory.get_history(conv_id)
-        summary = conversation_memory.get_summary(conv_id)
+        history = await asyncio.to_thread(conversation_memory.get_history, conv_id)
+        summary = await asyncio.to_thread(conversation_memory.get_summary, conv_id)
         all_kb_ids = req.knowledge_base_ids
 
         simple = _is_simple_query(req.query)
@@ -138,7 +140,7 @@ class RAGPipeline:
             # Fast path: no LLM rewrite/intent, search all KBs directly
             sub_queries = [req.query]
         else:
-            rewrite_result = query_rewrite_service.rewrite(req.query, history, summary)
+            rewrite_result = await query_rewrite_service.rewrite(req.query, history, summary)
             if ctx:
                 ctx.record("rewrite",
                     original=req.query,
@@ -154,7 +156,7 @@ class RAGPipeline:
         for sub_q in sub_queries:
             intent = None
             if not simple:
-                intent = intent_classifier.classify(sub_q, all_kb_ids)
+                intent = await intent_classifier.classify(sub_q, all_kb_ids)
                 if ctx:
                     ctx.append("intent", {
                         "sub_query": sub_q,
@@ -168,7 +170,7 @@ class RAGPipeline:
                     continue
             has_retrieval = True
             try:
-                chunks = retrieval_engine.retrieve(
+                chunks = await retrieval_engine.retrieve(
                     sub_q, intent,
                     user_role_ids=user_role_ids,
                     can_read_all=can_read_all,
@@ -180,7 +182,7 @@ class RAGPipeline:
 
         if not has_retrieval:
             try:
-                chunks = retrieval_engine.retrieve(
+                chunks = await retrieval_engine.retrieve(
                     req.query, None,
                     user_role_ids=user_role_ids,
                     can_read_all=can_read_all,
@@ -227,8 +229,10 @@ class RAGPipeline:
             )
 
         # --- Stream LLM ---
-        conversation_memory.add_message(conv_id, "user", _pii_safe(req.query), user_id,
-                                        status="completed")
+        await conversation_memory.add_message(
+            conv_id, "user", _pii_safe(req.query), user_id,
+            status="completed",
+        )
 
         yield "event: status\ndata: {\"phase\":\"thinking\",\"message\":\"AI 正在思考...\"}\n\n"
 
@@ -247,7 +251,7 @@ class RAGPipeline:
         tag_buffer = ""  # short buffer for partial tag matching
 
         try:
-            for raw_token in minimax_client.chat_stream(
+            async for raw_token in minimax_client.chat_stream(
                 messages,
                 temperature=req.temperature,
                 top_p=req.top_p,
@@ -317,9 +321,9 @@ class RAGPipeline:
         except GeneratorExit:
             # User interrupted or connection lost
             if answer_text or thinking_text:
-                conversation_memory.add_message(
+                await conversation_memory.add_message(
                     conv_id, "assistant",
-                    content=_pii_safe(answer_text),
+                    _pii_safe(answer_text),
                     thinking_content=_pii_safe(thinking_text) if thinking_text else None,
                     status="interrupted",
                     user_id=user_id,
@@ -335,9 +339,9 @@ class RAGPipeline:
             logging.getLogger(__name__).exception("Chat stream failed")
             chat_degraded = True
             if answer_text or thinking_text:
-                conversation_memory.add_message(
+                await conversation_memory.add_message(
                     conv_id, "assistant",
-                    content=_pii_safe(answer_text),
+                    _pii_safe(answer_text),
                     thinking_content=_pii_safe(thinking_text) if thinking_text else None,
                     status="interrupted",
                     user_id=user_id,
@@ -353,17 +357,17 @@ class RAGPipeline:
 
         # Normal completion
         if answer_text:
-            conversation_memory.add_message(
+            await conversation_memory.add_message(
                 conv_id, "assistant",
-                content=_pii_safe(answer_text),
+                _pii_safe(answer_text),
                 thinking_content=_pii_safe(thinking_text) if thinking_text else None,
                 status="completed",
                 user_id=user_id,
             )
         elif chat_degraded:
-            conversation_memory.add_message(
+            await conversation_memory.add_message(
                 conv_id, "assistant",
-                content="抱歉，AI 服务暂时不可用，请稍后重试。您仍可浏览已上传的文档信息。",
+                "抱歉，AI 服务暂时不可用，请稍后重试。您仍可浏览已上传的文档信息。",
                 status="completed",
                 user_id=user_id,
             )

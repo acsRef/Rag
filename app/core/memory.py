@@ -125,7 +125,7 @@ class ConversationMemory:
         """Return (history_messages, summary) — ready for prompt injection."""
         return self.get_history(conversation_id), self.get_summary(conversation_id)
 
-    def add_message(
+    async def add_message(
         self,
         conversation_id: str,
         role: str,
@@ -164,13 +164,13 @@ class ConversationMemory:
                 conv.updated_at = datetime.now(timezone.utc)
             session.commit()
 
-        self._maybe_summarize(conversation_id)
+        await self._maybe_summarize(conversation_id)
 
     # ------------------------------------------------------------------
     # Auto-summarization — trigger by accumulated token overflow
     # ------------------------------------------------------------------
 
-    def _maybe_summarize(self, conversation_id: str) -> None:
+    async def _maybe_summarize(self, conversation_id: str) -> None:
         """Check if old messages overflow the budget and trigger summarization.
 
         Old messages = those that fall OUTSIDE the recent-window budget.
@@ -228,7 +228,7 @@ class ConversationMemory:
             return  # another thread is already summarizing
 
         try:
-            new_summary = minimax_client.chat(
+            new_summary = await minimax_client.chat(
                 [{"role": "user", "content": prompt}]
             )
             with get_db_ctx() as session:
