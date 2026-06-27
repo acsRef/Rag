@@ -148,7 +148,7 @@ class DocumentParser:
         if not images_to_describe:
             return md
 
-        descriptions = image_describer.describe_batch(images_to_describe)
+        descriptions = image_describer.describe_batch_sync(images_to_describe)
 
         result_md = md
         for batch_idx, pic_idx in pic_to_match_idx.items():
@@ -163,7 +163,7 @@ class DocumentParser:
     def _handle_image(self, content: bytes, filename: str) -> str:
         """Standalone image file → describe via vision API (no Docling involved)."""
         try:
-            return image_describer.describe(content, filename)
+            return image_describer.describe_sync(content, filename)
         except Exception:
             import logging
             logging.getLogger(__name__).exception("Vision API failed for %s", filename)
