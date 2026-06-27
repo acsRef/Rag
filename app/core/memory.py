@@ -17,6 +17,7 @@ import threading
 from app.store.db import get_db_ctx, Message, Conversation, new_id
 from app.config import settings
 from app.llm.chat import minimax_client
+from app.llm.base import call_llm_with_retry
 from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
@@ -228,8 +229,11 @@ class ConversationMemory:
             return  # another thread is already summarizing
 
         try:
-            new_summary = await minimax_client.chat(
-                [{"role": "user", "content": prompt}]
+            new_summary = await call_llm_with_retry(
+                minimax_client.chat,
+                [{"role": "user", "content": prompt}],
+                tag="summary",
+                max_retries=1,
             )
             with get_db_ctx() as session:
                 conv2 = (

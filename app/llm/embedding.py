@@ -7,7 +7,7 @@ import random
 from openai import AsyncOpenAI, RateLimitError, APIStatusError
 
 from app.config import settings
-from app.llm.base import CircuitOpenError, provider_health
+from app.llm.base import CircuitOpenError, TemporaryError, classify_llm_error, provider_health
 
 logger = logging.getLogger(__name__)
 
@@ -84,8 +84,9 @@ class SFEmbedding:
             raise
         except Exception as e:
             self._on_failure()
-            logger.exception("Embedding API failed for single text")
-            raise RuntimeError("向量服务暂不可用，请稍后重试") from e
+            typed, _ = classify_llm_error(e)
+            logger.exception("Embedding API failed for single text: %s", typed)
+            raise typed
 
     async def embed_batch(self, texts: list[str]) -> list[list[float]]:
         self._check_breaker()

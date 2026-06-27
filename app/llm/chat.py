@@ -7,7 +7,7 @@ from typing import AsyncGenerator
 from openai import AsyncOpenAI
 
 from app.config import settings
-from app.llm.base import CircuitOpenError, jittered_backoff, provider_health
+from app.llm.base import CircuitOpenError, TemporaryError, classify_llm_error, jittered_backoff, provider_health
 
 logger = logging.getLogger(__name__)
 
@@ -72,9 +72,10 @@ class MiniMaxClient:
                     yield delta.content
         except CircuitOpenError:
             raise
-        except Exception:
+        except Exception as e:
             self._on_failure()
-            raise
+            typed, _ = classify_llm_error(e)
+            raise typed
 
     async def chat(
         self,
@@ -104,10 +105,13 @@ class MiniMaxClient:
                 raise
             except Exception as e:
                 self._on_failure()
+                typed, should_retry = classify_llm_error(e)
+                if not should_retry:
+                    raise typed
                 if attempt < max_retries:
                     await asyncio.sleep(jittered_backoff(attempt))
                     continue
-                raise RuntimeError(f"MiniMax chat 调用失败: {e}") from e
+                raise typed
 
 
 minimax_client = MiniMaxClient()

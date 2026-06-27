@@ -10,9 +10,9 @@
 LLM 解析失败时回退到原 query,不抛异常。
 """
 from app.llm.chat import minimax_client
+from app.llm.base import CircuitOpenError, PermanentError, TemporaryError, call_llm_with_retry, robust_json_parse
 from app.models.schemas import RewriteResult
 import logging
-import json
 
 logger = logging.getLogger(__name__)
 
@@ -74,7 +74,7 @@ REWRITE_PROMPT = """你是一个查询改写助手。你的任务是将用户问
 
 
 class QueryRewriteService:
-    async def rewrite(self, question: str, history: list[dict], summary: str = "") -> RewriteResult:
+    async def rewrite(self, question: str, history: list[dict], summary: str = "", ctx=None) -> RewriteResult:
         """改写用户问题为自包含的检索查询。
 
         输入:当前问题 + 最近对话历史 + 已有摘要
@@ -87,19 +87,28 @@ class QueryRewriteService:
         summary_str = summary if summary else "暂无对话摘要"
         history_str = "\n".join(f"{m['role']}: {m['content']}" for m in history[-4:]) if history else "暂无最近对话"
         prompt = REWRITE_PROMPT.format(summary=summary_str, history=history_str, question=question)
-        result = await minimax_client.chat([{"role": "user", "content": prompt}])
         try:
-            data = json.loads(result.strip().removeprefix("```json").removesuffix("```").strip())
-            return RewriteResult(
-                rewritten_query=data.get("rewritten_query", question),
-                sub_questions=data.get("sub_questions", [question]),
+            result = await call_llm_with_retry(
+                minimax_client.chat,
+                [{"role": "user", "content": prompt}],
+                tag="rewrite",
+                max_retries=1,
             )
-        except json.JSONDecodeError:
-            logger.warning("Query rewrite returned invalid JSON (first 200 chars): %s", result[:200])
-            return RewriteResult(
-                rewritten_query=question,
-                sub_questions=[question],
-            )
+        except (CircuitOpenError, PermanentError, TemporaryError) as e:
+            logger.warning("Rewrite LLM call failed (%s): %s", type(e).__name__, e)
+            if ctx:
+                ctx.track_error("rewrite", type(e).__name__, str(e), degraded=True)
+            return RewriteResult(rewritten_query=question, sub_questions=[question])
+        data = robust_json_parse(result)
+        if data is None:
+            logger.warning("Rewrite parse failed (first 200): %s", result[:200])
+            if ctx:
+                ctx.track_error("rewrite", "JSONDecodeError", "failed to parse LLM JSON output", degraded=True)
+            return RewriteResult(rewritten_query=question, sub_questions=[question])
+        return RewriteResult(
+            rewritten_query=data.get("rewritten_query", question),
+            sub_questions=data.get("sub_questions", [question]),
+        )
 
 
 query_rewrite_service = QueryRewriteService()

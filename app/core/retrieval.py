@@ -100,6 +100,8 @@ class RetrievalEngine:
         except CircuitOpenError:
             embedding_degraded = True
             logger.warning("retrieve.embedding.degraded — circuit open, using zero-vector (BM25-only fallback)")
+            if ctx:
+                ctx.track_error("embedding", "CircuitOpenError", "embedding circuit breaker open, BM25-only", degraded=True)
             query_emb = [0.0] * settings.embedding_dimension
             embed_elapsed = (time.monotonic() - t_embed) * 1000
         except Exception:
@@ -179,6 +181,8 @@ class RetrievalEngine:
             except CircuitOpenError:
                 rerank_degraded = True
                 logger.warning("retrieve.rerank.degraded — circuit open, skipping rerank")
+                if ctx:
+                    ctx.track_error("rerank", "CircuitOpenError", "rerank circuit breaker open, skipped", degraded=True)
                 if round_data is not None:
                     round_data["rerank"] = {
                         "before_count": rerank_before_count,

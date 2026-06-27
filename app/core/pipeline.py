@@ -140,7 +140,7 @@ class RAGPipeline:
             # Fast path: no LLM rewrite/intent, search all KBs directly
             sub_queries = [req.query]
         else:
-            rewrite_result = await query_rewrite_service.rewrite(req.query, history, summary)
+            rewrite_result = await query_rewrite_service.rewrite(req.query, history, summary, ctx=ctx)
             if ctx:
                 ctx.record("rewrite",
                     original=req.query,
@@ -156,7 +156,7 @@ class RAGPipeline:
         for sub_q in sub_queries:
             intent = None
             if not simple:
-                intent = await intent_classifier.classify(sub_q, all_kb_ids)
+                intent = await intent_classifier.classify(sub_q, all_kb_ids, ctx=ctx)
                 if ctx:
                     ctx.append("intent", {
                         "sub_query": sub_q,

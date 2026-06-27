@@ -33,6 +33,7 @@ class DiagContext:
         self.query: str = query
         self.conversation_id: str = ""
         self.steps: dict[str, Any] = {}
+        self.errors: list[dict[str, Any]] = []
         self._start_time: float = time.time()
         self._saved: bool = False  # track first-save elapsed_ms
 
@@ -49,6 +50,25 @@ class DiagContext:
         if step not in self.steps:
             self.steps[step] = {}
         self.steps[step].update(data)
+
+    def track_error(
+        self,
+        step: str,
+        error_type: str,
+        message: str,
+        *,
+        retried: int = 0,
+        degraded: bool = False,
+    ) -> None:
+        """Record a LLM error/retry/degradation event for diagnostics."""
+        self.errors.append({
+            "step": step,
+            "type": error_type,
+            "message": message,
+            "retried": retried,
+            "degraded": degraded,
+            "elapsed_ms": round((time.time() - self._start_time) * 1000, 1),
+        })
 
     def append(self, step: str, value: Any) -> None:
         """Append a value to a list-typed step (for multi-round calls).
@@ -89,6 +109,8 @@ class DiagContext:
             "conversation_id": self.conversation_id,
             "steps": self.steps,
         }
+        if self.errors:
+            record["errors"] = self.errors
         if elapsed is not None:
             record["pipeline_elapsed_ms"] = elapsed
         return record

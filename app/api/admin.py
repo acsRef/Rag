@@ -4,13 +4,13 @@ from app.store.auth_store import (
     get_user_role_ids, set_user_roles,
     list_roles, create_role, set_role_permissions, get_role_permissions,
 )
-from app.store.db import get_db_ctx, get_session, PiiAlert, PiiHold, utc_now, User, Role
+from app.store.db import get_db_ctx, get_session, PiiAlert, PiiHold, utc_now, User, Role, Chunk, Document
 from app.middleware.auth import get_current_user
 from app.models.schemas import UserResponse, UserRoleUpdateRequest
 from app.core.pii_scanner import invalidate_cache
 from datetime import datetime
 from pydantic import BaseModel
-from typing import Literal
+from typing import Literal, Optional
 
 router = APIRouter(prefix="/api/v1/admin", tags=["admin"])
 
@@ -204,3 +204,52 @@ def whitelist_pii_alert(alert_id: int, current_user: dict = Depends(get_current_
 
         invalidate_cache()
         return {"ok": True, "whitelisted": word}
+
+
+class ChunkInfo(BaseModel):
+    chunk_id: str
+    document_id: str
+    kb_id: str
+    filename: str
+    title: str
+    section_path: str
+    text: str
+    content_hash: str
+    visibility: str
+
+
+@router.get("/chunks", response_model=list[ChunkInfo])
+def lookup_chunks(
+    ids: str,
+    current_user: dict = Depends(get_current_user),
+):
+    """Look up chunks by comma-separated chunk_ids.
+
+    Returns chunk details including source document filename.
+    Used by the diagnostics HTML page to show chunk provenance.
+    """
+    require_admin(current_user)
+    if not ids:
+        return []
+    chunk_ids = [c.strip() for c in ids.split(",") if c.strip()]
+    with get_db_ctx() as session:
+        rows = (
+            session.query(
+                Chunk.chunk_id, Chunk.document_id, Chunk.kb_id,
+                Chunk.title, Chunk.section_path, Chunk.text,
+                Chunk.content_hash, Chunk.visibility,
+                Document.filename,
+            )
+            .outerjoin(Document, Chunk.document_id == Document.document_id)
+            .filter(Chunk.chunk_id.in_(chunk_ids))
+            .all()
+        )
+        return [
+            ChunkInfo(
+                chunk_id=r.chunk_id, document_id=r.document_id, kb_id=r.kb_id,
+                filename=r.filename or "", title=r.title or "",
+                section_path=r.section_path or "", text=r.text[:500],
+                content_hash=r.content_hash or "", visibility=r.visibility,
+            )
+            for r in rows
+        ]

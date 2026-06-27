@@ -12,10 +12,10 @@
 无意图命中时,上层 `RAGPipeline` 会把 query 撒向所有 KB 做兜底。
 """
 from app.llm.chat import minimax_client
+from app.llm.base import CircuitOpenError, PermanentError, TemporaryError, call_llm_with_retry, robust_json_parse
 from app.models.schemas import IntentResult, IntentMatch
 from app.config import settings
 import logging
-import json
 
 logger = logging.getLogger(__name__)
 
@@ -72,7 +72,7 @@ INTENT_CLASSIFIER_PROMPT = """你是一个知识库路由分类器。你的任�
 
 
 class IntentClassifier:
-    async def classify(self, question: str, kb_ids: list[str] | None = None) -> IntentResult:
+    async def classify(self, question: str, kb_ids: list[str] | None = None, ctx=None) -> IntentResult:
         """把 question 路由到最相关的 1-3 个 KB。
 
         输入:用户问题 + 可用 KB id 列表(由上层从 DB 读出)
@@ -90,19 +90,31 @@ class IntentClassifier:
             question=question,
             max_count=settings.max_intent_count,
         )
-        result = await minimax_client.chat([{"role": "user", "content": prompt}])
         try:
-            data = json.loads(result.strip().removeprefix("```json").removesuffix("```").strip())
-            matches = [IntentMatch(kb_id=m["kb_id"], score=m["score"]) for m in data.get("matches", [])]
-            matches = [m for m in matches if m.score >= settings.intent_min_score]
-            return IntentResult(
-                sub_question=question,
-                matches=matches[:settings.max_intent_count],
-                intent_type=data.get("intent_type", "KB"),
+            result = await call_llm_with_retry(
+                minimax_client.chat,
+                [{"role": "user", "content": prompt}],
+                tag="intent",
+                max_retries=1,
             )
-        except json.JSONDecodeError:
-            logger.warning("Intent classification returned invalid JSON (first 200 chars): %s", result[:200])
+        except (CircuitOpenError, PermanentError, TemporaryError) as e:
+            logger.warning("Intent LLM call failed (%s): %s", type(e).__name__, e)
+            if ctx:
+                ctx.track_error("intent", type(e).__name__, str(e), degraded=True)
             return IntentResult(sub_question=question, matches=[], intent_type="KB")
+        data = robust_json_parse(result)
+        if data is None:
+            logger.warning("Intent parse failed (first 200): %s", result[:200])
+            if ctx:
+                ctx.track_error("intent", "JSONDecodeError", "failed to parse LLM JSON output", degraded=True)
+            return IntentResult(sub_question=question, matches=[], intent_type="KB")
+        matches = [IntentMatch(kb_id=m["kb_id"], score=m["score"]) for m in data.get("matches", [])]
+        matches = [m for m in matches if m.score >= settings.intent_min_score]
+        return IntentResult(
+            sub_question=question,
+            matches=matches[:settings.max_intent_count],
+            intent_type=data.get("intent_type", "KB"),
+        )
 
 
 intent_classifier = IntentClassifier()
