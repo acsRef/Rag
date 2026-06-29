@@ -53,6 +53,11 @@ def _build_sources(chunks: list[RetrievedChunk]) -> list[SourceInfo]:
     return sources
 
 
+_NL = "\\n"  # literal backslash-n for SSE JSON encoding
+
+def _norm(text: str) -> str:
+    """Collapse 3+ consecutive newlines to 2, so markdown renders without excessive gaps."""
+    return re.sub(r'\n{3,}', '\n\n', text)
 _PRONOUN_PATTERNS = ("它", "其", "这", "那", "该", "上述", "上面", "前面", "下面", "这个", "那个", "这些", "那些")
 _COMPLEX_PATTERNS = ("和", "与", "以及", "区别", "对比", "比较", "相比", "还有", "差异", "分别")
 
@@ -68,24 +73,6 @@ def _is_simple_query(query: str) -> bool:
     return True
 
 
-def _parse_stream_tag(buffer: str) -> tuple[str, str]:
-    """Classify buffered text into event type: 'think' | 'token'.
-
-    Scans for <think> and </think> boundaries in the accumulating buffer.
-    Returns (event_type, text_to_emit).
-    """
-    if "<think>" in buffer:
-        return ("token", buffer.split("<think>", 1)[0])
-    if "</think>" in buffer:
-        parts = buffer.split("</think>", 1)
-        return ("think", parts[0])
-    # No boundary found — emit everything if it doesn't start with potential tag start
-    if buffer.startswith("<"):
-        # Could be opening a tag — buffer and wait
-        return ("buffer", "")
-    return ("token", buffer)
-
-
 class RAGPipeline:
     async def execute(
         self,
@@ -93,6 +80,7 @@ class RAGPipeline:
         user_id: str = "anonymous",
         user_role_ids: list[int] | None = None,
         can_read_all: bool = False,
+        ctx: DiagContext | None = None,
     ) -> AsyncGenerator[str, None]:
         conv_id = await asyncio.to_thread(
             conversation_memory.get_or_create_conversation,
@@ -161,7 +149,7 @@ class RAGPipeline:
                     ctx.append("intent", {
                         "sub_query": sub_q,
                         "kbs": [
-                            {"name": m.kb_name, "kb_id": m.kb_id, "confidence": m.score}
+                            {"name": m.kb_id, "kb_id": m.kb_id, "confidence": m.score}
                             for m in (intent.matches or [])
                         ],
                         "intent_type": intent.intent_type,
@@ -202,6 +190,24 @@ class RAGPipeline:
         unique_chunks.sort(key=lambda x: x.score, reverse=True)
         unique_chunks = unique_chunks[:settings.rerank_top_k]
 
+        # Context expansion: for each selected chunk, fetch ±N neighbor chunks
+        # to provide surrounding context before feeding to LLM.
+        _EXPAND_N = 2  # number of neighbors on each side
+        cids = [c.chunk_id for c in unique_chunks]
+        if cids:
+            from app.store.pgvector_store import get_neighbor_chunks
+            neighbors = get_neighbor_chunks(cids, expand_n=_EXPAND_N)
+            for c in unique_chunks:
+                nb = neighbors.get(c.chunk_id)
+                if nb:
+                    parts = []
+                    if nb["before"]:
+                        parts.append(nb["before"])
+                    parts.append(c.text)
+                    if nb["after"]:
+                        parts.append(nb["after"])
+                    c.text = "\n".join(parts)
+
         sources = _build_sources(unique_chunks)
         yield f"event: sources\ndata: {json.dumps([s.model_dump() for s in sources])}\n\n"
 
@@ -230,8 +236,8 @@ class RAGPipeline:
 
         # --- Stream LLM ---
         await conversation_memory.add_message(
-            conv_id, "user", _pii_safe(req.query), user_id,
-            status="completed",
+            conv_id, "user", _pii_safe(req.query),
+            status="completed", user_id=user_id,
         )
 
         yield "event: status\ndata: {\"phase\":\"thinking\",\"message\":\"AI 正在思考...\"}\n\n"
@@ -271,7 +277,7 @@ class RAGPipeline:
                         before = tag_buffer[:idx]
                         if before.strip():
                             answer_text += before
-                            yield f"event: token\ndata: {before.replace(chr(10), '\\n')}\n\n"
+                            yield f"event: token\ndata: {_norm(before).replace(chr(10), _NL)}\n\n"
                         tag_buffer = tag_buffer[idx + 7:]  # skip "<think>"
                         tag_state = _STATE_IN_THINK
                     elif len(tag_buffer) > 7 and "<" not in tag_buffer[-8:]:
@@ -280,14 +286,14 @@ class RAGPipeline:
                         chunk = tag_buffer
                         tag_buffer = ""
                         if chunk.strip():
-                            yield f"event: token\ndata: {chunk.replace(chr(10), '\\n')}\n\n"
+                            yield f"event: token\ndata: {_norm(chunk).replace(chr(10), _NL)}\n\n"
                     elif len(tag_buffer) > 20:
                         # Still buffering but it's long enough — force emit
                         answer_text += tag_buffer
                         chunk = tag_buffer
                         tag_buffer = ""
                         if chunk.strip():
-                            yield f"event: token\ndata: {chunk.replace(chr(10), '\\n')}\n\n"
+                            yield f"event: token\ndata: {_norm(chunk).replace(chr(10), _NL)}\n\n"
 
                 elif tag_state == _STATE_IN_THINK:
                     idx = tag_buffer.find("</think>")
@@ -295,7 +301,7 @@ class RAGPipeline:
                         think_chunk = tag_buffer[:idx]
                         thinking_text += think_chunk
                         if think_chunk.strip():
-                            yield f"event: thinking\ndata: {think_chunk.replace(chr(10), '\\n')}\n\n"
+                            yield f"event: thinking\ndata: {think_chunk.replace(chr(10), _NL)}\n\n"
                         tag_buffer = tag_buffer[idx + 8:]  # skip "</think>"
                         tag_state = _STATE_AFTER_THINK
                     elif len(tag_buffer) > 3 and "<" not in tag_buffer[-4:]:
@@ -303,14 +309,14 @@ class RAGPipeline:
                         emit_chunk = tag_buffer[:-2] if len(tag_buffer) > 2 else ""
                         thinking_text += emit_chunk
                         if emit_chunk.strip():
-                            yield f"event: thinking\ndata: {emit_chunk.replace(chr(10), '\\n')}\n\n"
+                            yield f"event: thinking\ndata: {emit_chunk.replace(chr(10), _NL)}\n\n"
                         tag_buffer = tag_buffer[-2:] if len(tag_buffer) > 2 else tag_buffer
 
                 elif tag_state == _STATE_AFTER_THINK:
                     # Everything after </think> is answer
                     answer_text += tag_buffer
                     if tag_buffer.strip():
-                        yield f"event: token\ndata: {tag_buffer.replace(chr(10), '\\n')}\n\n"
+                        yield f"event: token\ndata: {_norm(tag_buffer).replace(chr(10), _NL)}\n\n"
                     tag_buffer = ""
 
         except CircuitOpenError:

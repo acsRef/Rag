@@ -131,9 +131,14 @@ class DiagContext:
             "pipeline_elapsed_ms": record.get("pipeline_elapsed_ms"),
         }
 
-        # Extract KB names from intent step
-        if (intent := self.steps.get("intent")) and intent.get("kbs"):
-            entry["kbs"] = [kb.get("name", "") for kb in intent["kbs"] if kb.get("name")]
+        # Extract KB names from intent step (can be a dict or list of rounds)
+        raw = self.steps.get("intent")
+        if raw:
+            rounds = raw if isinstance(raw, list) else [raw]
+            kbs = [kb["name"] for r in rounds if isinstance(r, dict)
+                   for kb in (r.get("kbs") or []) if isinstance(kb, dict) and kb.get("name")]
+            if kbs:
+                entry["kbs"] = kbs
 
         # TopK count from topk step
         if (topk := self.steps.get("topk")) and topk.get("chunks"):

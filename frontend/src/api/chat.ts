@@ -60,6 +60,11 @@ export const chatApi = {
       body,
       signal: controller.signal,
     }).then(async (res) => {
+      if (!res.ok) {
+        const errText = await res.text().catch(() => 'Unknown error')
+        onError(`Server error ${res.status}: ${errText.slice(0, 200)}`)
+        return
+      }
       const reader = res.body?.getReader()
       if (!reader) return
       const decoder = new TextDecoder()

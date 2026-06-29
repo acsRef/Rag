@@ -5,6 +5,7 @@ embedding and LLM calls. Coordinates all ingestion stages and persists results
 to PostgreSQL + pgvector.
 """
 
+import asyncio
 import hashlib
 import logging
 import time
@@ -151,7 +152,9 @@ class DocumentIndexer:
 
         if new_chunks:
             new_chunks = chunk_metadata_generator.generate(new_chunks)
-            embed_results = sf_embedding.embed_with_fallback([c.text for c in new_chunks])
+            embed_results = asyncio.run(
+                sf_embedding.embed_with_fallback([c.text for c in new_chunks])
+            )
         else:
             embed_results = []
 

@@ -1,5 +1,4 @@
 """User & role CRUD operations."""
-from sqlalchemy import text
 from app.store.db import get_session, User, Role, UserRole, RolePermission, new_id
 from passlib.context import CryptContext
 
@@ -178,17 +177,18 @@ def seed_defaults():
             session.flush()
             session.add(UserRole(user_id=admin.id, role_id=admin_role.id))
 
-            # Seed anonymous user for unauthenticated chat
-            anon = session.query(User).filter(User.id == "anonymous").first()
-            if not anon:
-                anon_pw = hash_password(new_id())
-                session.add(User(
-                    id="anonymous", username="anonymous", hashed_password=anon_pw,
-                    display_name="Anonymous User", email="", is_active=True,
-                ))
         else:
             _ensure_permission(session, "admin", "doc.delete")
             _ensure_permission(session, "user", "doc.delete")
+
+        # Seed anonymous user unconditionally (may be missing after re-seed)
+        anon = session.query(User).filter(User.id == "anonymous").first()
+        if not anon:
+            anon_pw = hash_password(new_id())
+            session.add(User(
+                id="anonymous", username="anonymous", hashed_password=anon_pw,
+                display_name="Anonymous User", email="", is_active=True,
+            ))
 
         session.commit()
     finally:

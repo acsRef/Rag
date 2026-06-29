@@ -154,7 +154,7 @@
     </div>
   </div>
   <div id="query-list"></div>
-  <div id="left-footer">demo mode  ·  click a query to inspect</div>
+  <div id="left-footer">实时数据  · 点击查询查看管线详情</div>
 </div>
 
 <div id="right">
@@ -175,55 +175,21 @@
 </div>
 
 <script>
-/* ===== Inline demo data ===== */
-var DEMO_INDEX = [
-  { id: "q01", timestamp: "2026-06-25T14:30:15", query: "如何配置JWT密钥？", kbs: ["技术文档"], topk_count: 5, pipeline_elapsed_ms: 1850 },
-  { id: "q02", timestamp: "2026-06-25T14:35:22", query: "JWT和Session鉴权有什么不同", kbs: ["安全指南","开发规范"], topk_count: 5, pipeline_elapsed_ms: 2200 },
-  { id: "q03", timestamp: "2026-06-25T14:41:03", query: "什么是RAG技术", kbs: ["产品文档"], topk_count: 3, pipeline_elapsed_ms: 1200 },
-  { id: "q04", timestamp: "2026-06-25T14:45:30", query: "帮我看看我的订单到哪里了", kbs: [], topk_count: 0, pipeline_elapsed_ms: 800 },
-  { id: "q05", timestamp: "2026-06-25T14:52:01", query: "Embedding和Rerank的区别", kbs: ["技术文档"], topk_count: 4, pipeline_elapsed_ms: 3150 }
-];
-
-var DEMO_DETAIL = {
-  id: "q02", timestamp: "2026-06-25T14:35:22", query: "JWT和Session鉴权有什么不同",
-  conversation_id: "conv_abc12345", pipeline_elapsed_ms: 2200,
-  errors: [
-    { step: "rerank", type: "CircuitOpenError", message: "rerank circuit breaker open, skipped", retried: 0, degraded: true, elapsed_ms: 45.2 }
-  ],
-  steps: {
-    rewrite: { original: "JWT和Session鉴权有什么不同", rewritten: "JWT(JSON Web Token)和Session会话鉴权的工作原理和区别对比", sub_questions: ["JWT鉴权的工作原理是什么","Session鉴权的工作原理是什么","JWT和Session鉴权的区别对比"] },
-    intent: [
-      { sub_query: "JWT鉴权的工作原理", kbs: [{ name: "安全指南", kb_id: "kb_01", confidence: 0.92 }], intent_type: "KB" },
-      { sub_query: "Session鉴权的工作原理", kbs: [{ name: "安全指南", kb_id: "kb_01", confidence: 0.88 }], intent_type: "KB" },
-      { sub_query: "JWT和Session鉴权的区别对比", kbs: [{ name: "安全指南", kb_id: "kb_01", confidence: 0.85 },{ name: "开发规范", kb_id: "kb_02", confidence: 0.65 }], intent_type: "KB" }
-    ],
-    retrieval: [{
-      sub_query: "JWT鉴权的工作原理", target_kb_ids: ["kb_01"],
-      embedding: { dims: 4096, elapsed_ms: 85.0, degraded: false },
-      search_candidates: [{ chunk_id: "c_001", kb_id: "kb_01", score: 0.87, title: "JWT概述" },{ chunk_id: "c_003", kb_id: "kb_01", score: 0.76, title: "Token验证流程" }],
-      rerank: { before_count: 20, after_count: 10, degraded: true, elapsed_ms: 0 },
-      mmr: { selected_count: 5, rejected_count: 5, rejected_chunk_ids: ["c_007","c_012"], lambda: 0.7, elapsed_ms: 2.1 },
-      total_elapsed_ms: 320.4
-    }],
-    topk: { chunks: [{ chunk_id: "c_001", title: "JWT概述", score: 0.87, source: "安全指南-v2.docx", text_preview: "JWT（JSON Web Token）是一种无状态的身份认证方案..." }] },
-    prompt: { system_prompt_chars: 580, total_chars: 4230, message_count: 2, topk_chars: 2840 },
-    stream: { first_token_ms: 320.5, total_tokens: 1260, total_ms: 1850.0, thinking_chars: 340, answer_chars: 920 }
-  }
-};
-
 /* ===== App ===== */
 var STEP_ICONS = { rejected: '\u{1F6AB}', rewrite: '\u{1F52E}', intent: '\u{1F3AF}', retrieval: '\u{1F50D}', topk: '\u{1F4E6}', prompt: '\u{1F4DD}', stream: '\u{1F4E1}', degraded: '\u{26A1}' };
 var STEP_LABELS = { rejected: 'PII 拦截', rewrite: '查询改写', intent: '意图分类', retrieval: '检索', topk: '最终片段', prompt: 'Prompt 注入', stream: 'SSE 流', degraded: '降级事件' };
 var currentId = null;
 
 function loadIndex() {
-  try {
-    var index = DEMO_INDEX;
-    document.getElementById('list-count').textContent = index.length + ' 条记录 (Demo)';
-    renderList(index);
-  } catch (e) {
-    document.getElementById('query-list').innerHTML = '<div class="loading"><div style="font-size:28px;margin-bottom:8px">⚠️</div>无法加载数据</div>';
-  }
+  fetch('/api/v1/diag/index')
+    .then(function(r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+    .then(function(index) {
+      renderList(index);
+      document.getElementById('list-count').textContent = index.length + ' 条记录';
+    })
+    .catch(function(e) {
+      document.getElementById('query-list').innerHTML = '<div class="loading"><div style="font-size:28px;margin-bottom:8px">⚠️</div>无法连接后端: ' + e.message + '</div>';
+    });
 }
 
 function renderList(index) {
@@ -257,7 +223,12 @@ function loadDetail(id) {
     el.classList.toggle('active', (el.getAttribute('onclick')||'').indexOf(id) >= 0);
   });
   loadIndex();
-  renderDetail(DEMO_DETAIL);
+  fetch('/api/v1/diag/detail/' + encodeURIComponent(id))
+    .then(function(r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+    .then(function(data) { renderDetail(data); })
+    .catch(function(e) {
+      document.getElementById('right').innerHTML = '<div class="loading"><div style="font-size:28px;margin-bottom:8px">⚠️</div>无法加载详情: ' + e.message + '</div>';
+    });
 }
 
 function renderDetail(data) {
@@ -265,7 +236,7 @@ function renderDetail(data) {
   html += '<div class="detail-header"><div class="query-text">' + esc(data.query) + '</div>';
   html += '<div class="query-meta">';
   html += '<span>🕐 ' + (data.timestamp || '') + '</span>';
-  if (data.pipeline_elapsed_ms != null) html += '<span>⏱ ' + data.pipeline_elapsed_ms + 'ms</span>';
+  if (data.pipeline_elapsed_ms != null) html += '<span>⏱ 总耗时 ' + (data.pipeline_elapsed_ms/1000).toFixed(1) + 's</span>';
   if (data.conversation_id) html += '<span>💬 ' + data.conversation_id.slice(0,8) + '</span>';
   html += '</div></div>';
 
@@ -273,9 +244,9 @@ function renderDetail(data) {
     html += '<div><div class="error-section-head">⚠️ 错误与降级 <span class="count">' + data.errors.length + '</span></div>';
     for (var i = 0; i < data.errors.length; i++) {
       var err = data.errors[i];
-      html += '<div class="error-item"><div class="err-type">' + esc(err.type) + ' &middot; ' + esc(err.step) + '</div>';
+      html += '<div class="error-item"><div class="err-type">' + esc(err.type) + ' · ' + esc(err.step) + '</div>';
       html += '<div class="err-msg">' + esc(err.message) + '</div>';
-      html += '<div class="err-meta">重试 ' + (err.retried || 0) + ' 次 &middot; 降级: ' + (err.degraded ? '是' : '否') + ' &middot; ' + (err.elapsed_ms || 0) + 'ms</div></div>';
+      html += '<div class="err-meta">重试 ' + (err.retried || 0) + ' 次 · 降级: ' + (err.degraded ? '是' : '否') + ' · ' + (err.elapsed_ms || 0) + 'ms</div></div>';
     }
     html += '</div>';
   }
@@ -297,49 +268,187 @@ function renderDetail(data) {
 
         html += '<div class="step-card ' + stepCls + '"><div class="step-header">';
         html += '<div class="step-name">' + icon + ' ' + label + ' <span class="step-status ' + statusCls + '">' + statusText + '</span></div>';
-        if (stepData && stepData.elapsed_ms != null) html += '<span class="step-elapsed">' + stepData.elapsed_ms + 'ms</span>';
         html += '</div>';
 
         if (stepData) {
-          var display = {};
-          for (var k in stepData) display[k] = stepData[k];
-          if (display instanceof Array) {
-            var preview = JSON.stringify(display.slice(0,2), null, 2);
-            if (display.length > 2) preview += '\n  ... (+' + (display.length-2) + ' rounds)';
-            html += '<div class="step-data"><pre>' + esc(preview) + '</pre></div>';
-          } else {
-            // Extract chunks list to show as clickable links
-            var chunks = display.chunks;
-            delete display.chunks;
-            delete display.sub_questions;
-            var simplified = {};
-            for (var k in display) {
-              var v = display[k];
-              if (typeof v === 'string' && v.length > 500) simplified[k] = v.slice(0,500) + '...';
-              else if (v instanceof Array && v.length > 10) simplified[k] = '[' + v.length + ' items]';
-              else simplified[k] = v;
-            }
-            html += '<div class="step-data"><pre>' + esc(JSON.stringify(simplified, null, 2)) + '</pre></div>';
-            // Render chunks as clickable table
-            if (chunks && chunks instanceof Array && chunks.length > 0) {
-              html += '<div style="margin-top:8px;border-top:1px solid var(--border);padding-top:8px;font-size:11px;color:var(--text3)">点击 chunk_id 查看详情:</div>';
-              for (var ci = 0; ci < chunks.length; ci++) {
-                var ch = chunks[ci];
-                html += '<div style="display:flex;align-items:center;gap:8px;padding:4px 0;font-size:12px;border-bottom:1px solid var(--border)">';
-                html += '<span class="chunk-link" onclick="openChunk(\'' + esc(ch.chunk_id || '') + '\')">' + esc(ch.chunk_id || '') + '</span>';
-                html += '<span style="color:var(--text2);min-width:50px;text-align:right">' + (ch.score != null ? ch.score : '') + '</span>';
-                html += '<span style="color:var(--text3);flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + esc(ch.title || ch.text_preview || '') + '</span>';
-                html += '<span style="color:var(--text3);font-size:10px">' + esc(ch.source || '') + '</span>';
-                html += '</div>';
-              }
-            }
-          }
+          html += renderStepBody(stepName, stepData);
         }
         html += '</div>';
       }
     }
   }
   document.getElementById('right').innerHTML = html || '<div class="loading">无步骤数据</div>';
+}
+
+function renderStepBody(stepName, stepData) {
+  if (stepName === 'retrieval') return renderRetrieval(stepData);
+  if (stepName === 'topk') return renderTopK(stepData);
+  if (stepName === 'prompt') return renderPrompt(stepData);
+  if (stepName === 'stream') return renderStream(stepData);
+  if (stepName === 'rewrite') return renderRewrite(stepData);
+  if (stepName === 'intent') return renderIntent(stepData);
+  if (stepName === 'rejected') return renderRejected(stepData);
+  if (stepName === 'degraded') return renderDegraded(stepData);
+  return renderRawJson(stepData);
+}
+
+/* ---------- Step renderers ---------- */
+
+function fmtPct(v) {
+  if (v == null) return '-';
+  return (v * 100).toFixed(2) + '%';
+}
+function fmtMs(v) {
+  if (v == null) return '-';
+  return v.toFixed(1) + 'ms';
+}
+
+function renderRetrieval(data) {
+  if (!(data instanceof Array)) return renderRawJson(data);
+  var html = '';
+  for (var i = 0; i < data.length; i++) {
+    var r = data[i];
+    html += '<div style="font-size:12px;font-weight:600;margin:8px 0 6px;color:var(--text2)">第 ' + (i+1) + ' 轮检索: ' + esc(r.sub_query||'') + '</div>';
+    // Embedding info
+    if (r.embedding) {
+      var e = r.embedding;
+      html += '<div style="display:flex;gap:12px;flex-wrap:wrap;font-size:12px;color:var(--text3);margin-bottom:6px">';
+      html += '<span>📐 向量维度 ' + esc(e.dims||'') + '</span>';
+      html += '<span>⏱ ' + fmtMs(e.elapsed_ms) + '</span>';
+      if (e.degraded) html += '<span style="color:var(--orange)">⚠ 降级(零向量)</span>';
+      html += '</div>';
+    }
+    // Search candidates table
+    var cands = r.search_candidates || [];
+    if (cands.length > 0) {
+      html += '<table style="width:100%;font-size:12px;border-collapse:collapse;margin-bottom:8px">';
+      html += '<tr style="color:var(--text3);font-size:10px"><th style="text-align:left;padding:3px 6px;border-bottom:1px solid var(--border)">Chunk</th><th style="text-align:right;padding:3px 6px;border-bottom:1px solid var(--border)">相似度</th><th style="text-align:left;padding:3px 6px;border-bottom:1px solid var(--border)">标题</th></tr>';
+      for (var ci = 0; ci < cands.length; ci++) {
+        var c = cands[ci];
+        html += '<tr><td style="padding:3px 6px;border-bottom:1px solid var(--border)"><span class="chunk-link" onclick="openChunk(\'' + esc(c.chunk_id||'') + '\')">' + esc((c.chunk_id||'').slice(0,12)) + '</span></td>';
+        html += '<td style="padding:3px 6px;border-bottom:1px solid var(--border);text-align:right;font-variant-numeric:tabular-nums">' + fmtPct(c.score) + '</td>';
+        html += '<td style="padding:3px 6px;border-bottom:1px solid var(--border)">' + esc(c.title||'') + '</td></tr>';
+      }
+      html += '</table>';
+    }
+    // Rerank
+    if (r.rerank) {
+      var rr = r.rerank;
+      html += '<div style="display:flex;gap:12px;flex-wrap:wrap;font-size:12px;color:var(--text3);margin-bottom:4px">';
+      html += '<span>🔄 重排: ' + (rr.before_count||0) + ' → ' + (rr.after_count||0) + ' 条</span>';
+      if (rr.degraded) html += '<span style="color:var(--orange)">⚠ 降级(跳过重排)</span>';
+      if (rr.elapsed_ms != null) html += '<span>⏱ ' + fmtMs(rr.elapsed_ms) + '</span>';
+      html += '</div>';
+    }
+    // MMR
+    if (r.mmr) {
+      var m = r.mmr;
+      html += '<div style="display:flex;gap:12px;flex-wrap:wrap;font-size:12px;color:var(--text3)">';
+      html += '<span>🎯 MMR(λ=' + m.lambda + '): 选 ' + (m.selected_count||0) + ' 条, 去重 ' + (m.rejected_count||0) + ' 条</span>';
+      if (m.elapsed_ms != null) html += '<span>⏱ ' + fmtMs(m.elapsed_ms) + '</span>';
+      html += '</div>';
+    }
+    // Total
+    if (r.total_elapsed_ms != null) {
+      html += '<div style="font-size:11px;color:var(--text3);margin-top:4px">子查询耗时: ' + fmtMs(r.total_elapsed_ms) + '</div>';
+    }
+  }
+  return html;
+}
+
+function renderTopK(data) {
+  var chunks = data.chunks || [];
+  if (chunks.length === 0) return '<div style="font-size:12px;color:var(--text3);padding:4px 0">无匹配片段</div>';
+  var html = '<div style="font-size:12px;color:var(--text3);margin-bottom:6px">最终入选 <strong>' + chunks.length + '</strong> 个片段:</div>';
+  html += '<table style="width:100%;font-size:12px;border-collapse:collapse">';
+  html += '<tr style="color:var(--text3);font-size:10px"><th style="text-align:left;padding:3px 6px;border-bottom:1px solid var(--border)">#</th><th style="text-align:right;padding:3px 6px;border-bottom:1px solid var(--border)">分数</th><th style="text-align:left;padding:3px 6px;border-bottom:1px solid var(--border)">标题</th><th style="text-align:left;padding:3px 6px;border-bottom:1px solid var(--border)">来源</th></tr>';
+  for (var i = 0; i < chunks.length; i++) {
+    var c = chunks[i];
+    html += '<tr><td style="padding:3px 6px;border-bottom:1px solid var(--border);color:var(--text3)">' + (i+1) + '</td>';
+    html += '<td style="padding:3px 6px;border-bottom:1px solid var(--border);text-align:right;font-variant-numeric:tabular-nums">' + fmtPct(c.score) + '</td>';
+    html += '<td style="padding:3px 6px;border-bottom:1px solid var(--border)"><span class="chunk-link" onclick="openChunk(\'' + esc(c.chunk_id||'') + '\')">' + esc(c.title||'') + '</span></td>';
+    html += '<td style="padding:3px 6px;border-bottom:1px solid var(--border);color:var(--text3)">' + esc(c.source||'') + '</td></tr>';
+    if (c.text_preview) {
+      html += '<tr><td colspan="4" style="padding:2px 6px 8px;font-size:11px;color:var(--text3);border-bottom:1px solid var(--border)">' + esc(c.text_preview.slice(0,200)) + (c.text_preview.length>200?'...':'') + '</td></tr>';
+    }
+  }
+  html += '</table>';
+  if (data.elapsed_ms != null) html += '<div style="font-size:11px;color:var(--text3);margin-top:4px">⏱ ' + fmtMs(data.elapsed_ms) + '</div>';
+  return html;
+}
+
+function renderPrompt(data) {
+  var html = '<div style="display:flex;gap:16px;flex-wrap:wrap;font-size:12px;color:var(--text3)">';
+  html += '<span>📏 系统提示 ' + (data.system_prompt_chars||0) + ' 字符</span>';
+  html += '<span>📄 检索片段 ' + (data.topk_chars||0) + ' 字符</span>';
+  html += '<span>📝 总长度 ' + (data.total_chars||0) + ' 字符</span>';
+  html += '<span>💬 ' + (data.message_count||0) + ' 条消息</span>';
+  html += '</div>';
+  return html;
+}
+
+function renderStream(data) {
+  var html = '<div style="display:flex;gap:16px;flex-wrap:wrap;font-size:12px;color:var(--text3)">';
+  if (data.first_token_ms != null) html += '<span>⚡ 首 token ' + fmtMs(data.first_token_ms) + '</span>';
+  if (data.thinking_chars) html += '<span>💭 思考 ' + data.thinking_chars + ' 字符</span>';
+  if (data.answer_chars) html += '<span>💬 回答 ' + data.answer_chars + ' 字符</span>';
+  if (data.total_tokens != null) html += '<span>🔤 共 ' + data.total_tokens + ' token</span>';
+  if (data.total_ms != null) html += '<span>⏱ 流式耗时 ' + fmtMs(data.total_ms) + '</span>';
+  if (data.error) html += '<span style="color:var(--red)">❌ ' + esc(data.error) + '</span>';
+  html += '</div>';
+  return html;
+}
+
+function renderRewrite(data) {
+  var html = '<div style="font-size:12px;color:var(--text3)">';
+  if (data.original) html += '<div style="margin-bottom:4px">原始: ' + esc(data.original) + '</div>';
+  if (data.rewritten) html += '<div style="margin-bottom:4px">改写: ' + esc(data.rewritten) + '</div>';
+  if (data.sub_questions && data.sub_questions.length > 0) {
+    html += '<div>子问题:';
+    for (var i = 0; i < data.sub_questions.length; i++) {
+      html += '<div style="padding-left:16px;margin-top:2px">' + (i+1) + '. ' + esc(data.sub_questions[i]) + '</div>';
+    }
+    html += '</div>';
+  }
+  if (data.elapsed_ms != null) html += '<div style="margin-top:4px">⏱ ' + fmtMs(data.elapsed_ms) + '</div>';
+  html += '</div>';
+  return html;
+}
+
+function renderIntent(data) {
+  if (!(data instanceof Array)) return renderRawJson(data);
+  var html = '';
+  for (var i = 0; i < data.length; i++) {
+    var item = data[i];
+    html += '<div style="font-size:12px;margin-bottom:6px"><span style="color:var(--text2);font-weight:500">' + esc(item.sub_query||'') + '</span>';
+    if (item.intent_type) html += ' <span style="color:var(--text3)">→ </span><span>' + item.intent_type + '</span>';
+    html += '</div>';
+    if (item.kbs && item.kbs.length > 0) {
+      for (var j = 0; j < item.kbs.length; j++) {
+        var kb = item.kbs[j];
+        html += '<div style="padding-left:16px;font-size:11px;color:var(--text3);margin-bottom:2px">📁 ' + esc(kb.name||kb.kb_id||'') + ' (置信度: ' + fmtPct(kb.confidence) + ')</div>';
+      }
+    }
+  }
+  return html;
+}
+
+function renderRejected(data) {
+  return '<div style="font-size:12px;color:var(--red)">🚫 PII 拦截: ' + esc(data.reason||'') + (data.details ? ' · ' + esc(data.details.join(', ')) : '') + '</div>';
+}
+
+function renderDegraded(data) {
+  var html = '<div style="font-size:12px;color:var(--orange)">';
+  if (data.providers) html += '<div>⚡ 降级服务: ' + esc(data.providers.join(', ')) + '</div>';
+  if (data.chat_degraded) html += '<div>💬 聊天降级</div>';
+  html += '</div>';
+  return html;
+}
+
+function renderRawJson(data) {
+  var json = JSON.stringify(data, null, 2);
+  if (json.length > 2000) json = json.slice(0,2000) + '\n... (truncated)';
+  return '<div class="step-data"><pre>' + esc(json) + '</pre></div>';
 }
 
 function esc(s) {
@@ -356,7 +465,7 @@ function openChunk(chunkId) {
   document.getElementById('cp-section').textContent = '';
   document.getElementById('cp-text').textContent = '';
 
-  fetch('/api/v1/admin/chunks?ids=' + encodeURIComponent(chunkId))
+  fetch('/api/v1/diag/chunks?ids=' + encodeURIComponent(chunkId))
     .then(function(r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
     .then(function(data) {
       if (data.length === 0) { document.getElementById('cp-meta').innerHTML = '<span>未找到该 chunk</span>'; return; }

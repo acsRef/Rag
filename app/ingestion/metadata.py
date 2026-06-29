@@ -2,13 +2,9 @@
 
 Uses a single MiniMax API call to generate title / summary / questions
 for ALL chunks in one batch, then writes results back into the Chunk objects.
-
-性能注意:
-  - prompt 已精简(只问 title/summary/questions,不夹带图片说明)
-  - max_tokens=1024(实际输出 ~200 token)避免浪费
-  - 单次 LLM 调用通常 1-2s
 """
 
+import asyncio
 import json
 import logging
 
@@ -44,7 +40,7 @@ class ChunkMetadataGenerator:
         prompt = METADATA_PROMPT.format(chunks_text=chunks_text)
 
         try:
-            resp = minimax_client.chat([{"role": "user", "content": prompt}], max_tokens=1024, timeout=15)
+            resp = asyncio.run(minimax_client.chat([{"role": "user", "content": prompt}], max_tokens=1024, timeout=15))
             if not resp or not resp.strip():
                 logger.warning("Metadata generation returned empty response for %d chunks", len(chunks))
                 return chunks

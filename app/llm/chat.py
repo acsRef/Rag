@@ -7,7 +7,7 @@ from typing import AsyncGenerator
 from openai import AsyncOpenAI
 
 from app.config import settings
-from app.llm.base import CircuitOpenError, TemporaryError, classify_llm_error, jittered_backoff, provider_health
+from app.llm.base import CircuitOpenError, classify_llm_error, jittered_backoff, provider_health
 
 logger = logging.getLogger(__name__)
 
@@ -19,6 +19,7 @@ class MiniMaxClient:
         self.client = AsyncOpenAI(
             api_key=settings.minimax_api_key,
             base_url=settings.minimax_base_url,
+            timeout=90.0,
         )
         self.model = settings.minimax_model
 

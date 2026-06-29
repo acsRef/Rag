@@ -15,8 +15,6 @@
   - exclusion_words 防误报关键词列表,前后 20 字符命中即跳过
 """
 
-import re
-
 
 DEFAULT_RULES = [
     {

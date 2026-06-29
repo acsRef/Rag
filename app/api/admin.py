@@ -10,8 +10,6 @@ from app.models.schemas import UserResponse, UserRoleUpdateRequest
 from app.core.pii_scanner import invalidate_cache
 from datetime import datetime
 from pydantic import BaseModel
-from typing import Literal, Optional
-
 router = APIRouter(prefix="/api/v1/admin", tags=["admin"])
 
 

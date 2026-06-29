@@ -1,6 +1,6 @@
 """All SQLAlchemy models + PG connection."""
 from sqlalchemy import create_engine, Column, String, Text, Integer, DateTime, JSON, Boolean, ForeignKey, ARRAY, text
-from sqlalchemy.orm import declarative_base, sessionmaker, relationship
+from sqlalchemy.orm import declarative_base, sessionmaker
 from pgvector.sqlalchemy import Vector
 from datetime import datetime, timezone
 import uuid

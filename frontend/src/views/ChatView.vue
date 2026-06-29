@@ -328,6 +328,19 @@ function scrollToBottom() {
   margin: 0.3em 0;
 }
 .message-bubble :deep(li) { margin: 0.15em 0; }
+.message-bubble :deep(h1), .message-bubble :deep(h2),
+.message-bubble :deep(h3), .message-bubble :deep(h4) {
+  margin: 0.6em 0 0.2em;
+  font-size: 1em;
+  line-height: 1.3;
+}
+.message-bubble :deep(h3) { font-weight: 600; }
+.message-bubble :deep(h4) { font-weight: 500; }
+.message-bubble :deep(hr) {
+  margin: 0.6em 0;
+  border: none;
+  border-top: 1px solid var(--border);
+}
 .message-bubble :deep(blockquote) {
   border-left: 3px solid var(--accent);
   margin: 0.4em 0;

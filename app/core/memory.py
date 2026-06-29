@@ -13,6 +13,7 @@ Token budget layout (config.py):
 
 import logging
 import threading
+from typing import Optional
 
 from app.store.db import get_db_ctx, Message, Conversation, new_id
 from app.config import settings
@@ -273,7 +274,7 @@ def _get_outside_window(all_msgs: list) -> list:
     return []
 
 
-def _acquire_lock(conversation_id: str) -> threading.Lock | None:
+def _acquire_lock(conversation_id: str) -> Optional[threading.Lock]:
     with _locks_guard:
         if conversation_id not in _summary_locks:
             _summary_locks[conversation_id] = threading.Lock()

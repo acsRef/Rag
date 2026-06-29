@@ -149,7 +149,7 @@ class TextChunker:
         """Return the last N sentences of text by splitting on sentence-ending punctuation."""
         if n <= 0 or not text:
             return ""
-        sentences = re.split(r"(?<=[。！？.!?\n])\s*", text)
+        sentences = re.split(r"(?<=[。！？!?\n])\s*|(?<!\d)\.(?!\d)\s*", text)
         sentences = [s.strip() for s in sentences if s.strip()]
         if len(sentences) <= n:
             return text
@@ -210,8 +210,8 @@ class TextChunker:
         return [p.strip() for p in parts if p.strip()]
 
     def _split_by_sentences(self, text: str) -> list[str]:
-        """Split at sentence-ending punctuation."""
-        parts = re.split(r"(?<=[。！？.!?\n])\s*", text)
+        """Split at sentence-ending punctuation (but not on `.` in numbers like `5.3`)."""
+        parts = re.split(r"(?<=[。！？!?\n])\s*|(?<!\d)\.(?!\d)\s*", text)
         return [p.strip() for p in parts if p.strip()]
 
     def _hard_split(self, text: str, title: str, section_path: list[str]) -> list[Chunk]:
@@ -239,12 +239,17 @@ class TextChunker:
         return result
 
     def _find_break_point(self, text: str, limit: int) -> int:
-        """Find best split position near limit: prefers newline > punctuation > comma > space."""
+        """Find best split position near limit: paragraph > newline > sentence > comma > space.
+
+        Avoids splitting mid-word/number (e.g. inside `5.3` or `hello`).
+        """
         if limit >= len(text):
             return len(text)
         candidates = [
+            (r"\n\n", 70),
             (r"\n", 80),
-            (r"[。！？.!?]", 90),
+            (r"[。！？!?]", 90),
+            (r"(?<!\d)\.(?!\d)", 90),
             (r"[，、,]", 95),
             (r"\s", 100),
         ]
@@ -254,6 +259,10 @@ class TextChunker:
         for pattern, priority in candidates:
             for m in re.finditer(pattern, text[search_start:limit]):
                 pos = search_start + m.end()
+                if pos > 0 and pos < len(text):
+                    next_ch = text[pos]
+                    if re.match(r'[\u4e00-\u9fff\w]', next_ch) and pattern in (r"\n", r"\s"):
+                        continue
                 if pos > 0 and priority < best_priority:
                     best = pos
                     best_priority = priority

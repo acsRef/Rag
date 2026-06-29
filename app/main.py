@@ -6,6 +6,7 @@ from app.api.documents import router as documents_router
 from app.api.auth import router as auth_router
 from app.api.admin import router as admin_router
 from app.api.kb import router as kb_router
+from app.api.diagnostics import router as diag_router
 from app.store.db import init_db, get_session, Document
 from app.store.auth_store import seed_defaults
 from app.core.pii_rules import seed_pii_rules
@@ -30,11 +31,13 @@ app.include_router(admin_router)
 app.include_router(kb_router)
 app.include_router(documents_router)
 app.include_router(chat_router)
+app.include_router(diag_router)
 
 # Mount diagnostics static directory (for JSON records + HTML page)
 _diag_dir = Path(settings.diagnostics_dir)
 _diag_dir.mkdir(parents=True, exist_ok=True)
 app.mount("/diagnostics", StaticFiles(directory=str(_diag_dir), html=True), name="diagnostics")
+app.mount("/tools", StaticFiles(directory="tools"), name="tools")
 
 
 @app.on_event("startup")
@@ -83,9 +86,10 @@ def health():
 
 
 if __name__ == "__main__":
+    import sys
     uvicorn.run(
         "app.main:app",
         host=settings.host,
         port=settings.port,
-        reload=True,
+        reload="--reload" in sys.argv,
     )

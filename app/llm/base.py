@@ -202,28 +202,6 @@ class ProviderHealth:
 provider_health = ProviderHealth()
 
 
-# ------------------------------------------------------------------
-# Retry helpers
-# ------------------------------------------------------------------
-
-def _should_retry(exc: Exception, status_code: int | None = None) -> bool:
-    """Determine whether an exception is transient and worth retrying.
-
-    Never retry 4xx errors — those are permanent (bad request, auth failure).
-    Retry 5xx, timeouts, and connection-level errors.
-    """
-    if isinstance(exc, CircuitOpenError):
-        return False
-    if status_code is not None:
-        if 400 <= status_code < 500:
-            return False
-        if status_code >= 500:
-            return True
-    # Timeout / connection errors from httpx / OpenAI SDK
-    name = type(exc).__name__.lower()
-    return any(kw in name for kw in ("timeout", "connection", "network", "read"))
-
-
 def jittered_backoff(attempt: int, base: float = 1.0) -> float:
     """Exponential backoff with jitter."""
     return base * (2 ** attempt) + random.uniform(0, 0.5)

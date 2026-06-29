@@ -3,11 +3,12 @@
 import asyncio
 import logging
 import random
+import time
 
 from openai import AsyncOpenAI, RateLimitError, APIStatusError
 
 from app.config import settings
-from app.llm.base import CircuitOpenError, TemporaryError, classify_llm_error, provider_health
+from app.llm.base import CircuitOpenError, classify_llm_error, provider_health
 
 logger = logging.getLogger(__name__)
 
@@ -41,14 +42,36 @@ class SFEmbedding:
     provider = "siliconflow"
 
     def __init__(self):
-        self.client = AsyncOpenAI(
-            api_key=settings.siliconflow_api_key,
-            base_url=settings.siliconflow_base_url,
-            timeout=90.0,
-            max_retries=0,
-        )
         self.model = settings.embedding_model
         self.limiter = RateLimiter(settings.embedding_rate_limit_rps)
+        self._client: AsyncOpenAI | None = None
+        self._client_loop_id: int | None = None
+
+    @property
+    def client(self) -> AsyncOpenAI:
+        """Lazy AsyncOpenAI client that recreates if the event loop changed.
+
+        httpx.AsyncClient is tied to the event loop that created it. If we
+        call embed from a synchronous context (e.g. indexer via asyncio.run),
+        a new loop is created and then closed, corrupting the client for the
+        main async loop. Recreating on loop change avoids this entirely.
+        """
+        try:
+            current_loop = asyncio.get_running_loop()
+            current_id = id(current_loop)
+        except RuntimeError:
+            current_loop = None
+            current_id = -1
+
+        if self._client is None or self._client_loop_id != current_id:
+            self._client = AsyncOpenAI(
+                api_key=settings.siliconflow_api_key,
+                base_url=settings.siliconflow_base_url,
+                timeout=90.0,
+                max_retries=0,
+            )
+            self._client_loop_id = current_id
+        return self._client
 
     # ------------------------------------------------------------------
     # Circuit breaker helpers
