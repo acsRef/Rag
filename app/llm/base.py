@@ -45,6 +45,7 @@ class CircuitBreaker:
     last_success_time: float = 0.0
     _total_failures: int = 0   # lifetime counter for diagnostics
     _total_successes: int = 0  # lifetime counter for diagnostics
+    _probe_in_flight: bool = False  # guard: only one HALF_OPEN probe at a time
 
     # ------------------------------------------------------------------
     # Public API
@@ -58,6 +59,7 @@ class CircuitBreaker:
             elapsed = time.monotonic() - self.last_failure_time
             if elapsed >= self.cooldown_seconds:
                 self.state = CircuitState.HALF_OPEN
+                self._probe_in_flight = False
                 logger.info(
                     "Circuit breaker HALF_OPEN (probing after %.1fs cooldown)",
                     elapsed,
@@ -65,11 +67,15 @@ class CircuitBreaker:
                 return True
             return False
         # HALF_OPEN — allow exactly one probe
+        if self._probe_in_flight:
+            return False
+        self._probe_in_flight = True
         return True
 
     def on_success(self) -> None:
         """Record a successful request."""
         self._total_successes += 1
+        self._probe_in_flight = False
         if self.state != CircuitState.CLOSED:
             logger.info("Circuit breaker CLOSED (recovered)")
         self.state = CircuitState.CLOSED
@@ -79,6 +85,7 @@ class CircuitBreaker:
     def on_failure(self) -> None:
         """Record a failed request."""
         self._total_failures += 1
+        self._probe_in_flight = False
         self.failure_count += 1
         self.last_failure_time = time.monotonic()
 
@@ -212,7 +219,7 @@ def jittered_backoff(attempt: int, base: float = 1.0) -> float:
 # ------------------------------------------------------------------
 
 _JSON_FENCE_PATTERN = re.compile(
-    r"(?:```(?:json)?\s*)?\s*(\{.*?\}|\[.*?\])\s*(?:```)?",
+    r"(?:```(?:json)?\s*)?\s*(\{(?:[^{}]|\{(?:[^{}]|\{[^{}]*\})*\})*\}|\[(?:[^\[\]]|\[(?:[^\[\]]|\[[^\[\]]*\])*\])*\])\s*(?:```)?",
     re.DOTALL,
 )
 

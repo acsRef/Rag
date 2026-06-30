@@ -7,7 +7,7 @@ from typing import AsyncGenerator
 from openai import AsyncOpenAI
 
 from app.config import settings
-from app.llm.base import CircuitOpenError, classify_llm_error, jittered_backoff, provider_health
+from app.llm.base import CircuitOpenError, PermanentError, classify_llm_error, jittered_backoff, provider_health
 
 logger = logging.getLogger(__name__)
 
@@ -16,12 +16,27 @@ class MiniMaxClient:
     provider = "minimax"
 
     def __init__(self):
-        self.client = AsyncOpenAI(
-            api_key=settings.minimax_api_key,
-            base_url=settings.minimax_base_url,
-            timeout=90.0,
-        )
+        self._client: AsyncOpenAI | None = None
+        self._client_loop_id: int | None = None
         self.model = settings.minimax_model
+
+    @property
+    def client(self) -> AsyncOpenAI:
+        try:
+            current_loop = asyncio.get_running_loop()
+            current_id = id(current_loop)
+        except RuntimeError:
+            current_loop = None
+            current_id = -1
+
+        if self._client is None or self._client_loop_id != current_id:
+            self._client = AsyncOpenAI(
+                api_key=settings.minimax_api_key,
+                base_url=settings.minimax_base_url,
+                timeout=90.0,
+            )
+            self._client_loop_id = current_id
+        return self._client
 
     # ------------------------------------------------------------------
     # Circuit breaker helpers
@@ -64,18 +79,20 @@ class MiniMaxClient:
                 max_tokens=4096,
             )
             first_token = True
-            async for chunk in response:
-                if first_token:
-                    self._on_success()
-                    first_token = False
-                delta = chunk.choices[0].delta if chunk.choices else None
-                if delta and delta.content:
-                    yield delta.content
+            async with response:
+                async for chunk in response:
+                    if first_token:
+                        self._on_success()
+                        first_token = False
+                    delta = chunk.choices[0].delta if chunk.choices else None
+                    if delta and delta.content:
+                        yield delta.content
         except CircuitOpenError:
             raise
         except Exception as e:
-            self._on_failure()
             typed, _ = classify_llm_error(e)
+            if not isinstance(typed, PermanentError):
+                self._on_failure()
             raise typed
 
     async def chat(
@@ -105,8 +122,9 @@ class MiniMaxClient:
             except CircuitOpenError:
                 raise
             except Exception as e:
-                self._on_failure()
                 typed, should_retry = classify_llm_error(e)
+                if not isinstance(typed, PermanentError):
+                    self._on_failure()
                 if not should_retry:
                     raise typed
                 if attempt < max_retries:

@@ -1,5 +1,6 @@
 """Knowledge Base CRUD API."""
 from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy import or_
 from app.store.db import get_session, KnowledgeBase, KBRoleAccess, Document, Chunk, PiiAlert, PiiHold
 from app.middleware.auth import get_current_user
 from app.models.schemas import KBCreateRequest, KBResponse, KBRoleAccessRequest
@@ -30,12 +31,19 @@ def list_kb(current_user: dict = Depends(get_current_user)):
         if can_read_all:
             kbs = session.query(KnowledgeBase).order_by(KnowledgeBase.created_at.desc()).all()
         else:
+            has_roles = bool(role_ids)
+            owner_cond = KnowledgeBase.owner_id == current_user["id"]
+            public_cond = KnowledgeBase.visibility == "public"
+            conditions = [or_(public_cond, owner_cond)]
+            if has_roles:
+                conditions.append(
+                    KnowledgeBase.visibility.in_(["internal", "restricted"]) &
+                    KnowledgeBase.id.in_(
+                        session.query(KBRoleAccess.kb_id).filter(KBRoleAccess.role_id.in_(role_ids)).subquery()
+                    )
+                )
             kbs = session.query(KnowledgeBase).filter(
-                (KnowledgeBase.visibility == "public") |
-                (KnowledgeBase.visibility.in_(["internal", "restricted"]) &
-                 KnowledgeBase.id.in_(
-                     session.query(KBRoleAccess.kb_id).filter(KBRoleAccess.role_id.in_(role_ids)).subquery()
-                 ))
+                *conditions
             ).order_by(KnowledgeBase.created_at.desc()).all()
         return [KBResponse(id=k.id, name=k.name, visibility=k.visibility, owner_id=k.owner_id) for k in kbs]
     finally:
@@ -56,6 +64,9 @@ def delete_kb(kb_id: str, current_user: dict = Depends(get_current_user)):
         # Collect doc IDs before deletion (needed for PII cleanup)
         doc_ids = [r[0] for r in session.query(Document.document_id).filter(Document.kb_id == kb_id).all()]
         if doc_ids:
+            session.query(DocRoleAccess).filter(
+                DocRoleAccess.document_id.in_(doc_ids)
+            ).delete(synchronize_session=False)
             session.query(Chunk).filter(Chunk.document_id.in_(doc_ids)).delete(synchronize_session=False)
             session.query(Document).filter(Document.kb_id == kb_id).delete()
             session.query(PiiAlert).filter(
@@ -64,6 +75,7 @@ def delete_kb(kb_id: str, current_user: dict = Depends(get_current_user)):
             session.query(PiiHold).filter(
                 PiiHold.source_id.in_(doc_ids), PiiHold.source_type == "document"
             ).delete(synchronize_session=False)
+        session.query(KBRoleAccess).filter(KBRoleAccess.kb_id == kb_id).delete()
         session.delete(kb)
         session.commit()
         return {"ok": True}

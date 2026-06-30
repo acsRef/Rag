@@ -11,6 +11,7 @@ from app.config import settings
 from typing import AsyncGenerator
 import asyncio
 import json
+import logging
 import re
 import time
 
@@ -55,10 +56,17 @@ def _build_sources(chunks: list[RetrievedChunk]) -> list[SourceInfo]:
 
 _NL = "\\n"  # literal backslash-n for SSE JSON encoding
 
+
+def _sse_safe(text: str) -> str:
+    """Escape text for safe SSE data field (remove \r, encode \n)."""
+    return text.replace(chr(10), _NL).replace(chr(13), "")
+
 def _norm(text: str) -> str:
-    """Collapse 3+ consecutive newlines to 2, so markdown renders without excessive gaps."""
-    return re.sub(r'\n{3,}', '\n\n', text)
-_PRONOUN_PATTERNS = ("它", "其", "这", "那", "该", "上述", "上面", "前面", "下面", "这个", "那个", "这些", "那些")
+    text = re.sub(r'\n{3,}', '\n\n', text)
+    # Collapse blank lines between consecutive list items
+    text = re.sub(r'(\n\s*(?:[-*]|\d+\.)\s.+\n)\n+(?=\s*(?:[-*]|\d+\.)\s)', r'\1', text)
+    return text.strip()
+_PRONOUN_PATTERNS = ("它", "其", "这", "那", "该", "上述", "上面", "前面", "下面", "这个", "那个", "这些", "那些", "哪", "什么")
 _COMPLEX_PATTERNS = ("和", "与", "以及", "区别", "对比", "比较", "相比", "还有", "差异", "分别")
 
 
@@ -88,8 +96,7 @@ class RAGPipeline:
         )
         yield f"event: metadata\ndata: {json.dumps({'conversation_id': conv_id})}\n\n"
 
-        ctx: DiagContext | None = None
-        if settings.diagnostics_enabled:
+        if ctx is None and settings.diagnostics_enabled:
             ctx = DiagContext(query=req.query)
             ctx.conversation_id = conv_id
 
@@ -140,8 +147,8 @@ class RAGPipeline:
         # --- Retrieve ---
         yield "event: status\ndata: {\"phase\":\"retrieving\",\"message\":\"正在检索知识库...\"}\n\n"
         all_chunks: list[RetrievedChunk] = []
-        has_retrieval = False
-        for sub_q in sub_queries:
+
+        async def _retrieve_one(sub_q: str) -> list[RetrievedChunk]:
             intent = None
             if not simple:
                 intent = await intent_classifier.classify(sub_q, all_kb_ids, ctx=ctx)
@@ -154,21 +161,28 @@ class RAGPipeline:
                         ],
                         "intent_type": intent.intent_type,
                     })
-                if intent.intent_type == "SYSTEM":
-                    continue
-            has_retrieval = True
             try:
-                chunks = await retrieval_engine.retrieve(
+                return await retrieval_engine.retrieve(
                     sub_q, intent,
                     user_role_ids=user_role_ids,
                     can_read_all=can_read_all,
                     ctx=ctx,
                 )
             except Exception:
-                chunks = []
+                logging.getLogger(__name__).exception("retrieve.sub_query_failed q=%s", sub_q[:40])
+                return []
+
+        for i, sub_q in enumerate(sub_queries):
+            yield f"event: status\ndata: {json.dumps({'phase':'retrieving','message':f'正在检索子问题 ({i+1}/{len(sub_queries)})...'})}\n\n"
+
+        if len(sub_queries) > 1:
+            results_list = await asyncio.gather(*[_retrieve_one(q) for q in sub_queries])
+        else:
+            results_list = [await _retrieve_one(sub_queries[0])]
+        for chunks in results_list:
             all_chunks.extend(chunks)
 
-        if not has_retrieval:
+        if not all_chunks:
             try:
                 chunks = await retrieval_engine.retrieve(
                     req.query, None,
@@ -277,23 +291,23 @@ class RAGPipeline:
                         before = tag_buffer[:idx]
                         if before.strip():
                             answer_text += before
-                            yield f"event: token\ndata: {_norm(before).replace(chr(10), _NL)}\n\n"
+                            yield f"event: token\ndata: {_sse_safe(_norm(before))}\n\n"
                         tag_buffer = tag_buffer[idx + 7:]  # skip "<think>"
                         tag_state = _STATE_IN_THINK
-                    elif len(tag_buffer) > 7 and "<" not in tag_buffer[-8:]:
-                        # No tag start possible — safe to emit
+                    elif len(tag_buffer) > 60 and "<" not in tag_buffer[-8:]:
+                        # No tag start possible — safe to emit (buffer 60+ chars so _norm has context)
                         answer_text += tag_buffer[:-3] if len(tag_buffer) > 3 else tag_buffer
                         chunk = tag_buffer
                         tag_buffer = ""
                         if chunk.strip():
-                            yield f"event: token\ndata: {_norm(chunk).replace(chr(10), _NL)}\n\n"
-                    elif len(tag_buffer) > 20:
+                            yield f"event: token\ndata: {_sse_safe(_norm(chunk))}\n\n"
+                    elif len(tag_buffer) > 120:
                         # Still buffering but it's long enough — force emit
                         answer_text += tag_buffer
                         chunk = tag_buffer
                         tag_buffer = ""
                         if chunk.strip():
-                            yield f"event: token\ndata: {_norm(chunk).replace(chr(10), _NL)}\n\n"
+                            yield f"event: token\ndata: {_sse_safe(_norm(chunk))}\n\n"
 
                 elif tag_state == _STATE_IN_THINK:
                     idx = tag_buffer.find("</think>")
@@ -301,7 +315,7 @@ class RAGPipeline:
                         think_chunk = tag_buffer[:idx]
                         thinking_text += think_chunk
                         if think_chunk.strip():
-                            yield f"event: thinking\ndata: {think_chunk.replace(chr(10), _NL)}\n\n"
+                            yield f"event: thinking\ndata: {_sse_safe(think_chunk)}\n\n"
                         tag_buffer = tag_buffer[idx + 8:]  # skip "</think>"
                         tag_state = _STATE_AFTER_THINK
                     elif len(tag_buffer) > 3 and "<" not in tag_buffer[-4:]:
@@ -309,14 +323,14 @@ class RAGPipeline:
                         emit_chunk = tag_buffer[:-2] if len(tag_buffer) > 2 else ""
                         thinking_text += emit_chunk
                         if emit_chunk.strip():
-                            yield f"event: thinking\ndata: {emit_chunk.replace(chr(10), _NL)}\n\n"
+                            yield f"event: thinking\ndata: {_sse_safe(emit_chunk)}\n\n"
                         tag_buffer = tag_buffer[-2:] if len(tag_buffer) > 2 else tag_buffer
 
                 elif tag_state == _STATE_AFTER_THINK:
                     # Everything after </think> is answer
                     answer_text += tag_buffer
                     if tag_buffer.strip():
-                        yield f"event: token\ndata: {_norm(tag_buffer).replace(chr(10), _NL)}\n\n"
+                        yield f"event: token\ndata: {_sse_safe(_norm(tag_buffer))}\n\n"
                     tag_buffer = ""
 
         except CircuitOpenError:
@@ -361,7 +375,10 @@ class RAGPipeline:
             yield "event: done\ndata: {}\n\n"
             return
 
-        # Normal completion
+        # Normal completion — final cleanup of cross-chunk whitespace
+        answer_text = _norm(answer_text)
+        if thinking_text:
+            thinking_text = _norm(thinking_text)
         if answer_text:
             await conversation_memory.add_message(
                 conv_id, "assistant",

@@ -11,6 +11,7 @@ Token budget layout (config.py):
   Total capped at prompt_max_tokens(10000),超出时按 chunks→history→summary 倒序裁剪.
 """
 
+import asyncio
 import logging
 import threading
 from typing import Optional
@@ -136,36 +137,36 @@ class ConversationMemory:
         status: str = "completed",
         user_id: str = "default_user",
     ) -> None:
-        with get_db_ctx() as session:
-            conv = session.query(Conversation).filter_by(
-                conversation_id=conversation_id
-            ).first()
-            # Upsert for streaming messages — same conversation+role, update in place
-            if status == "streaming":
-                existing = (
-                    session.query(Message)
-                    .filter_by(conversation_id=conversation_id, status="streaming")
-                    .first()
-                )
-                if existing:
-                    existing.content = content
-                    existing.thinking_content = thinking_content
-                    existing.metadata_json = existing.metadata_json or {}
-            else:
-                msg = Message(
-                    message_id=new_id(),
-                    conversation_id=conversation_id,
-                    user_id=user_id,
-                    role=role,
-                    content=content,
-                    thinking_content=thinking_content,
-                    status=status,
-                )
-                session.add(msg)
-            if conv:
-                conv.updated_at = datetime.now(timezone.utc)
-            session.commit()
-
+        def _sync():
+            with get_db_ctx() as session:
+                conv = session.query(Conversation).filter_by(
+                    conversation_id=conversation_id
+                ).first()
+                if status == "streaming":
+                    existing = (
+                        session.query(Message)
+                        .filter_by(conversation_id=conversation_id, status="streaming")
+                        .first()
+                    )
+                    if existing:
+                        existing.content = content
+                        existing.thinking_content = thinking_content
+                        existing.metadata_json = existing.metadata_json or {}
+                else:
+                    msg = Message(
+                        message_id=new_id(),
+                        conversation_id=conversation_id,
+                        user_id=user_id,
+                        role=role,
+                        content=content,
+                        thinking_content=thinking_content,
+                        status=status,
+                    )
+                    session.add(msg)
+                if conv:
+                    conv.updated_at = datetime.now(timezone.utc)
+                session.commit()
+        await asyncio.to_thread(_sync)
         await self._maybe_summarize(conversation_id)
 
     # ------------------------------------------------------------------
@@ -201,12 +202,18 @@ class ConversationMemory:
             return
 
         # Build the appropriate prompt (fresh vs incremental update)
-        if conv.summary:
+        try:
+            has_summary = bool(conv.summary)
+            last_summary_at = conv.last_summary_at
+        except Exception:
+            has_summary = False
+            last_summary_at = None
+        if has_summary:
             new_turns = "\n".join(
                 f"{m.role}: {m.content}"
                 for m in outside_msgs
-                if (not conv.last_summary_at)
-                or (m.created_at and m.created_at > conv.last_summary_at)
+                if (not last_summary_at)
+                or (_safe_created(m) and _safe_created(m) > last_summary_at)
             )
             if not new_turns.strip():
                 return
@@ -254,6 +261,8 @@ class ConversationMemory:
             logger.exception("Summary failed for conv=%s", conversation_id[:8])
         finally:
             lock.release()
+            with _locks_guard:
+                _summary_locks.pop(conversation_id, None)
 
 
 # ------------------------------------------------------------------
@@ -282,6 +291,13 @@ def _acquire_lock(conversation_id: str) -> Optional[threading.Lock]:
     if not lock.acquire(blocking=False):
         return None
     return lock
+
+
+def _safe_created(msg) -> Optional[datetime]:
+    try:
+        return msg.created_at
+    except Exception:
+        return None
 
 
 conversation_memory = ConversationMemory()

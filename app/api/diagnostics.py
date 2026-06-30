@@ -64,3 +64,37 @@ def diag_detail(diag_id: str):
             except (json.JSONDecodeError, OSError):
                 raise HTTPException(status_code=500, detail="Failed to read diagnostic file")
     raise HTTPException(status_code=404, detail="Diagnostic not found")
+
+
+@router.get("/chunk-docs")
+def diag_chunk_docs():
+    chunk_dir = DIAG_DIR / "chunks"
+    if not chunk_dir.exists():
+        return []
+    docs = []
+    for f in sorted(chunk_dir.iterdir()):
+        if f.suffix == ".json":
+            try:
+                with open(f, encoding="utf-8") as fh:
+                    data = json.load(fh)
+                    docs.append({
+                        "document_id": data.get("document_id", f.stem),
+                        "filename": data.get("filename", ""),
+                        "chunk_count": len(data.get("chunks", [])),
+                        "section_count": len(data.get("sections", [])),
+                    })
+            except (json.JSONDecodeError, OSError):
+                pass
+    return docs
+
+
+@router.get("/chunk-doc/{document_id}")
+def diag_chunk_doc(document_id: str):
+    path = DIAG_DIR / "chunks" / f"{document_id}.json"
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="Chunk diagnostic not found")
+    try:
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    except (json.JSONDecodeError, OSError):
+        raise HTTPException(status_code=500, detail="Failed to read chunk diagnostic file")

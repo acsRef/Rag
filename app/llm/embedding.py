@@ -8,30 +8,32 @@ import time
 from openai import AsyncOpenAI, RateLimitError, APIStatusError
 
 from app.config import settings
-from app.llm.base import CircuitOpenError, classify_llm_error, provider_health
+from app.llm.base import CircuitOpenError, PermanentError, classify_llm_error, jittered_backoff, provider_health
 
 logger = logging.getLogger(__name__)
 
 
 class RateLimiter:
-    """Token-bucket rate limiter — async."""
+    """Token-bucket rate limiter — async, with lock."""
 
     def __init__(self, rps: int):
         self.rps = rps
         self.tokens = float(rps)
         self.last = time.monotonic()
+        self._lock = asyncio.Lock()
 
     async def acquire(self):
-        now = time.monotonic()
-        elapsed = now - self.last
-        self.last = now
-        self.tokens = min(float(self.rps), self.tokens + elapsed * self.rps)
-        if self.tokens < 1:
-            sleep_for = (1 - self.tokens) / self.rps
-            await asyncio.sleep(sleep_for)
-            self.tokens = 0
-        else:
-            self.tokens -= 1
+        async with self._lock:
+            now = time.monotonic()
+            elapsed = now - self.last
+            self.last = now
+            self.tokens = min(float(self.rps), self.tokens + elapsed * self.rps)
+            if self.tokens < 1:
+                sleep_for = (1 - self.tokens) / self.rps
+                await asyncio.sleep(sleep_for)
+                self.tokens = 0
+            else:
+                self.tokens -= 1
 
 
 # Kept as a module-level import to avoid circular import on first eval
@@ -67,7 +69,7 @@ class SFEmbedding:
             self._client = AsyncOpenAI(
                 api_key=settings.siliconflow_api_key,
                 base_url=settings.siliconflow_base_url,
-                timeout=90.0,
+                timeout=15.0,
                 max_retries=0,
             )
             self._client_loop_id = current_id
@@ -96,34 +98,25 @@ class SFEmbedding:
     # Public API
     # ------------------------------------------------------------------
 
-    async def embed(self, text: str) -> list[float]:
-        self._check_breaker()
-        await self.limiter.acquire()
-        try:
-            resp = await self.client.embeddings.create(model=self.model, input=text)
-            self._on_success()
-            return resp.data[0].embedding
-        except CircuitOpenError:
-            raise
-        except Exception as e:
-            self._on_failure()
-            typed, _ = classify_llm_error(e)
-            logger.exception("Embedding API failed for single text: %s", typed)
-            raise typed
-
-    async def embed_batch(self, texts: list[str]) -> list[list[float]]:
-        self._check_breaker()
-        await self.limiter.acquire()
-        try:
-            resp = await self.client.embeddings.create(model=self.model, input=texts)
-            self._on_success()
-            return [d.embedding for d in resp.data]
-        except CircuitOpenError:
-            raise
-        except Exception as e:
-            self._on_failure()
-            logger.exception("Embedding API failed for batch of %d texts", len(texts))
-            raise RuntimeError("向量服务暂不可用，请稍后重试") from e
+    async def embed(self, text: str, max_retries: int = 1) -> list[float]:
+        for attempt in range(max_retries + 1):
+            self._check_breaker()
+            await self.limiter.acquire()
+            try:
+                resp = await self.client.embeddings.create(model=self.model, input=text)
+                self._on_success()
+                return resp.data[0].embedding
+            except CircuitOpenError:
+                raise
+            except Exception as e:
+                typed, should_retry = classify_llm_error(e)
+                if not isinstance(typed, PermanentError):
+                    self._on_failure()
+                if should_retry and attempt < max_retries:
+                    await asyncio.sleep(jittered_backoff(attempt))
+                    continue
+                logger.exception("Embedding API failed for single text: %s", typed)
+                raise typed
 
     async def embed_single_chunk(self, text: str, attempt: int = 0) -> tuple[list[float] | None, str | None]:
         self._check_breaker()

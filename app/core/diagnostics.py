@@ -14,6 +14,7 @@ Usage:
 
 import json
 import secrets
+import threading
 import time
 from datetime import datetime
 from pathlib import Path
@@ -23,6 +24,7 @@ from app.config import settings
 
 
 DIAG_DIR = Path(settings.diagnostics_dir)
+_diag_write_lock = threading.Lock()
 
 
 class DiagContext:
@@ -84,10 +86,11 @@ class DiagContext:
         """Persist the diagnostic record as a JSON file and refresh the index."""
         record = self._build_record()
         path = self._ensure_path()
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(record, f, ensure_ascii=False, indent=2)
-        self._update_index(record)
+        with _diag_write_lock:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(record, f, ensure_ascii=False, indent=2)
+            self._update_index(record)
         self._saved = True
 
     # ------------------------------------------------------------------

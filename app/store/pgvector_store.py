@@ -27,7 +27,8 @@ def add_chunks(chunks_data: list[dict]):
     """
     session = get_session()
     try:
-        for c in chunks_data:
+        base_ts = utc_now()
+        for i, c in enumerate(chunks_data):
             session.add(Chunk(
                 chunk_id=c["chunk_id"],
                 document_id=c["document_id"],
@@ -42,7 +43,7 @@ def add_chunks(chunks_data: list[dict]):
                 content_hash=c.get("content_hash", ""),
                 visibility=c.get("visibility", "public"),
                 allowed_roles=c.get("allowed_roles", []),
-                created_at=utc_now(),
+                created_at=base_ts.replace(microsecond=base_ts.microsecond + i),
             ))
         session.commit()
     finally:
@@ -253,6 +254,34 @@ def delete_chunks_by_document(document_id: str):
         session.close()
 
 
+def replace_chunks(document_id: str, chunks_data: list[dict]):
+    """Delete old chunks and insert new ones in a single transaction."""
+    session = get_session()
+    try:
+        session.query(Chunk).filter(Chunk.document_id == document_id).delete()
+        base_ts = utc_now()
+        for i, c in enumerate(chunks_data):
+            session.add(Chunk(
+                chunk_id=c["chunk_id"],
+                document_id=c["document_id"],
+                kb_id=c["kb_id"],
+                text=c["text"],
+                embedding=c["embedding"],
+                title=c.get("title", ""),
+                summary=c.get("summary", ""),
+                questions=c.get("questions", ""),
+                section_path=c.get("section_path", ""),
+                search_text=c.get("search_text", ""),
+                content_hash=c.get("content_hash", ""),
+                visibility=c.get("visibility", "public"),
+                allowed_roles=c.get("allowed_roles", []),
+                created_at=base_ts.replace(microsecond=base_ts.microsecond + i),
+            ))
+        session.commit()
+    finally:
+        session.close()
+
+
 def list_kb_ids() -> list[str]:
     """Return all distinct kb_ids that have chunks."""
     session = get_session()
@@ -269,9 +298,7 @@ def get_neighbor_chunks(
 ) -> dict[str, dict[str, str]]:
     """Fetch neighboring chunks for a list of anchor chunk_ids.
 
-    Parses chunk_id format ``{document_id}_{seq}``, then for each anchor
-    returns ``{"before": ..., "after": ...}`` with neighbor text merged.
-
+    Uses a single SQL range query per document, avoiding full-document load.
     Returns dict keyed by anchor chunk_id.
     """
     import re
@@ -279,7 +306,6 @@ def get_neighbor_chunks(
     if not chunk_ids:
         return {}
 
-    # Parse anchor chunk_ids into (doc_id, seq) pairs
     anchors: list[tuple[str, int, str]] = []
     for cid in chunk_ids:
         m = re.match(r"^(.+)_(\d+)$", cid)
@@ -289,7 +315,6 @@ def get_neighbor_chunks(
     if not anchors:
         return {}
 
-    # Group by document_id and build query ranges
     from collections import defaultdict
     doc_ranges: dict[str, list[tuple[int, int]]] = defaultdict(list)
     for doc_id, seq, cid in anchors:
@@ -304,23 +329,25 @@ def get_neighbor_chunks(
             query_min = max(0, min_seq - expand_n)
             query_max = max_seq + expand_n
 
+            from sqlalchemy import text, bindparam
+            seq_filter = text(
+                "CAST(SUBSTRING(chunk_id FROM '_(\\d+)$') AS INTEGER) BETWEEN :qmin AND :qmax"
+            ).bindparams(qmin=query_min, qmax=query_max)
             rows = (
                 session.query(Chunk.chunk_id, Chunk.text)
-                .filter(
-                    Chunk.document_id == doc_id,
-                )
+                .filter(Chunk.document_id == doc_id, seq_filter)
                 .order_by(Chunk.id)
                 .all()
             )
 
-            # Map seq -> text
             seq_map: dict[int, str] = {}
             for row in rows:
                 m2 = re.match(r"^.+_(\d+)$", row.chunk_id)
                 if m2:
-                    seq_map[int(m2.group(1))] = row.text
+                    seq = int(m2.group(1))
+                    if query_min <= seq <= query_max:
+                        seq_map[seq] = row.text
 
-            # For each anchor, gather before/after neighbors
             for seq, cid in seqs:
                 before_parts = []
                 for i in range(seq - expand_n, seq):
@@ -330,7 +357,6 @@ def get_neighbor_chunks(
                 for i in range(seq + 1, seq + expand_n + 1):
                     if i in seq_map:
                         after_parts.append(seq_map[i])
-
                 result[cid] = {
                     "before": "\n".join(before_parts),
                     "after": "\n".join(after_parts),

@@ -8,6 +8,7 @@ import asyncio
 import base64
 import hashlib
 import logging
+from collections import OrderedDict
 import os
 
 from app.llm.chat import minimax_client
@@ -66,12 +67,24 @@ class ImageDescriber:
     - Concurrent batch via asyncio.gather
     """
 
-    def __init__(self, max_workers=5, size_threshold=32, file_size_threshold=5 * 1024):
+    def __init__(self, max_workers=5, size_threshold=32, file_size_threshold=5 * 1024, max_cache=1000):
         self.max_workers = max_workers
         self.size_threshold = size_threshold
         self.file_size_threshold = file_size_threshold
+        self.max_cache = max_cache
         self._semaphore = asyncio.Semaphore(max_workers)
-        self._cache: dict[str, str] = {}
+        self._cache: OrderedDict[str, str] = OrderedDict()
+
+    def _cache_get(self, key: str) -> str | None:
+        val = self._cache.get(key)
+        if val is not None:
+            self._cache.move_to_end(key)
+        return val
+
+    def _cache_put(self, key: str, val: str):
+        if len(self._cache) >= self.max_cache:
+            self._cache.popitem(last=False)
+        self._cache[key] = val
 
     def _image_key(self, content: bytes) -> str:
         return hashlib.md5(content).hexdigest()
@@ -86,8 +99,9 @@ class ImageDescriber:
     async def describe(self, image_bytes: bytes, filename: str = "image.png") -> str:
         """Describe a single image via vision API, with cache."""
         key = self._image_key(image_bytes)
-        if key in self._cache:
-            return self._cache[key]
+        cached = self._cache_get(key)
+        if cached is not None:
+            return cached
 
         suffix = os.path.splitext(filename)[1].lower()
         mime = MIME_MAP.get(suffix, "image/png")
@@ -103,9 +117,9 @@ class ImageDescriber:
                 ]},
             ])
         except Exception as e:
-            resp = f"[未知] 图片描述失败：{str(e)}"
+            return f"[未知] 图片描述失败：{str(e)}"
 
-        self._cache[key] = resp
+        self._cache_put(key, resp)
         return resp
 
     async def describe_batch(self, images: list[tuple[bytes, str]]) -> list[str]:

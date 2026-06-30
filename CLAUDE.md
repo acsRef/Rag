@@ -76,7 +76,7 @@ cd frontend && npm run build   # runs vue-tsc -b && vite build
 
 **LLM providers**: MiniMax M3 (chat/vision) + SiliconFlow (embedding Qwen3-VL-Embedding-8B 4096d + rerank BAAI/bge-reranker-v2-m3)
 
-**RAG pipeline** (see [app/core/pipeline.py](app/core/pipeline.py:51)):
+**RAG pipeline** (see [app/core/pipeline.py:79](app/core/pipeline.py#L79)):
 ```
 QueryRewrite → IntentClassify (route to 1-3 KBs) → Hybrid Search (vector cosine + BM25 ts_rank, RRF merge)
 → Cross-encoder Rerank → MMR diversity (λ=0.7, ≤2 per doc) → TopK → Prompt injection → SSE stream
@@ -120,6 +120,24 @@ Strategies: `mask(partial)` (keep first 3/last 4), `mask(full)` → `[已脱敏]
 - Do **not** take over uvicorn's logger
 - Do **not** commit real API keys (`.env` is gitignored)
 
+## Diagnostics subsystem
+
+Live RAG-pipeline telemetry, recorded per request and served to a standalone HTML viewer.
+
+- **Recorder**: [app/core/diagnostics.py](app/core/diagnostics.py) — `DiagContext` accumulates per-step records (`rewrite`, `intent`, `retrieve`, `rerank`, `mmr`, `stream`, …) and writes one JSON per request under `diagnostics/YYYY-MM-DD/HHMMSS-<id>.json` + an `index.json`.
+- **API**: [app/api/diagnostics.py](app/api/diagnostics.py) — `GET /api/v1/diag/index` and `/api/v1/diag/{id}` serve the recorded telemetry.
+- **Viewer**: [tools/diagnostics.html](tools/diagnostics.html) — standalone page that fetches the diag API and renders the full pipeline chain. Open directly in a browser (no Vite build).
+
+`pipeline.execute` constructs a `DiagContext`, records each stage, and calls `ctx.save()`; SSE stream metrics are back-filled via `ctx.update("stream", ...)` after streaming completes.
+
+## Conversation memory
+
+[app/core/memory.py](app/core/memory.py) — `ConversationMemory` implements token-budget dialog memory: keeps a recent message window, summarizes older turns with the LLM when the budget is exceeded, and persists both to the DB. Conversation-level lock via `threading.Lock` (note: `threading.Lock | None` is not a valid type — use `Optional[X]` there).
+
+## LLM client layer
+
+[app/llm/](app/llm/) — async LLM clients built on `AsyncOpenAI` ([base.py](app/llm/base.py), [chat.py](app/llm/chat.py), [embedding.py](app/llm/embedding.py), [rerank.py](app/llm/rerank.py), [vision.py](app/llm/vision.py)). All LLM I/O is async — never call these from sync code or block the event loop. Vision runs concurrently with chat via async tasks.
+
 ## Next up / pending work
 
 | Task | Detail | Blocked by |
@@ -127,21 +145,23 @@ Strategies: `mask(partial)` (keep first 3/last 4), `mask(full)` → `[已脱敏]
 | 搜索质量评估框架 | `eval/` 目录 + CLI 工具，见记忆文件 `search-quality-eval.md` | 文档 + 标注数据 |
 | 异步文档处理 | Redis + ARQ 任务队列，大文件上传不阻塞 worker | 引入 Redis |
 | 成本追踪 | JSONL 计费日志，`usage/YYYY-MM-DD.jsonl` | 低优先级 |
-| 诊断 HTML 页面 | `diagnostics/html/index.html` 可视化 RAG 管线全链路 | 测试环境 |
 
 ## Key file map
 
 | Concern | Location |
 | ------- | -------- |
-| RAG main flow | [app/core/pipeline.py:51](app/core/pipeline.py) |
-| Hybrid search + RRF | [app/store/pgvector_store.py:199](app/store/pgvector_store.py) |
-| MMR algorithm | [app/core/mmr.py:12](app/core/mmr.py) |
-| PII scanner (3-layer) | [app/core/pii_scanner.py:102](app/core/pii_scanner.py) |
-| Incremental hash reuse | [app/ingestion/indexer.py:108](app/ingestion/indexer.py) |
-| Startup sequence | [app/main.py:31](app/main.py) |
-| JWT middleware | [app/middleware/auth.py:56](app/middleware/auth.py) |
-| SSE stream endpoint | [app/api/chat.py:12](app/api/chat.py) |
-| Document parser | [app/ingestion/parser.py:35](app/ingestion/parser.py) |
-| Text chunker | [app/ingestion/chunker.py:26](app/ingestion/chunker.py) |
-| Frontend SSE parser | [frontend/src/api/chat.ts:34](frontend/src/api/chat.ts) |
+| RAG main flow | [app/core/pipeline.py:79](app/core/pipeline.py#L79) `RAGPipeline.execute` |
+| Hybrid search + RRF | [app/store/pgvector_store.py:196](app/store/pgvector_store.py#L196) `hybrid_search` |
+| MMR algorithm | [app/core/mmr.py:25](app/core/mmr.py#L25) `mmr_select` |
+| PII scanner (3-layer) | [app/core/pii_scanner.py:116](app/core/pii_scanner.py#L116) `scan` |
+| Incremental hash reuse | [app/ingestion/indexer.py:97](app/ingestion/indexer.py#L97) `existing.content_hash == doc_hash` |
+| Ingestion main flow | [app/ingestion/indexer.py:31](app/ingestion/indexer.py#L31) `DocumentIndexer.index` |
+| Startup sequence | [app/main.py:44](app/main.py#L44) `startup` |
+| JWT middleware | [app/middleware/auth.py:56](app/middleware/auth.py#L56) `get_current_user` |
+| SSE stream endpoint | [app/api/chat.py:13](app/api/chat.py#L13) `stream_chat` |
+| Diag recorder | [app/core/diagnostics.py](app/core/diagnostics.py) `DiagContext` |
+| Conversation memory | [app/core/memory.py:68](app/core/memory.py#L68) `ConversationMemory` |
+| Document parser | [app/ingestion/parser.py:47](app/ingestion/parser.py#L47) `parse_bytes` |
+| Text chunker | [app/ingestion/chunker.py:51](app/ingestion/chunker.py#L51) `TextChunker.chunk` |
+| Frontend SSE parser | [frontend/src/api/chat.ts:38](frontend/src/api/chat.ts#L38) `streamChat` |
 | Config (all settings) | [app/config.py](app/config.py) |

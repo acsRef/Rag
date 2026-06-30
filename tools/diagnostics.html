@@ -59,6 +59,10 @@
   }
   #search:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-light); }
   #search::placeholder { color: var(--text3); }
+  .tab-bar { display:flex; gap:4px; margin:10px 0 8px; }
+  .tab-btn { flex:1; padding:6px 10px; border:none; border-radius:6px; font-size:12px; font-weight:500; cursor:pointer; background:var(--bg); color:var(--text3); transition:background .15s,color .15s; }
+  .tab-btn.active { background:var(--accent); color:#fff; }
+  .tab-btn:hover:not(.active) { background:var(--bg2); }
   .list-bar { display: flex; justify-content: space-between; align-items: center; margin-top: 8px; }
   .list-count { font-size: 11px; color: var(--text3); font-weight: 500; }
   #refresh-btn { font-size: 11px; font-weight: 500; color: var(--accent); cursor: pointer; background: none; border: none; padding: 4px 8px; border-radius: 6px; transition: background .15s; }
@@ -147,13 +151,18 @@
 <div id="left">
   <div id="left-header">
     <h1>&#x1F4CA; Pipeline Diagnostics</h1>
+    <div class="tab-bar">
+      <button class="tab-btn active" onclick="switchTab('qa')" id="tab-qa">💬 对话管线</button>
+      <button class="tab-btn" onclick="switchTab('chunk')" id="tab-chunk">📐 文档切分</button>
+    </div>
     <input id="search" placeholder="搜索查询..." spellcheck="false" />
     <div class="list-bar">
       <span class="list-count" id="list-count">0 条记录</span>
-      <button id="refresh-btn" onclick="loadIndex()">刷新</button>
+      <button id="refresh-btn" onclick="currentTab === 'qa' ? loadIndex() : loadChunkDocs()">刷新</button>
     </div>
   </div>
   <div id="query-list"></div>
+  <div id="chunk-doc-list" style="display:none;flex:1;overflow-y:auto;padding:8px;"></div>
   <div id="left-footer">实时数据  · 点击查询查看管线详情</div>
 </div>
 
@@ -483,8 +492,115 @@ function closeChunk() {
   document.getElementById('chunk-panel').style.display = 'none';
 }
 
-document.getElementById('search').addEventListener('input', loadIndex);
-loadIndex();
+document.getElementById('search').addEventListener('input', function() {
+  currentTab === 'qa' ? loadIndex() : loadChunkDocs();
+});
+
+/* ===== Tab system ===== */
+var currentTab = 'qa';
+
+function switchTab(name) {
+  currentTab = name;
+  document.getElementById('tab-qa').classList.toggle('active', name === 'qa');
+  document.getElementById('tab-chunk').classList.toggle('active', name === 'chunk');
+  document.getElementById('query-list').style.display = name === 'qa' ? '' : 'none';
+  document.getElementById('chunk-doc-list').style.display = name === 'chunk' ? '' : 'none';
+  document.getElementById('search').style.display = name === 'qa' ? '' : 'none';
+  document.getElementById('refresh-btn').setAttribute('onclick', name === 'qa' ? 'loadIndex()' : 'loadChunkDocs()');
+  if (name === 'qa') loadIndex();
+  else if (name === 'chunk') loadChunkDocs();
+  document.getElementById('right').innerHTML = '<div class="empty-state"><div class="icon">' + (name === 'qa' ? '📡' : '📐') + '</div><div class="label">' + (name === 'qa' ? '选择一个查询' : '选择一个文档') + '</div><div class="sublabel">' + (name === 'qa' ? '点击左侧记录查看管线详情' : '点击文档查看切分详情') + '</div></div>';
+}
+
+/* ===== Chunk doc list ===== */
+function loadChunkDocs() {
+  fetch('/api/v1/diag/chunk-docs')
+    .then(function(r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+    .then(function(docs) {
+      renderChunkDocList(docs);
+      document.getElementById('list-count').textContent = docs.length + ' 个文档';
+    })
+    .catch(function(e) {
+      document.getElementById('chunk-doc-list').innerHTML = '<div style="text-align:center;padding:30px;color:var(--text3);font-size:13px">⚠ 加载失败: ' + e.message + '</div>';
+    });
+}
+
+function renderChunkDocList(docs) {
+  var html = '';
+  for (var i = 0; i < docs.length; i++) {
+    var d = docs[i];
+    html += '<div class="query-item' + (currentDocId === d.document_id ? ' active' : '') + '" onclick="loadChunkDocDetail(\'' + esc(d.document_id) + '\')">';
+    html += '<div class="qi-top"><span class="qi-query">📄 ' + esc(d.filename) + '</span></div>';
+    html += '<div class="qi-meta">';
+    html += '<span>📐 ' + d.section_count + ' 章节</span>';
+    html += '<span>✂ ' + d.chunk_count + ' 个 chunk</span>';
+    html += '<span>🔗 ' + esc(d.document_id.slice(0,12)) + '</span>';
+    html += '</div></div>';
+  }
+  document.getElementById('chunk-doc-list').innerHTML = html || '<div style="text-align:center;padding:30px;color:var(--text3);font-size:13px">暂无文档切分数据，上传文档后再来查看</div>';
+}
+
+var currentDocId = null;
+
+function loadChunkDocDetail(docId) {
+  currentDocId = docId;
+  document.getElementById('right').innerHTML = '<div class="loading">⏳ 加载切分数据...</div>';
+  loadChunkDocs();
+  fetch('/api/v1/diag/chunk-doc/' + encodeURIComponent(docId))
+    .then(function(r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+    .then(function(data) { renderChunkDocDetail(data); })
+    .catch(function(e) {
+      document.getElementById('right').innerHTML = '<div class="loading"><div style="font-size:28px;margin-bottom:8px">⚠️</div>无法加载: ' + e.message + '</div>';
+    });
+}
+
+function renderChunkDocDetail(data) {
+  var html = '';
+  html += '<div class="detail-header"><div class="query-text">📄 ' + esc(data.filename) + '</div>';
+  html += '<div class="query-meta">';
+  html += '<span>📐 ' + (data.sections ? data.sections.length : 0) + ' 章节</span>';
+  html += '<span>✂ ' + (data.chunks ? data.chunks.length : 0) + ' 个 chunk</span>';
+  html += '<span>🔗 ' + esc((data.document_id||'').slice(0,12)) + '</span>';
+  html += '</div></div>';
+
+  /* Sections */
+  var sections = data.sections || [];
+  html += '<div class="steps-section-head">📐 文档结构（' + sections.length + ' 个章节）</div>';
+  html += '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:8px">';
+  for (var si = 0; si < sections.length; si++) {
+    var s = sections[si];
+    html += '<div class="step-card" style="padding:12px"><div style="font-size:13px;font-weight:600;margin-bottom:6px">' + (s.level ? '#'.repeat(s.level) + ' ' : '') + esc(s.title) + '</div>';
+    html += '<div style="font-size:11px;color:var(--text3);margin-bottom:4px">' + (s.elements||[]).length + ' 个元素</div>';
+    var elems = s.elements || [];
+    for (var ei = 0; ei < elems.length; ei++) {
+      var e = elems[ei];
+      var tag = e.is_atomic ? ' style="background:rgba(255,149,0,.1);color:var(--orange);"' : ' style="background:var(--bg);color:var(--text3);"';
+      html += '<span ' + tag + 'style="display:inline-block;padding:2px 6px;border-radius:4px;font-size:10px;margin:2px 2px 2px 0;font-weight:500">' + esc(e.type) + (e.is_atomic ? ' 🔒' : '') + '</span>';
+    }
+    html += '</div>';
+  }
+  html += '</div>';
+
+  /* Chunks */
+  var chunks = data.chunks || [];
+  html += '<div class="steps-section-head">✂ Chunk 列表（' + chunks.length + ' 个）</div>';
+  for (var ci = 0; ci < chunks.length; ci++) {
+    var c = chunks[ci];
+    html += '<div class="step-card"><div class="step-header">';
+    html += '<div class="step-name"><span style="color:var(--text3)">#' + (c.index+1) + '</span> ' + esc(c.title||'无标题') + '</div>';
+    html += '<div class="step-elapsed">' + c.full_len + ' 字符</div></div>';
+    html += '<div style="font-size:11px;color:var(--text3);margin-bottom:6px">';
+    if (c.section_path && c.section_path.length > 0) {
+      html += '📍 ' + esc(c.section_path.join(' > '));
+    }
+    html += '</div>';
+    html += '<div style="font-size:12px;line-height:1.5;color:var(--text2);white-space:pre-wrap;background:var(--bg);border-radius:8px;padding:10px;border:1px solid var(--border)">' + esc(c.text_preview) + (c.full_len > 400 ? '...' : '') + '</div>';
+    html += '</div>';
+  }
+
+  document.getElementById('right').innerHTML = html;
+}
 </script>
+<script>loadIndex();</script>
 </body>
 </html>

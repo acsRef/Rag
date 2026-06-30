@@ -6,6 +6,7 @@
 
 权限过滤:每个 chunk 在 SQL 层带 `visibility` / `allowed_roles`,按用户角色过滤。
 """
+import asyncio
 import logging
 import time
 
@@ -125,14 +126,20 @@ class RetrievalEngine:
         seen_ids: set[str] = set()
         results: list[dict] = []
 
-        _collect_results(target_kb_ids, query_emb, query, user_role_ids, can_read_all, top_k, seen_ids, results)
+        await asyncio.to_thread(
+            _collect_results, target_kb_ids, query_emb, query,
+            user_role_ids, can_read_all, top_k, seen_ids, results,
+        )
 
         if intent and intent.matches:
             min_confidence = min(m.score for m in intent.matches)
             if len(results) < top_k and min_confidence < 0.6:
                 all_kb_ids = pgvector_store.list_kb_ids()
                 fallback = [k for k in all_kb_ids if k not in target_kb_ids]
-                _collect_results(fallback, query_emb, query, user_role_ids, can_read_all, top_k, seen_ids, results)
+                await asyncio.to_thread(
+                    _collect_results, fallback, query_emb, query,
+                    user_role_ids, can_read_all, top_k, seen_ids, results,
+                )
 
         results.sort(key=lambda x: x["score"], reverse=True)
         candidate_k = settings.mmr_candidate_k if settings.mmr_enabled else top_k
@@ -156,8 +163,9 @@ class RetrievalEngine:
             try:
                 t_rerank = time.monotonic()
                 reranked = await sf_rerank.rerank(query, texts)
-                reranked_ids = [r["index"] for r in reranked if 0 <= r["index"] < len(results)]
-                results = [results[i] for i in reranked_ids]
+                if reranked:
+                    reranked_ids = [r["index"] for r in reranked if 0 <= r["index"] < len(results)]
+                    results = [results[i] for i in reranked_ids]
                 rerank_elapsed = (time.monotonic() - t_rerank) * 1000
                 # Milestone 4: 跨编码器重排(DEBUG,每次问答都打)
                 logger.debug(

@@ -7,6 +7,7 @@ to PostgreSQL + pgvector.
 
 import asyncio
 import hashlib
+import json
 import logging
 import time
 
@@ -78,15 +79,16 @@ class DocumentIndexer:
             }
         doc_hash = _content_hash(text)
 
+        pii_findings_cache = None  # cache PII scan to avoid 3x pass
         if settings.pii_enabled:
             from app.core.pii_scanner import scan, scan_and_reject, mask_text
             rejects = scan_and_reject(text)
             if rejects:
                 logger.info("ingest.pii_rejected doc=%s rule_count=%d", u_tag, len(rejects))
                 return self._reject_document(text, rejects, user_id, kb_id, filename)
-            pii_findings = scan(text)
-            text = mask_text(text)
-            logger.debug("ingest.pii_masked doc=%s mask_count=%d", u_tag, len(pii_findings))
+            pii_findings_cache = scan(text)
+            text = mask_text(text, findings=pii_findings_cache)
+            logger.debug("ingest.pii_masked doc=%s mask_count=%d", u_tag, len(pii_findings_cache))
 
         existing = None
         if document_id:
@@ -127,8 +129,12 @@ class DocumentIndexer:
                 pass
             return {"document_id": doc_id, "chunk_count": 0, "status": "failed"}
 
+        doc_id = document_id or new_id()
+
         for c in chunks:
             c.content_hash = _content_hash(c.text)
+
+        self._save_chunk_diag(doc_id, filename, sections, chunks)
 
         old_chunks_map: dict[str, dict] = {}
         if document_id:
@@ -157,8 +163,6 @@ class DocumentIndexer:
             )
         else:
             embed_results = []
-
-        doc_id = document_id or new_id()
         chunk_seq = 0
         new_idx = 0
         chunks_data = []
@@ -190,6 +194,7 @@ class DocumentIndexer:
             # Skip chunks whose embedding permanently failed — they would be invisible
             # to vector search and storing NULL would cause pgvector issues.
             if not is_reused and embedding is None:
+                logger.warning("ingest.skip_embedding_failed chunk=%s", chunk_id[:12])
                 continue
 
             chunks_data.append({
@@ -257,8 +262,9 @@ class DocumentIndexer:
         )
         try:
             if document_id:
-                pgvector_store.delete_chunks_by_document(document_id)
-            pgvector_store.add_chunks(chunks_data)
+                pgvector_store.replace_chunks(document_id, chunks_data)
+            else:
+                pgvector_store.add_chunks(chunks_data)
             self._save_document(doc_id, user_id, kb_id, filename, len(chunks), status, doc_hash,
                                 embedded_chunk_count=embedded_count, error_message=final_error)
             try:
@@ -300,6 +306,41 @@ class DocumentIndexer:
             "embedded_chunk_count": embedded_count,
             "message": final_error or "",
         }
+
+    def _save_chunk_diag(self, doc_id: str, filename: str, sections: list, chunks: list[Chunk]) -> None:
+        from app.core.diagnostics import DIAG_DIR
+        diag_dir = DIAG_DIR / "chunks"
+        diag_dir.mkdir(parents=True, exist_ok=True)
+        path = diag_dir / f"{doc_id}.json"
+        chunk_list = []
+        for i, c in enumerate(chunks):
+            chunk_list.append({
+                "index": i,
+                "text_preview": c.text[:400],
+                "full_len": len(c.text),
+                "title": c.title,
+                "section_path": c.section_path,
+                "content_hash": c.content_hash[:12],
+            })
+        section_list = []
+        for s in sections:
+            elem_list = []
+            for e in s.elements:
+                elem_list.append({
+                    "type": e.type,
+                    "is_atomic": e.is_atomic,
+                    "len": len(e.text),
+                    "text_preview": e.text[:100],
+                })
+            section_list.append({"title": s.title, "level": int(getattr(s, "level", 0)), "elements": elem_list})
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump({
+                "document_id": doc_id,
+                "filename": filename,
+                "chunks": chunk_list,
+                "sections": section_list,
+            }, f, ensure_ascii=False, indent=2)
+        logger.info("ingest.chunk_diag_saved doc=%s chunks=%d sections=%d", doc_id[:8], len(chunks), len(sections))
 
     def _reject_document(
         self, text: str, rejects: list, user_id: str, kb_id: str, filename: str,

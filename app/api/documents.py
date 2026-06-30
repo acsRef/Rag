@@ -213,6 +213,11 @@ async def upload_document(
                 raise HTTPException(status_code=403, detail="无权向该知识库上传文档")
 
     max_bytes = settings.max_upload_size_mb * 1024 * 1024
+    if file.size is not None and file.size > max_bytes:
+        raise HTTPException(
+            status_code=413,
+            detail=f"文件过大（{file.size//1024//1024}MB），最大允许 {settings.max_upload_size_mb}MB",
+        )
     content = await file.read()
     if len(content) > max_bytes:
         raise HTTPException(
@@ -311,6 +316,8 @@ async def document_events(request: Request):
     客户端用 EventSource 订阅即可。每完成一个 chunk 或最终状态变化时触发。
     """
     user = _resolve_sse_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Authentication required")
     queue = await subscribe_doc_events()
 
     async def event_stream() -> AsyncIterator[str]:

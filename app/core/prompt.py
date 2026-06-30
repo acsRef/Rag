@@ -153,19 +153,20 @@ class RAGPromptBuilder:
         summary: str,
         chunks: list[RetrievedChunk],
     ) -> list[dict]:
-        # Enforce total token budget: slice chunks down if needed
+        # Enforce total token budget: trim chunks first, then history
         budget = settings.prompt_max_tokens
         system_tokens = _est(SYSTEM_PROMPT)
         query_tokens = _est(query)
         available = budget - system_tokens - query_tokens
 
-        # Reserve space for history block
-        history_str = self._format_history(history, summary)
-        history_tokens = _est(history_str)
-        available -= history_tokens
+        # Trim history first so chunks have accurate budget
+        history_str, history_tokens = self._trim_history(history, summary, available // 3)
 
-        # Trim chunks to fit remaining budget
-        trimmed_chunks = self._trim_chunks(chunks, available)
+        # Remaining budget for chunks
+        chunk_budget = available - history_tokens
+        chunk_budget = max(chunk_budget, 0)
+
+        trimmed_chunks = self._trim_chunks(chunks, chunk_budget)
 
         context_str = self._format_chunks(trimmed_chunks)
 
@@ -211,33 +212,61 @@ class RAGPromptBuilder:
         return "\n\n".join(parts)
 
     def _format_history(self, history: list[dict], summary: str = "") -> str:
-        """Build the history block: summary (压缩要点) + recent turns."""
-        lines = []
-        if summary:
-            lines.append("## 对话历史摘要（上一阶段讨论的压缩要点）")
-            lines.append(summary.strip())
-            lines.append("")
-
-        lines.append("## 近期对话原文")
-        for m in history:
-            role_label = "用户" if m["role"] == "user" else "助手"
-            lines.append(f"**{role_label}**: {m['content']}")
-        return "\n".join(lines)
+        """Build the history block: summary + recent turns (used by system-only path)."""
+        result, _ = self._trim_history(history, summary, 999999)
+        return result
 
     def _trim_chunks(self, chunks: list[RetrievedChunk], token_budget: int) -> list[RetrievedChunk]:
         """Drop chunks from the end until the token estimate fits the budget.
 
-        Each chunk contributes roughly `len(text) / 1.5` + overhead for the
-        [Source N] label (~20 tokens).  At least 1 chunk is always kept.
+        If budget <= 0, return empty (no chunks to avoid overflowing prompt).
         """
-        budget = max(token_budget, 1)
+        if token_budget <= 0:
+            return []
         kept = list(chunks)
         while len(kept) > 1:
             total = sum(_est(c.text) + 20 for c in kept)
-            if total <= budget:
+            if total <= token_budget:
                 break
-            kept = kept[:-1]  # drop last (lowest-rank) chunk
+            kept = kept[:-1]
         return kept
+
+    def _trim_history(self, history: list[dict], summary: str, budget: int) -> tuple[str, int]:
+        """Build and optionally trim history to fit within budget."""
+        lines = []
+        if summary:
+            lines.append("## 对话历史摘要")
+            lines.append(summary.strip())
+            lines.append("")
+
+        if history:
+            lines.append("## 近期对话原文")
+            for m in history:
+                role_label = "用户" if m["role"] == "user" else "助手"
+                lines.append(f"**{role_label}**: {m['content']}")
+
+        full = "\n".join(lines)
+        tokens = _est(full)
+        if tokens <= budget or budget <= 0:
+            return full, tokens
+
+        # Trim from oldest turns
+        trimmed_lines = []
+        if summary:
+            trimmed_lines.append("## 对话历史摘要")
+            trimmed_lines.append(summary.strip())
+            trimmed_lines.append("")
+        trimmed_lines.append("## 近期对话原文")
+
+        for m in reversed(history):
+            candidate = "\n".join(trimmed_lines) + "\n" + f"**{'用户' if m['role'] == 'user' else '助手'}**: {m['content']}"
+            if _est(candidate) <= budget:
+                trimmed_lines.append(f"**{'用户' if m['role'] == 'user' else '助手'}**: {m['content']}")
+            else:
+                break
+
+        result = "\n".join(trimmed_lines)
+        return result, _est(result)
 
 
 def _est(text: str) -> int:

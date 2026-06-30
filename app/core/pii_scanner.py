@@ -108,7 +108,7 @@ def _has_exclusion(text: str, match_start: int, match_end: int, exclusion_words:
         return False
     window = text[max(0, match_start - 20): min(len(text), match_end + 20)]
     for word in exclusion_words:
-        if word.lower() in window.lower():
+        if re.search(r'\b' + re.escape(word) + r'\b', window, re.IGNORECASE):
             return True
     return False
 
@@ -167,16 +167,19 @@ def _partial_mask(value: str) -> str:
     return value[:3] + "*" * (len(value) - 7) + value[-4:]
 
 
-def mask_text(text: str) -> str:
+def mask_text(text: str, findings: list[PiiMatch] | None = None) -> str:
     """Scan and mask text in-place. Replaces sensitive content per strategy.
 
     - mask (partial): keep first 3 / last 4 chars
     - mask (full): replace entirely with [已脱敏]
     - audit/reject: register as alert (caller must persist), text unchanged
 
+    If `findings` is provided, reuse it; otherwise run scan() internally.
+
     Returns masked text (may be unchanged if no mask-able findings).
     """
-    findings = scan(text)
+    if findings is None:
+        findings = scan(text)
     if not findings:
         return text
 
