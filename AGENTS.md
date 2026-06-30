@@ -188,7 +188,59 @@ startup(): setup_logging() → JWT/PII_KEY校验(hard raise)
 
 ---
 
-## 8. Git LFS
+## 9. Bug Fix History (2026-06-30)
+
+**34 bugs fixed** across two rounds, touching 16+ files. All fixes verified via import chain and end-to-end test (upload 4 docs → RAG query → SSE stream complete).
+
+### Round 1 — 33 bugs (bulk fix)
+| 文件 | 修复 |
+|------|------|
+| `app/llm/rerank.py` | 4xx 不触发熔断(仅 5xx 调 `_on_failure`); 复用 httpx.AsyncClient |
+| `app/core/retrieval.py` | Rerank 空数组不覆盖检索结果; `_collect_results` 用 `asyncio.to_thread` |
+| `app/store/pgvector_store.py` | `replace_chunks` 原子事务; `get_neighbor_chunks` SQL 加 seq 范围过滤 |
+| `app/ingestion/indexer.py` | 事务化 replace; PII 扫描缓存; Embedding 失败写 warning |
+| `app/api/documents.py` | Upload 预检 file.size; SSE `/events` 401 正确返回 |
+| `app/llm/embedding.py` | 15s 超时; RateLimiter 加 `asyncio.Lock`; embed 加重试 |
+| `app/llm/base.py` | `_JSON_FENCE_PATTERN` 匹配嵌套 JSON; HALF_OPEN 单探测 |
+| `app/core/memory.py` | DB 操作 `asyncio.to_thread`; 锁清理; DetachedInstanceError 防护 |
+| `app/core/diagnostics.py` | 线程安全文件写入 |
+| `app/core/pipeline.py` | ctx 遮蔽修复; 子问题并行 `asyncio.gather`; 进度事件; SSE \r 移除 |
+| `app/api/kb.py` | restricted KB 列表修复; delete_kb 级联清理 DocRoleAccess+KBRoleAccess |
+| `app/core/prompt.py` | 预算 ≤ 0 不保留 chunk; `_trim_history` 历史裁剪 |
+| `app/llm/chat.py` | 懒加载 client 按 event loop 重建; `async with response` |
+| `app/llm/vision.py` | 失败响应不写入缓存 |
+| `app/core/pii_scanner.py` | `_has_exclusion` substring → word boundary regex |
+
+### Round 2 — 7 missed fixes
+| 问题 | 文件 | 修复 |
+|------|------|------|
+| `embed_batch` 死代码 | `embedding.py` | 删除整个方法 |
+| 4xx 仍计入熔断 | `chat.py` (流式+同步), `embedding.py` | 先 `classify_llm_error(e)`, `isinstance(typed, PermanentError)` 则不调 `_on_failure()` |
+| KB owner 看不到自己 restricted KB | `api/kb.py` | 加 `or_(public_cond, owner_cond)` 到查询 |
+| `get_neighbor_chunks` SQL 全量查 | `store/pgvector_store.py` | `CAST(SUBSTRING(chunk_id FROM '_(\\\\d+)$') AS INTEGER) BETWEEN` 数值过滤 |
+| `vision._cache` 无淘汰 | `llm/vision.py` | `OrderedDict` + `max_cache=1000`, LRU 淘汰 |
+| PII 三重扫描 | `core/pii_scanner.py` + `ingestion/indexer.py` | `mask_text()` 加可选 `findings` 参数; indexer 复用缓存 |
+
+### Architecture Notes (from fixes)
+- **Circuit breaker 4xx rule**: ONLY 5xx/timeout/connection errors call `_on_failure()`. 4xx (auth, bad request, quota) must NOT trip breaker. Pattern: `classify_llm_error(e)` → `isinstance(typed, PermanentError)` → skip `_on_failure()`.
+- **embed_batch** is dead code (never called from anywhere in codebase), deleted.
+- **PII triple scan**: `mask_text()` now accepts optional `findings` param. Callers that already scanned should pass findings to avoid a 3rd scan pass.
+- **Vision cache**: LRU via `OrderedDict`, max_cache=1000.
+- **KB visibility**: Owner always sees their own KBs regardless of visibility setting.
+- **get_neighbor_chunks**: Uses PostgreSQL `CAST(SUBSTRING(...) AS INTEGER) BETWEEN` for accurate numerical seq filtering (string BETWEEN breaks at seq≥10).
+
+### End-to-end test docs
+Located in `test-docs/`:
+- `01-产品规格书_M3工业网关.md` — 10 chunks
+- `02-2026年销售策略与渠道政策.md` — 14 chunks
+- `03-员工手册_2026修订版.md` — 16 chunks
+- `04-2025年Q4经营分析报告.md` — 11 chunks
+
+Test KB ID: `a18e62187f234e7d` (from last session, may need recreation).
+
+---
+
+## 10. Git LFS
 
 所有 `.py` 源文件通过 Git LFS 存储。克隆后:
 ```bash
