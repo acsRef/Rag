@@ -76,7 +76,7 @@ cd frontend && npm run build   # runs vue-tsc -b && vite build
 
 **LLM providers**: MiniMax M3 (chat/vision) + SiliconFlow (embedding Qwen3-VL-Embedding-8B 4096d + rerank BAAI/bge-reranker-v2-m3)
 
-**RAG pipeline** (see [app/core/pipeline.py:79](app/core/pipeline.py#L79)):
+**RAG pipeline** (see [app/core/pipeline.py:86](app/core/pipeline.py#L86)):
 ```
 QueryRewrite → IntentClassify (route to 1-3 KBs) → Hybrid Search (vector cosine + BM25 ts_rank, RRF merge)
 → Cross-encoder Rerank → MMR diversity (λ=0.7, ≤2 per doc) → TopK → Prompt injection → SSE stream
@@ -119,6 +119,100 @@ Strategies: `mask(partial)` (keep first 3/last 4), `mask(full)` → `[已脱敏]
 - Do **not** modify the 5 default PII rules (adding new rules is OK)
 - Do **not** take over uvicorn's logger
 - Do **not** commit real API keys (`.env` is gitignored)
+- Do **not** introduce `trace_id`/`contextvars` (project decision: no distributed tracing)
+
+## Common pitfalls
+
+| Symptom | Cause | Fix |
+| ------- | ----- | --- |
+| `No module named 'app'` | Windows: `python app/main.py` doesn't add cwd to sys.path | Use `python -m app.main` |
+| `conda activate` still points to base | Shell didn't activate conda | Use absolute path `D:/miniConda/envs/rag/python.exe -m app.main` |
+| `RuntimeError: 请设置 JWT_SECRET` | `.env` not configured | Edit `.env` → set `JWT_SECRET` and `PII_ENCRYPTION_KEY` |
+| Startup stuck at `init_db` | PostgreSQL isn't running | `docker compose up -d` + `pg_isready` |
+| Embedding 429 rate limit | SiliconFlow RPS exceeded | Lower `embedding_rate_limit_rps` (default 5) |
+| Retrieval returns 0 results | KB has no indexed documents | Upload documents first |
+| f-string `\n` SyntaxError | Python 3.11 f-expressions don't allow backslash | Use `chr(10)` or constant `_NL = '\\n'` |
+| `X pipe None` TypeError | Non-type objects (e.g. `threading.Lock`) can't use `pipe` | Use `Optional[X]` instead |
+
+## Quick verification
+
+```bash
+# Backend health
+curl http://localhost:8000/health
+
+# Login → get JWT token
+curl -X POST http://localhost:8000/api/v1/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"username":"admin","password":"admin123"}'
+
+# Import chain check (no test framework)
+D:/miniConda/envs/rag/python.exe -c "import app.main"
+
+# End-to-end test: upload docs from test-docs/ → RAG query → SSE stream
+```
+
+## Project structure
+
+```
+├── app/
+│   ├── main.py               # FastAPI entry, startup sequence
+│   ├── config.py              # pydantic-settings (all config in one place)
+│   ├── api/                   # Route handlers (FastAPI APIRouter)
+│   │   ├── chat.py            # SSE streaming chat endpoint
+│   │   ├── documents.py       # Upload (incremental), list, delete
+│   │   ├── kb.py              # Knowledge base CRUD
+│   │   ├── auth.py            # Register, login, profile
+│   │   ├── admin.py           # User management + PII audit
+│   │   └── diagnostics.py     # RAG pipeline telemetry API
+│   ├── core/                  # RAG pipeline core logic
+│   │   ├── pipeline.py        # RAGPipeline.execute (main flow)
+│   │   ├── retrieval.py       # Hybrid search + MMR
+│   │   ├── mmr.py             # MMR diversity algorithm
+│   │   ├── memory.py          # Token-budget conversation memory
+│   │   ├── rewrite.py         # Query rewrite + anaphora resolution
+│   │   ├── intent.py          # Intent classification for KB routing
+│   │   ├── prompt.py          # Prompt assembly with token budgeting
+│   │   ├── pii_scanner.py     # 3-layer PII detection
+│   │   ├── pii_rules.py       # 5 default PII regex rules
+│   │   └── diagnostics.py     # DiagContext recorder
+│   ├── ingestion/             # Document processing pipeline
+│   │   ├── parser.py          # Parse bytes → Markdown (multi-format)
+│   │   ├── cleaner.py         # Text cleaning
+│   │   ├── structurer.py      # Structure-aware chunking prep
+│   │   ├── chunker.py         # Recursive text chunking
+│   │   ├── metadata.py        # LLM-generated metadata
+│   │   ├── indexer.py         # Indexing with hash reuse + PII filter
+│   │   └── pipeline.py        # IngestionPipeline orchestrator
+│   ├── llm/                   # Async LLM clients (OpenAI-compatible)
+│   │   ├── base.py            # AsyncOpenAI wrapper + circuit breaker
+│   │   ├── chat.py            # MiniMax M3 chat completions
+│   │   ├── embedding.py       # SiliconFlow embeddings
+│   │   ├── rerank.py          # Cross-encoder reranking
+│   │   └── vision.py          # Image understanding (LRU cache)
+│   ├── middleware/auth.py     # JWT + RBAC middleware
+│   ├── models/schemas.py      # Pydantic request/response models
+│   └── store/
+│       ├── db.py              # SQLAlchemy models (do not modify)
+│       ├── auth_store.py      # User/role/permission CRUD
+│       └── pgvector_store.py  # Vector + BM25 hybrid search
+├── frontend/
+│   └── src/
+│       ├── main.ts            # Vue 3 app entry
+│       ├── api/               # Axios client + interceptors (auto Bearer)
+│       ├── stores/            # Pinia stores (auth, chat, kb, …)
+│       ├── router/            # Vue Router
+│       ├── views/             # Page-level components
+│       ├── components/        # Reusable UI components
+│       └── styles/            # Global styles (Apple design language)
+├── tools/
+│   ├── diagnostics.html       # Standalone RAG pipeline viewer
+│   ├── sample-detail.json     # (generated)
+│   └── sample-index.json      # (generated)
+├── test-docs/                 # End-to-end test documents (4 .md files)
+├── docker/
+│   └── Dockerfile             # postgres:15 + pgvector
+├── docker-compose.yml
+└── requirements.txt
 
 ## Diagnostics subsystem
 
@@ -150,12 +244,12 @@ Live RAG-pipeline telemetry, recorded per request and served to a standalone HTM
 
 | Concern | Location |
 | ------- | -------- |
-| RAG main flow | [app/core/pipeline.py:79](app/core/pipeline.py#L79) `RAGPipeline.execute` |
-| Hybrid search + RRF | [app/store/pgvector_store.py:196](app/store/pgvector_store.py#L196) `hybrid_search` |
+| RAG main flow | [app/core/pipeline.py:86](app/core/pipeline.py#L86) `RAGPipeline.execute` |
+| Hybrid search + RRF | [app/store/pgvector_store.py:197](app/store/pgvector_store.py#L197) `hybrid_search` |
 | MMR algorithm | [app/core/mmr.py:25](app/core/mmr.py#L25) `mmr_select` |
 | PII scanner (3-layer) | [app/core/pii_scanner.py:116](app/core/pii_scanner.py#L116) `scan` |
-| Incremental hash reuse | [app/ingestion/indexer.py:97](app/ingestion/indexer.py#L97) `existing.content_hash == doc_hash` |
-| Ingestion main flow | [app/ingestion/indexer.py:31](app/ingestion/indexer.py#L31) `DocumentIndexer.index` |
+| Incremental hash reuse | [app/ingestion/indexer.py:100](app/ingestion/indexer.py#L100) `existing.content_hash == doc_hash` |
+| Ingestion main flow | [app/ingestion/indexer.py:33](app/ingestion/indexer.py#L33) `DocumentIndexer.index` |
 | Startup sequence | [app/main.py:44](app/main.py#L44) `startup` |
 | JWT middleware | [app/middleware/auth.py:56](app/middleware/auth.py#L56) `get_current_user` |
 | SSE stream endpoint | [app/api/chat.py:13](app/api/chat.py#L13) `stream_chat` |
