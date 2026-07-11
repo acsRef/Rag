@@ -1,4 +1,4 @@
-from app.core.memory import conversation_memory
+﻿from app.core.memory import conversation_memory
 from app.core.rewrite import query_rewrite_service
 from app.core.intent import intent_classifier
 from app.core.retrieval import retrieval_engine
@@ -6,6 +6,7 @@ from app.core.prompt import prompt_builder
 from app.core.diagnostics import DiagContext
 from app.llm.chat import minimax_client
 from app.llm.base import CircuitOpenError, provider_health
+from app.core.doc_relation import cross_doc_synthesizer
 from app.models.schemas import ChatRequest, RetrievedChunk, SourceInfo
 from app.config import settings
 from typing import AsyncGenerator
@@ -224,6 +225,24 @@ class RAGPipeline:
 
         sources = _build_sources(unique_chunks)
         yield f"event: sources\ndata: {json.dumps([s.model_dump() for s in sources])}\n\n"
+
+        # Cross-doc synthesis: group chunks by document, annotate texts with source
+        doc_ids_in_result = list({s.document_id for s in sources if s.document_id})
+        if len(doc_ids_in_result) > 1:
+            annotated_texts, doc_groups = cross_doc_synthesizer.synthesize_texts(unique_chunks)
+            text_map = {g["document_id"]: at for g, at in zip(doc_groups, annotated_texts)}
+            deduped = []
+            seen_docs = set()
+            for c in unique_chunks:
+                if c.document_id in text_map:
+                    if c.document_id not in seen_docs:
+                        seen_docs.add(c.document_id)
+                        c.text = text_map[c.document_id]
+                        deduped.append(c)
+                else:
+                    deduped.append(c)
+            unique_chunks = deduped
+            yield f"event: cross_doc\ndata: {json.dumps(doc_groups)}\n\n"
 
         messages = prompt_builder.build_messages(
             query=req.query,

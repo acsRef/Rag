@@ -1,4 +1,4 @@
-"""pgvector-based vector search + BM25 lexical search with permission filtering.
+﻿"""pgvector-based vector search + BM25 lexical search with permission filtering.
 
 检索方法:
   - `search`: 纯向量余弦相似度检索
@@ -362,5 +362,235 @@ def get_neighbor_chunks(
                     "after": "\n".join(after_parts),
                 }
         return result
+    finally:
+        session.close()
+
+
+# ── Cross-Doc Relation Store Methods ────────────────────
+
+def save_doc_entities(document_id: str, entities: list[tuple[str, int]]):
+    from app.store.db import DocEntity
+    session = get_session()
+    try:
+        session.query(DocEntity).filter(DocEntity.document_id == document_id).delete()
+        for entity, freq in entities:
+            session.add(DocEntity(document_id=document_id, entity=entity, frequency=freq))
+        session.commit()
+    finally:
+        session.close()
+
+
+def get_doc_entities_bulk(doc_ids: list[str]) -> dict[str, list[tuple[str, int]]]:
+    if not doc_ids:
+        return {}
+    from app.store.db import DocEntity
+    session = get_session()
+    try:
+        rows = (
+            session.query(DocEntity)
+            .filter(DocEntity.document_id.in_(doc_ids))
+            .order_by(DocEntity.document_id, DocEntity.frequency.desc())
+            .all()
+        )
+        result: dict[str, list[tuple[str, int]]] = {}
+        for r in rows:
+            if r.document_id not in result:
+                result[r.document_id] = []
+            result[r.document_id].append((r.entity, r.frequency))
+        return result
+    finally:
+        session.close()
+
+
+def get_all_doc_ids_with_entities(kb_ids: list[str] | None = None) -> list[str]:
+    from app.store.db import DocEntity, Document
+    session = get_session()
+    try:
+        q = session.query(DocEntity.document_id).distinct()
+        if kb_ids:
+            q = q.join(Document, DocEntity.document_id == Document.document_id).filter(
+                Document.kb_id.in_(kb_ids)
+            )
+        rows = q.all()
+        return [r[0] for r in rows]
+    finally:
+        session.close()
+
+
+def get_doc_relations(doc_id: str) -> list[dict]:
+    from app.store.db import DocRelation
+    session = get_session()
+    try:
+        rows = (
+            session.query(DocRelation)
+            .filter(DocRelation.source_doc == doc_id)
+            .all()
+        )
+        return [
+            {
+                "target_doc": r.target_doc,
+                "cosine": r.cosine,
+                "cosine_scaled": r.cosine / 1000.0,
+                "entity_jaccard": r.entity_jaccard,
+                "relation_type": r.relation_type,
+            }
+            for r in rows
+        ]
+    finally:
+        session.close()
+
+
+def replace_doc_relations(source_doc: str, relations: list[dict]):
+    from app.store.db import DocRelation
+    session = get_session()
+    try:
+        session.query(DocRelation).filter(
+            DocRelation.source_doc == source_doc
+        ).delete()
+        session.query(DocRelation).filter(
+            DocRelation.target_doc == source_doc
+        ).delete()
+        for rel in relations:
+            session.add(DocRelation(
+                source_doc=rel["source_doc"],
+                target_doc=rel["target_doc"],
+                cosine=rel["cosine"],
+                entity_jaccard=rel["entity_jaccard"],
+                relation_type=rel.get("relation_type", "unknown"),
+            ))
+        session.commit()
+    except Exception:
+        session.rollback()
+        raise
+    finally:
+        session.close()
+
+
+def clear_all_relations():
+    from app.store.db import DocRelation
+    session = get_session()
+    try:
+        session.query(DocRelation).delete()
+        session.commit()
+    finally:
+        session.close()
+
+
+def delete_doc_relations_by_doc_id(doc_id: str):
+    from app.store.db import DocRelation
+    session = get_session()
+    try:
+        session.query(DocRelation).filter(
+            DocRelation.source_doc == doc_id
+        ).delete()
+        session.query(DocRelation).filter(
+            DocRelation.target_doc == doc_id
+        ).delete()
+        session.commit()
+    except Exception:
+        session.rollback()
+        raise
+    finally:
+        session.close()
+
+
+def bulk_save_relations(relations: list[dict]):
+    from app.store.db import DocRelation
+    session = get_session()
+    try:
+        for rel in relations:
+            session.add(DocRelation(
+                source_doc=rel["source_doc"],
+                target_doc=rel["target_doc"],
+                cosine=rel["cosine"],
+                entity_jaccard=rel["entity_jaccard"],
+                relation_type=rel.get("relation_type", "unknown"),
+            ))
+        session.commit()
+    finally:
+        session.close()
+
+
+def get_doc_embedding(document_id: str) -> list[float] | None:
+    from app.store.db import DocEmbedding
+    session = get_session()
+    try:
+        row = (
+            session.query(DocEmbedding.embedding)
+            .filter(DocEmbedding.document_id == document_id)
+            .first()
+        )
+        if row and row.embedding is not None:
+            return list(row.embedding)
+        return None
+    finally:
+        session.close()
+
+
+def upsert_doc_embedding(document_id: str, embedding: list[float], chunk_count: int):
+    from app.store.db import DocEmbedding, utc_now
+    session = get_session()
+    try:
+        existing = (
+            session.query(DocEmbedding)
+            .filter(DocEmbedding.document_id == document_id)
+            .first()
+        )
+        if existing:
+            existing.embedding = embedding
+            existing.chunk_count = chunk_count
+            existing.updated_at = utc_now()
+        else:
+            session.add(DocEmbedding(
+                document_id=document_id,
+                embedding=embedding,
+                chunk_count=chunk_count,
+            ))
+        session.commit()
+    finally:
+        session.close()
+
+
+def get_chunks_by_documents_bulk(
+    doc_ids: list[str],
+    user_role_ids: list[int] | None = None,
+    can_read_all: bool = False,
+) -> dict[str, list[dict]]:
+    if not doc_ids:
+        return {}
+    session = get_session()
+    try:
+        from collections import defaultdict
+        sql = """
+            SELECT chunk_id, document_id, text, embedding, title, summary,
+                   section_path, search_text, content_hash, visibility, allowed_roles
+            FROM chunks
+            WHERE document_id = ANY(:doc_ids)
+              AND (:can_read_all = TRUE
+                   OR visibility = 'public'
+                   OR (visibility IN ('internal', 'restricted')
+                       AND allowed_roles && :user_roles))
+        """
+        rows = session.execute(text(sql), {
+            "doc_ids": doc_ids,
+            "can_read_all": can_read_all,
+            "user_roles": user_role_ids or [],
+        }).fetchall()
+        result: dict[str, list[dict]] = defaultdict(list)
+        for r in rows:
+            result[r[1]].append({
+                "chunk_id": r[0],
+                "document_id": r[1],
+                "text": r[2],
+                "embedding": r[3],
+                "title": r[4],
+                "summary": r[5],
+                "section_path": r[6],
+                "search_text": r[7],
+                "content_hash": r[8],
+                "visibility": r[9],
+                "allowed_roles": r[10],
+            })
+        return dict(result)
     finally:
         session.close()

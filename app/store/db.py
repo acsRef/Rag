@@ -1,4 +1,4 @@
-"""All SQLAlchemy models + PG connection."""
+﻿"""All SQLAlchemy models + PG connection."""
 from sqlalchemy import create_engine, Column, String, Text, Integer, DateTime, JSON, Boolean, ForeignKey, ARRAY, text
 from sqlalchemy.orm import declarative_base, sessionmaker
 from pgvector.sqlalchemy import Vector
@@ -56,6 +56,18 @@ def init_db():
             )
             conn.execute(
                 text("ALTER TABLE messages ADD COLUMN IF NOT EXISTS status VARCHAR(16) DEFAULT 'completed'")
+            )
+            conn.execute(
+                text("CREATE INDEX IF NOT EXISTS idx_doc_entities_doc ON doc_entities (document_id)")
+            )
+            conn.execute(
+                text("CREATE INDEX IF NOT EXISTS idx_doc_relations_source ON doc_relations (source_doc)")
+            )
+            conn.execute(
+                text("CREATE INDEX IF NOT EXISTS idx_doc_relations_target ON doc_relations (target_doc)")
+            )
+            conn.execute(
+                text("CREATE INDEX IF NOT EXISTS idx_doc_embeddings_doc ON doc_embeddings (document_id)")
             )
             conn.commit()
         except Exception:
@@ -262,3 +274,32 @@ class PiiHold(Base):
     content = Column(Text, nullable=False)
     status = Column(String(16), nullable=False, default="pending")  # pending / released / deleted
     created_at = Column(DateTime, default=utc_now)
+
+
+# ── Cross-Doc Relation ──────────────────────────────────
+
+class DocEntity(Base):
+    __tablename__ = "doc_entities"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    document_id = Column(String(64), ForeignKey("documents.document_id", ondelete="CASCADE"), nullable=False, index=True)
+    entity = Column(String(128), nullable=False)
+    frequency = Column(Integer, nullable=False, default=1)
+
+
+class DocEmbedding(Base):
+    __tablename__ = "doc_embeddings"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    document_id = Column(String(64), ForeignKey("documents.document_id", ondelete="CASCADE"), unique=True, nullable=False, index=True)
+    embedding = Column(Vector(4096), nullable=True)
+    chunk_count = Column(Integer, default=0)
+    updated_at = Column(DateTime, default=utc_now, onupdate=utc_now)
+
+
+class DocRelation(Base):
+    __tablename__ = "doc_relations"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    source_doc = Column(String(64), ForeignKey("documents.document_id", ondelete="CASCADE"), nullable=False, index=True)
+    target_doc = Column(String(64), ForeignKey("documents.document_id", ondelete="CASCADE"), nullable=False, index=True)
+    cosine = Column(Integer, nullable=False, default=0)
+    entity_jaccard = Column(Integer, nullable=False, default=0)
+    relation_type = Column(String(16), default="unknown")

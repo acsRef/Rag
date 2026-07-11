@@ -1,4 +1,4 @@
-"""Retrieval with vector search + permission filtering + rerank + MMR diversity.
+﻿"""Retrieval with vector search + permission filtering + rerank + MMR diversity.
 
 两阶段检索流水线:
   1. 跨编码器重排: cross-encoder (BAAI/bge-reranker-v2-m3) 对粗排结果精排
@@ -17,6 +17,7 @@ from app.llm.base import CircuitOpenError
 from app.models.schemas import IntentResult, RetrievedChunk
 from app.config import settings
 from app.core.mmr import mmr_select
+from app.core.doc_relation import cross_doc_retriever
 
 logger = logging.getLogger(__name__)
 
@@ -155,6 +156,29 @@ class RetrievalEngine:
                 {"chunk_id": r["chunk_id"], "kb_id": r.get("kb_id", ""), "score": round(r["score"], 4), "title": r.get("title", "")}
                 for r in results[:10]  # 只记录前10个避免文件过大
             ]
+
+        # -- Cross-doc retrieval (three-channel jump) --
+        cross_doc_extra_count = 0
+        try:
+            extra = await cross_doc_retriever.retrieve(
+                query, query_emb, target_kb_ids,
+                results, user_role_ids, can_read_all,
+            )
+            if extra:
+                cross_doc_extra_count = len(extra)
+                results.extend(extra)
+                results.sort(key=lambda x: x["score"], reverse=True)
+                results = results[:candidate_k]
+                seen_ids.update(c["chunk_id"] for c in extra)
+                logger.info("cross_doc.extra_added count=%d", len(extra))
+        except Exception:
+            logger.exception("cross_doc.retrieve_failed")
+
+        if round_data is not None:
+            round_data["cross_doc"] = {
+                "extra_count": cross_doc_extra_count,
+                "candidate_k": candidate_k,
+            }
 
         rerank_before_count = len(results) if results else 0
         rerank_degraded = False

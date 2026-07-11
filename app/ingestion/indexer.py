@@ -1,4 +1,4 @@
-"""Full indexing pipeline: parse → clean → structure → chunk → metadata → embed → store.
+﻿"""Full indexing pipeline: parse → clean → structure → chunk → metadata → embed → store.
 
 Supports incremental update: reuses chunks by content_hash to avoid redundant
 embedding and LLM calls. Coordinates all ingestion stages and persists results
@@ -20,6 +20,7 @@ from app.ingestion.metadata import chunk_metadata_generator
 from app.store.db import get_db_ctx, get_session, Document, new_id, utc_now
 from app.store.pgvector_store import tokenize
 from app.config import settings
+from app.core.doc_relation import cross_doc_builder
 
 logger = logging.getLogger(__name__)
 
@@ -297,6 +298,11 @@ class DocumentIndexer:
                 "status": "failed",
                 "chunk_count": 0,
             }
+
+        try:
+            cross_doc_builder.update_for_document(doc_id)
+        except Exception:
+            logger.exception("cross_doc.update_failed doc=%s", doc_id[:8])
 
         return {
             "document_id": doc_id,
