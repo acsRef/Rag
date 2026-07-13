@@ -6,6 +6,7 @@ to PostgreSQL + pgvector.
 """
 
 import asyncio
+import concurrent.futures
 import hashlib
 import json
 import logging
@@ -23,6 +24,7 @@ from app.config import settings
 from app.core.doc_relation import cross_doc_builder
 
 logger = logging.getLogger(__name__)
+_INDEX_POOL = concurrent.futures.ThreadPoolExecutor(max_workers=2)
 
 
 def _content_hash(text: str) -> str:
@@ -159,12 +161,11 @@ class DocumentIndexer:
 
         if new_chunks:
             # Parallelize: metadata generation and chunk embedding are independent
-            import concurrent.futures
-            with concurrent.futures.ThreadPoolExecutor(max_workers=2) as _pool:
-                _meta_fut = _pool.submit(
+            with _INDEX_POOL:
+                _meta_fut = _INDEX_POOL.submit(
                     chunk_metadata_generator.generate, new_chunks
                 )
-                _embed_fut = _pool.submit(
+                _embed_fut = _INDEX_POOL.submit(
                     lambda: asyncio.run(
                         sf_embedding.embed_with_fallback([c.text for c in new_chunks])
                     )

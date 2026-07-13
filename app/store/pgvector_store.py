@@ -13,7 +13,7 @@ import logging
 import time
 import jieba
 from sqlalchemy import text
-from app.store.db import get_session, Chunk, utc_now
+from app.store.db import get_session, Chunk, ChunkQuestion, utc_now
 from app.config import settings
 
 logger = logging.getLogger(__name__)
@@ -355,17 +355,9 @@ def hybrid_search(
 
 
 def replace_chunks(document_id: str, chunks_data: list[dict]):
-    """Delete old chunks + their question embeddings and insert new ones."""
+    """Delete old chunks (CASCADE auto-removes ChunkQuestions) and insert new ones."""
     session = get_session()
     try:
-        old_ids = [
-            r[0] for r in session.query(Chunk.chunk_id)
-            .filter(Chunk.document_id == document_id).all()
-        ]
-        if old_ids:
-            session.query(ChunkQuestion).filter(
-                ChunkQuestion.chunk_id.in_(old_ids)
-            ).delete(synchronize_session=False)
         session.query(Chunk).filter(Chunk.document_id == document_id).delete()
         base_ts = utc_now()
         for i, c in enumerate(chunks_data):
