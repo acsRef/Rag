@@ -195,15 +195,6 @@ def bm25_search(
         logger.debug("bm25.search.done row_count=%d elapsed_ms=%.1f", len(rows), (time.monotonic() - t0) * 1000)
 
 
-def delete_chunks_by_document(document_id: str):
-    session = get_session()
-    try:
-        session.query(Chunk).filter(Chunk.document_id == document_id).delete()
-        session.commit()
-    finally:
-        session.close()
-
-
 # ── Chunk Questions (multi-channel retrieval) ─────────────
 
 
@@ -335,7 +326,8 @@ def hybrid_search(
     question_results = []
     if enable_question_channel:
         question_results = question_vector_search(
-            kb_ids, embedding, user_role_ids, can_read_all, top_k=fetch_k,
+            kb_ids, embedding, user_role_ids, can_read_all,
+            top_k=settings.question_channel_top_k,
         )
         _accumulate(question_results, "question",
                     weight=settings.question_channel_rrf_weight)
@@ -363,9 +355,17 @@ def hybrid_search(
 
 
 def replace_chunks(document_id: str, chunks_data: list[dict]):
-    """Delete old chunks and insert new ones in a single transaction."""
+    """Delete old chunks + their question embeddings and insert new ones."""
     session = get_session()
     try:
+        old_ids = [
+            r[0] for r in session.query(Chunk.chunk_id)
+            .filter(Chunk.document_id == document_id).all()
+        ]
+        if old_ids:
+            session.query(ChunkQuestion).filter(
+                ChunkQuestion.chunk_id.in_(old_ids)
+            ).delete(synchronize_session=False)
         session.query(Chunk).filter(Chunk.document_id == document_id).delete()
         base_ts = utc_now()
         for i, c in enumerate(chunks_data):

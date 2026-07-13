@@ -231,12 +231,14 @@ def robust_json_parse(text: str) -> dict | None:
     - Plain JSON: `{"key": "value"}`
     - Code-fenced: ````json\n{"key": "value"}\n``` `
     - Text-wrapped: `Sure! Here is the JSON:\n{"key": "value"}\nI hope this helps!`
+    - <think> tags: `<think>...</think>{"key": "value"}`
     - Trailing commas: `{"key": "value",}`
     - BOM / leading whitespace / mixed prompts
 
     Returns parsed dict on success, None on failure.
     """
     cleaned = text.strip().removeprefix("﻿")  # strip BOM
+    cleaned = re.sub(r'<think>.*?</think>', '', cleaned, flags=re.DOTALL).strip()
 
     # Try direct parse first
     try:

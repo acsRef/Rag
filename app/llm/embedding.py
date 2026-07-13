@@ -2,7 +2,7 @@
 
 import asyncio
 import logging
-import random
+import threading
 import time
 
 from openai import AsyncOpenAI, RateLimitError, APIStatusError
@@ -14,26 +14,26 @@ logger = logging.getLogger(__name__)
 
 
 class RateLimiter:
-    """Token-bucket rate limiter — async, with lock."""
+    """Token-bucket rate limiter — threading.Lock safe across event loops."""
 
     def __init__(self, rps: int):
         self.rps = rps
         self.tokens = float(rps)
         self.last = time.monotonic()
-        self._lock = asyncio.Lock()
+        self._lock = threading.Lock()
 
     async def acquire(self):
-        async with self._lock:
+        while True:
             now = time.monotonic()
-            elapsed = now - self.last
-            self.last = now
-            self.tokens = min(float(self.rps), self.tokens + elapsed * self.rps)
-            if self.tokens < 1:
+            with self._lock:
+                elapsed = now - self.last
+                self.last = now
+                self.tokens = min(float(self.rps), self.tokens + elapsed * self.rps)
+                if self.tokens >= 1:
+                    self.tokens -= 1
+                    return
                 sleep_for = (1 - self.tokens) / self.rps
-                await asyncio.sleep(sleep_for)
-                self.tokens = 0
-            else:
-                self.tokens -= 1
+            await asyncio.sleep(sleep_for)
 
 
 # Kept as a module-level import to avoid circular import on first eval

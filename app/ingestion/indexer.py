@@ -158,10 +158,19 @@ class DocumentIndexer:
         )
 
         if new_chunks:
-            new_chunks = chunk_metadata_generator.generate(new_chunks)
-            embed_results = asyncio.run(
-                sf_embedding.embed_with_fallback([c.text for c in new_chunks])
-            )
+            # Parallelize: metadata generation and chunk embedding are independent
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor(max_workers=2) as _pool:
+                _meta_fut = _pool.submit(
+                    chunk_metadata_generator.generate, new_chunks
+                )
+                _embed_fut = _pool.submit(
+                    lambda: asyncio.run(
+                        sf_embedding.embed_with_fallback([c.text for c in new_chunks])
+                    )
+                )
+                new_chunks = _meta_fut.result()
+                embed_results = _embed_fut.result()
         else:
             embed_results = []
         chunk_seq = 0
@@ -283,12 +292,15 @@ class DocumentIndexer:
                 q_emb_results = asyncio.run(
                     sf_embedding.embed_with_fallback(q_texts)
                 )
-                for qd, (emb, err) in zip(question_data, q_emb_results):
-                    if emb is not None:
-                        qd["embedding"] = emb
-                    else:
-                        qd["embedding"] = None
-                valid_q = [q for q in question_data if q.get("embedding") is not None]
+                valid_q = [
+                    {**qd, "embedding": emb}
+                    for qd, (emb, err) in zip(question_data, q_emb_results)
+                    if emb is not None
+                ]
+                fail_count = len(question_data) - len(valid_q)
+                if fail_count:
+                    logger.warning("ingest.questions_partial total=%d ok=%d fail=%d",
+                                   len(question_data), len(valid_q), fail_count)
                 if valid_q:
                     pgvector_store.upsert_chunk_questions(valid_q)
                     logger.info("ingest.questions_stored chunk=%d questions=%d ok=%d",

@@ -422,6 +422,10 @@ class RAGPipeline:
         elif tag_state == _STATE_AFTER_THINK:
             answer_text += tag_buffer
             tag_buffer = ""
+        elif tag_state == _STATE_NORMAL and tag_buffer:
+            # Stream ended mid-text — flush any remaining buffer
+            answer_text += tag_buffer
+            tag_buffer = ""
         answer_text = _norm(answer_text)
         if thinking_text:
             thinking_text = _norm(thinking_text)

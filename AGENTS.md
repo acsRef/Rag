@@ -162,7 +162,9 @@ startup(): setup_logging() → JWT/PII_KEY校验(hard raise)
 
 ## 6. 改动禁区
 
-- ❌ 不要改 `app/store/db.py` 的 SQLAlchemy 模型(需要数据库迁移)
+- ❌ 不要改 `app/store/db.py` 的**已有** SQLAlchemy 模型(需要数据库迁移)
+  - ✅ 允许:在 db.py 底部加**新** model + `init_db()` 里加 `CREATE TABLE IF NOT EXISTS`(幂等模式)
+  - ✅ 允许:在 `pgvector_store.py` 里加对应的 ORM 方法
 - ❌ 不要接管 uvicorn 的 logger
 - ❌ 不要去掉 `app/ingestion/indexer.py` 的增量 hash 复用
 - ❌ 不要删/改 PII 5 条默认规则(可加新规则)
