@@ -25,8 +25,12 @@
                          └── 管理 API（用户/权限/PII 审核）
 
 检索管线：
-意图识别 → 查询改写 → 混合检索(BM25+向量) → RRF 合并
+意图识别 → 查询改写 → 混合检索(向量+BM25+question 三路) → RRF 合并
  → 跨文档关联跳转(三通道) → 跨编码器重排 → MMR 多样性(λ=0.7, 每文档≤2) → TopK
+
+多路召回（方案 B）：
+摄入期 LLM 为每个 chunk 生成 4-5 条候选问题 → 独立 embedding → 查询时三路
+(vector + BM25 + question) RRF 融合，提升检索精度，低权重 (0.15) 防噪声。
 ```
 
 ## 功能
@@ -34,6 +38,7 @@
 - **文件解析**：PDF/DOCX/PPTX/XLSX/HTML/TXT/MD/图片（Docling + MiniMax Vision）
 - **智能切分**：结构感知递归切分，原子块保护（代码/表格/图片），重叠窗口
 - **混合检索**：向量语义检索 + BM25 关键词检索（jieba 分词）+ RRF 融合
+- **多路召回**：摄入期 LLM 生成候选问题 → 独立 embedding 通道 → 三路 (vector + BM25 + question) RRF 融合，低权重防噪声
 - **跨文档关联检索**：三通道跳转（TF-IDF 关系边 / query 关键词召回 / 文档级 embedding 语义），摄入期预构建关系矩阵，查询期零 LLM/embedding 成本，跨文档综合按来源标注
 - **MMR 多样性**：最大边际相关性重排，跨文档语义去重，每文档软约束
 - **长对话记忆**：Token 预算制窗口 + 自动摘要压缩，支持思考和回答分离
@@ -115,9 +120,9 @@ npm run dev
 │   ├── middleware/auth.py      # JWT 认证中间件
 │   ├── models/schemas.py       # Pydantic 数据模型
 │   └── store/                  # 数据访问层
-│       ├── db.py               # SQLAlchemy 模型 + 连接
-│       ├── auth_store.py       # 用户/角色/权限 CRUD
-│       └── pgvector_store.py   # 向量检索 + BM25 + 混合搜索
+    │       ├── db.py               # SQLAlchemy 模型 + 连接（含 ChunkQuestion）
+    │       ├── auth_store.py       # 用户/角色/权限 CRUD
+    │       └── pgvector_store.py   # 向量检索 + BM25 + 三路 RRF 混合搜索
 ├── frontend/
 │   └── src/                    # Vue 3 SPA
 ├── docker/
@@ -132,5 +137,6 @@ npm run dev
 
 - **PII**：开关、缓存 TTL、加密密钥
 - **混合检索**：开关、单路候选数、RRF 常数
+- **多路召回**：开关、question 通道权重、每路候选数
 - **MMR**：开关、λ 值、候选数、每文档上限、惩罚系数
 - **对话**：轮数上限、摘要触发轮数、最大 token 数
