@@ -161,17 +161,16 @@ class DocumentIndexer:
 
         if new_chunks:
             # Parallelize: metadata generation and chunk embedding are independent
-            with _INDEX_POOL:
-                _meta_fut = _INDEX_POOL.submit(
-                    chunk_metadata_generator.generate, new_chunks
+            _meta_fut = _INDEX_POOL.submit(
+                chunk_metadata_generator.generate, new_chunks
+            )
+            _embed_fut = _INDEX_POOL.submit(
+                lambda: asyncio.run(
+                    sf_embedding.embed_with_fallback([c.text for c in new_chunks])
                 )
-                _embed_fut = _INDEX_POOL.submit(
-                    lambda: asyncio.run(
-                        sf_embedding.embed_with_fallback([c.text for c in new_chunks])
-                    )
-                )
-                new_chunks = _meta_fut.result()
-                embed_results = _embed_fut.result()
+            )
+            new_chunks = _meta_fut.result()
+            embed_results = _embed_fut.result()
         else:
             embed_results = []
         chunk_seq = 0
@@ -293,11 +292,11 @@ class DocumentIndexer:
                 q_emb_results = asyncio.run(
                     sf_embedding.embed_with_fallback(q_texts)
                 )
-                valid_q = [
-                    {**qd, "embedding": emb}
-                    for qd, (emb, err) in zip(question_data, q_emb_results)
-                    if emb is not None
-                ]
+                valid_q = []
+                for qd, (emb, err) in zip(question_data, q_emb_results):
+                    if emb is not None:
+                        qd["embedding"] = emb
+                        valid_q.append(qd)
                 fail_count = len(question_data) - len(valid_q)
                 if fail_count:
                     logger.warning("ingest.questions_partial total=%d ok=%d fail=%d",

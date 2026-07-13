@@ -414,17 +414,10 @@ class RAGPipeline:
             yield "event: done\ndata: {}\n\n"
             return
 
-        # Normal completion — final cleanup of cross-chunk whitespace
-        if tag_state == _STATE_IN_THINK:
-            # Stream ended while still inside <think> — flush buffer as answer
-            thinking_text += tag_buffer
-            tag_buffer = ""
-        elif tag_state == _STATE_AFTER_THINK:
-            answer_text += tag_buffer
-            tag_buffer = ""
-        elif tag_state == _STATE_NORMAL and tag_buffer:
-            # Stream ended mid-text — flush any remaining buffer
-            answer_text += tag_buffer
+        # Normal completion — flush remaining buffer to correct target
+        if tag_buffer:
+            target = thinking_text if tag_state == _STATE_IN_THINK else answer_text
+            target += tag_buffer
             tag_buffer = ""
         answer_text = _norm(answer_text)
         if thinking_text:
