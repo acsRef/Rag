@@ -274,12 +274,35 @@ class DocRelationBuilder:
         )
 
     def rebuild_all(self) -> None:
-        """Full pairwise rebuild. O(N^2). Use only when N < 1000."""
-        all_ids = pgvector_store.get_all_doc_ids_with_entities()
+        """Full pairwise rebuild. O(N^2). Use only when N < 1000.
+
+        Bootstraps from Document table (not doc_entities), extracts entities
+        and embeddings for any docs that lack them, then computes relations.
+        """
+        from app.store.db import get_db_ctx, Document
+        with get_db_ctx() as session:
+            rows = session.query(Document.document_id).all()
+        all_ids = [r[0] for r in rows]
         if len(all_ids) < 2:
+            logger.info("cross_doc.rebuild_all skipped (%d docs)", len(all_ids))
             return
 
-        all_entities = pgvector_store.get_doc_entities_bulk(all_ids)
+        all_entities: dict[str, list[tuple[str, int]]] = {}
+        import numpy as np
+        for doc_id in all_ids:
+            entities = pgvector_store.get_doc_entities_bulk([doc_id]).get(doc_id)
+            if not entities:
+                chunks = pgvector_store.get_chunks_by_document(doc_id)
+                if chunks:
+                    entities = self._extractor.extract(chunks)
+                    pgvector_store.save_doc_entities(doc_id, entities)
+                    vecs = [c["embedding"] for c in chunks if c.get("embedding") is not None]
+                    if vecs:
+                        doc_emb = np.array(vecs, dtype=np.float64).mean(axis=0)
+                        pgvector_store.upsert_doc_embedding(doc_id, doc_emb.tolist(), len(vecs))
+            if entities:
+                all_entities[doc_id] = entities
+
         self._extractor.refresh_global_stats(all_entities)
         pgvector_store.clear_all_relations()
 
