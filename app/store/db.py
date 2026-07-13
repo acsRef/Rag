@@ -69,6 +69,17 @@ def init_db():
             conn.execute(
                 text("CREATE INDEX IF NOT EXISTS idx_doc_embeddings_doc ON doc_embeddings (document_id)")
             )
+            conn.execute(
+                text("CREATE TABLE IF NOT EXISTS chunk_questions ("
+                     "id SERIAL PRIMARY KEY, "
+                     "chunk_id VARCHAR(64) REFERENCES chunks(chunk_id) ON DELETE CASCADE, "
+                     "question TEXT NOT NULL, "
+                     "embedding VECTOR(4096), "
+                     "position INT DEFAULT 0)")
+            )
+            conn.execute(
+                text("CREATE INDEX IF NOT EXISTS idx_chunk_questions_chunk_id ON chunk_questions (chunk_id)")
+            )
             conn.commit()
         except Exception:
             conn.rollback()
@@ -183,6 +194,17 @@ class DocRoleAccess(Base):
     __tablename__ = "doc_role_access"
     document_id = Column(String(64), ForeignKey("documents.document_id", ondelete="CASCADE"), primary_key=True)
     role_id = Column(Integer, ForeignKey("roles.id", ondelete="CASCADE"), primary_key=True)
+
+
+# ── Chunk Questions (multi-channel retrieval) ───────────
+
+class ChunkQuestion(Base):
+    __tablename__ = "chunk_questions"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    chunk_id = Column(String(64), ForeignKey("chunks.chunk_id", ondelete="CASCADE"), nullable=False, index=True)
+    question = Column(Text, nullable=False)
+    embedding = Column(Vector(4096))
+    position = Column(Integer, default=0)
 
 
 # ── Chunk (with pgvector) ───────────────────────────────

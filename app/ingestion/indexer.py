@@ -266,6 +266,34 @@ class DocumentIndexer:
                 pgvector_store.replace_chunks(document_id, chunks_data)
             else:
                 pgvector_store.add_chunks(chunks_data)
+
+            # Embed and store chunk questions for multi-channel retrieval
+            question_data = []
+            for c, cd in zip(chunks, chunks_data):
+                if c.questions:
+                    for pos, q in enumerate(c.questions):
+                        if q.strip():
+                            question_data.append({
+                                "chunk_id": cd["chunk_id"],
+                                "question": q,
+                                "position": pos,
+                            })
+            if question_data:
+                q_texts = [q["question"] for q in question_data]
+                q_emb_results = asyncio.run(
+                    sf_embedding.embed_with_fallback(q_texts)
+                )
+                for qd, (emb, err) in zip(question_data, q_emb_results):
+                    if emb is not None:
+                        qd["embedding"] = emb
+                    else:
+                        qd["embedding"] = None
+                valid_q = [q for q in question_data if q.get("embedding") is not None]
+                if valid_q:
+                    pgvector_store.upsert_chunk_questions(valid_q)
+                    logger.info("ingest.questions_stored chunk=%d questions=%d ok=%d",
+                                len(chunks), len(question_data), len(valid_q))
+
             self._save_document(doc_id, user_id, kb_id, filename, len(chunks), status, doc_hash,
                                 embedded_chunk_count=embedded_count, error_message=final_error)
             try:

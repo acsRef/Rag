@@ -67,19 +67,39 @@ def _norm(text: str) -> str:
     # Collapse blank lines between consecutive list items
     text = re.sub(r'(\n\s*(?:[-*]|\d+\.)\s.+\n)\n+(?=\s*(?:[-*]|\d+\.)\s)', r'\1', text)
     return text.strip()
-_PRONOUN_PATTERNS = ("它", "其", "这", "那", "该", "上述", "上面", "前面", "下面", "这个", "那个", "这些", "那些", "哪", "什么")
-_COMPLEX_PATTERNS = ("和", "与", "以及", "区别", "对比", "比较", "相比", "还有", "差异", "分别")
+def _needs_decomposition(query: str) -> bool:
+    """Return True if query needs sub-question decomposition and KB routing.
 
+    Rules — any match → needs decomposition:
+      1. Comparison / contrast patterns
+      2. Multiple explicitly named entities (quoted terms)
+      3. Reasoning / aggregation / multi-hop markers
+      4. Anaphoric pronouns that need resolution
+    """
+    # Rule 1: comparison / contrast
+    if re.search(r"(对比|比较|区别|差异|不同|哪个好|哪个更|vs\.?|versus)", query, re.IGNORECASE):
+        return True
+    if re.search(r"(和|与|跟|同).{1,20}(区别|不同|差异|对比)", query):
+        return True
 
-def _is_simple_query(query: str) -> bool:
-    """Return True if query needs no LLM rewrite/intent -- no pronouns, single clause."""
-    for p in _PRONOUN_PATTERNS:
-        if p in query:
-            return False
-    for p in _COMPLEX_PATTERNS:
-        if p in query:
-            return False
-    return True
+    # Rule 2: multiple explicit entities (quoted / 《》书名号)
+    entities = re.findall(r"《[^》]+》|\"[^\"]+\"|'[^']+'", query)
+    if len(entities) >= 2:
+        return True
+
+    # Rule 3: reasoning / aggregation / multi-hop markers
+    if re.search(r"(最多|最少|最高|最低|哪个|哪家|谁是|谁在)", query):
+        return True
+    if re.search(r"(为什么|为何|原因|因素|影响|如何导致)", query):
+        return True
+    if re.search(r"(总结|汇总|概括|整体|全年|整个|所有)", query):
+        return True
+
+    # Rule 4: anaphoric pronouns (need resolution from context)
+    if re.search(r"(它|他|她|这个|那个|这些|那些|其|该|上述|前面)", query):
+        return True
+
+    return False
 
 
 class RAGPipeline:
@@ -131,8 +151,8 @@ class RAGPipeline:
         summary = await asyncio.to_thread(conversation_memory.get_summary, conv_id)
         all_kb_ids = req.knowledge_base_ids
 
-        simple = _is_simple_query(req.query)
-        if simple:
+        needs_decomp = _needs_decomposition(req.query)
+        if not needs_decomp:
             # Fast path: no LLM rewrite/intent, search all KBs directly
             sub_queries = [req.query]
         else:
@@ -151,7 +171,7 @@ class RAGPipeline:
 
         async def _retrieve_one(sub_q: str) -> list[RetrievedChunk]:
             intent = None
-            if not simple:
+            if needs_decomp:
                 intent = await intent_classifier.classify(sub_q, all_kb_ids, ctx=ctx)
                 if ctx:
                     ctx.append("intent", {
@@ -395,10 +415,20 @@ class RAGPipeline:
             return
 
         # Normal completion — final cleanup of cross-chunk whitespace
+        if tag_state == _STATE_IN_THINK:
+            # Stream ended while still inside <think> — flush buffer as answer
+            thinking_text += tag_buffer
+            tag_buffer = ""
+        elif tag_state == _STATE_AFTER_THINK:
+            answer_text += tag_buffer
+            tag_buffer = ""
         answer_text = _norm(answer_text)
         if thinking_text:
             thinking_text = _norm(thinking_text)
-        if answer_text:
+        if answer_text or (thinking_text and not answer_text):
+            if not answer_text and thinking_text:
+                answer_text = thinking_text
+                thinking_text = ""
             await conversation_memory.add_message(
                 conv_id, "assistant",
                 _pii_safe(answer_text),

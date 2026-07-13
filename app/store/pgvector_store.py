@@ -14,6 +14,7 @@ import time
 import jieba
 from sqlalchemy import text
 from app.store.db import get_session, Chunk, utc_now
+from app.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -194,6 +195,108 @@ def bm25_search(
         logger.debug("bm25.search.done row_count=%d elapsed_ms=%.1f", len(rows), (time.monotonic() - t0) * 1000)
 
 
+def delete_chunks_by_document(document_id: str):
+    session = get_session()
+    try:
+        session.query(Chunk).filter(Chunk.document_id == document_id).delete()
+        session.commit()
+    finally:
+        session.close()
+
+
+# ── Chunk Questions (multi-channel retrieval) ─────────────
+
+
+def upsert_chunk_questions(questions_data: list[dict]):
+    """Insert or update chunk question embeddings.
+
+    questions_data: [{chunk_id, question, embedding, position}]
+    Deletes existing questions for affected chunk_ids first, then inserts.
+    """
+    if not questions_data:
+        return
+    session = get_session()
+    try:
+        chunk_ids = list(set(q["chunk_id"] for q in questions_data))
+        session.execute(
+            text("DELETE FROM chunk_questions WHERE chunk_id = ANY(:cids)"),
+            {"cids": chunk_ids},
+        )
+        for q in questions_data:
+            session.execute(
+                text("INSERT INTO chunk_questions (chunk_id, question, embedding, position) "
+                     "VALUES (:chunk_id, :question, :embedding, :position)"),
+                {
+                    "chunk_id": q["chunk_id"],
+                    "question": q["question"],
+                    "embedding": q["embedding"],
+                    "position": q.get("position", 0),
+                },
+            )
+        session.commit()
+    finally:
+        session.close()
+
+
+def question_vector_search(
+    kb_ids: list[str],
+    query_emb: list[float],
+    user_role_ids: list[int] | None = None,
+    can_read_all: bool = False,
+    top_k: int = 20,
+) -> list[dict]:
+    """Retrieve chunks by question-vector similarity (cosine).
+
+    Multiple questions per chunk → take the MIN distance (nearest question wins).
+    ACL filtering mirrors vector_search.
+    """
+    session = get_session()
+    t0 = time.monotonic()
+    logger.debug("question_vector.search.start kb_count=%d top_k=%d", len(kb_ids), top_k)
+    try:
+        sql = """
+            SELECT c.chunk_id, c.document_id, c.text, c.embedding, c.title, c.summary,
+                   c.section_path,
+                   1 - MIN(q.embedding <=> (:query)::vector) AS score
+            FROM chunk_questions q
+            JOIN chunks c ON c.chunk_id = q.chunk_id
+            WHERE c.kb_id = ANY(:kb_ids)
+              AND (:can_read_all = TRUE
+                   OR c.visibility = 'public'
+                   OR (c.visibility IN ('internal', 'restricted')
+                       AND c.allowed_roles && :user_roles))
+            GROUP BY c.chunk_id, c.document_id, c.text, c.embedding, c.title,
+                     c.summary, c.section_path
+            ORDER BY MIN(q.embedding <=> (:query)::vector)
+            LIMIT :top_k
+        """
+        rows = session.execute(text(sql), {
+            "query": query_emb,
+            "kb_ids": kb_ids,
+            "can_read_all": can_read_all,
+            "user_roles": user_role_ids or [],
+            "top_k": top_k,
+        }).fetchall()
+
+        return [
+            {
+                "chunk_id": r[0],
+                "document_id": r[1],
+                "text": r[2],
+                "embedding": r[3],
+                "title": r[4],
+                "summary": r[5],
+                "section_path": r[6],
+                "score": float(r[7]),
+            }
+            for r in rows
+        ]
+    finally:
+        session.close()
+        logger.debug("question_vector.search.done row_count=%d elapsed_ms=%.1f",
+                     len(rows), (time.monotonic() - t0) * 1000)
+
+
 def hybrid_search(
     kb_ids: list[str],
     embedding: list[float],
@@ -203,14 +306,12 @@ def hybrid_search(
     top_k: int = 10,
     fetch_k: int = 20,
     rrf_k: int = 60,
+    enable_question_channel: bool = False,
 ) -> list[dict]:
-    """Hybrid vector + BM25 search with RRF merge.
+    """Hybrid vector + BM25 + optional question-vector search with RRF merge.
 
-    Combines cosine similarity (semantic) and ts_rank (lexical) results
-    using Reciprocal Rank Fusion (RRF).
-
-    RRF 公式: `score = Σ 1 / (k + rank + 1)`,其中 k 默认 60(平滑长尾排名);
-    一个文档在两路检索中排名都靠前 → 累加分高,反之被压低。
+    RRF formula: score = Σ weight / (k + rank + 1)
+    k defaults to 60 (smooth long-tail ranks).
     """
     t0 = time.monotonic()
     vector_results = search(
@@ -220,17 +321,31 @@ def hybrid_search(
         kb_ids, query, user_role_ids, can_read_all, top_k=fetch_k,
     )
 
+    channel_weights: dict[str, float] = {}
     rrf_scores: dict[str, float] = {}
-    # RRF: 1/(k+rank+1) 累加;k 默认 60 平滑长尾排名,使 top1 与 top10 的差距不过于悬殊
-    for rank, r in enumerate(vector_results):
-        rrf_scores[r["chunk_id"]] = 1.0 / (rrf_k + rank + 1)
-    for rank, r in enumerate(bm25_results):
-        rrf_scores[r["chunk_id"]] = rrf_scores.get(r["chunk_id"], 0) + 1.0 / (rrf_k + rank + 1)
+
+    def _accumulate(results: list[dict], channel: str, weight: float = 1.0):
+        channel_weights[channel] = weight
+        for rank, r in enumerate(results):
+            rrf_scores[r["chunk_id"]] = rrf_scores.get(r["chunk_id"], 0) + weight / (rrf_k + rank + 1)
+
+    _accumulate(vector_results, "vector")
+    _accumulate(bm25_results, "bm25")
+
+    question_results = []
+    if enable_question_channel:
+        question_results = question_vector_search(
+            kb_ids, embedding, user_role_ids, can_read_all, top_k=fetch_k,
+        )
+        _accumulate(question_results, "question",
+                    weight=settings.question_channel_rrf_weight)
 
     merged: dict[str, dict] = {}
     for r in vector_results:
         merged[r["chunk_id"]] = r
     for r in bm25_results:
+        merged[r["chunk_id"]] = r
+    for r in question_results:
         merged[r["chunk_id"]] = r
 
     ranked = sorted(merged.values(), key=lambda r: rrf_scores[r["chunk_id"]], reverse=True)
@@ -238,20 +353,13 @@ def hybrid_search(
         r["score"] = rrf_scores[r["chunk_id"]]
 
     logger.info(
-        "hybrid.search.done vec_rows=%d bm25_rows=%d merged=%d rrf_k=%d elapsed_ms=%.1f",
-        len(vector_results), len(bm25_results), len(merged), rrf_k,
+        "hybrid.search.done vec=%d bm25=%d qvec=%d merged=%d rrf_k=%d "
+        "channels=%s elapsed_ms=%.1f",
+        len(vector_results), len(bm25_results), len(question_results),
+        len(merged), rrf_k, list(channel_weights.keys()),
         (time.monotonic() - t0) * 1000,
     )
     return ranked[:top_k]
-
-
-def delete_chunks_by_document(document_id: str):
-    session = get_session()
-    try:
-        session.query(Chunk).filter(Chunk.document_id == document_id).delete()
-        session.commit()
-    finally:
-        session.close()
 
 
 def replace_chunks(document_id: str, chunks_data: list[dict]):

@@ -67,6 +67,11 @@ class Settings(BaseSettings):
     circuit_breaker_threshold: int = 10      # consecutive failures before OPEN
     circuit_breaker_cooldown: float = 30.0   # seconds before HALF_OPEN probe
 
+    # Multi-channel retrieval: question embedding channel
+    question_channel_enabled: bool = True       # env: QUESTION_CHANNEL_ENABLED
+    question_channel_top_k: int = 10           # per-question vector search top_k
+    question_channel_rrf_weight: float = 0.15  # RRF fusion weight (low to avoid noise)
+
     # Cross-doc relation
     cross_doc_embedding_threshold: float = 0.7  # doc embedding cosine threshold (channel 3)
     cross_doc_source_label: str = "来源"        # [来源: filename] label prefix

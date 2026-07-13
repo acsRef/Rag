@@ -39,7 +39,8 @@ def _search_kb(
         top_k=top_k,
     )
     if settings.hybrid_search_enabled:
-        kwargs.update(query=query, fetch_k=settings.hybrid_search_top_k, rrf_k=settings.hybrid_rrf_k)
+        kwargs.update(query=query, fetch_k=settings.hybrid_search_top_k, rrf_k=settings.hybrid_rrf_k,
+                       enable_question_channel=settings.question_channel_enabled)
     try:
         return fn(**kwargs)
     except Exception:

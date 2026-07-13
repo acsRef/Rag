@@ -76,15 +76,17 @@ cd frontend && npm run build   # runs vue-tsc -b && vite build
 
 **LLM providers**: MiniMax M3 (chat/vision) + SiliconFlow (embedding Qwen3-VL-Embedding-8B 4096d + rerank BAAI/bge-reranker-v2-m3)
 
-**RAG pipeline** (see [app/core/pipeline.py:86](app/core/pipeline.py#L86)):
+**RAG pipeline** (see [app/core/pipeline.py:105](app/core/pipeline.py#L105) `RAGPipeline.execute`):
 ```
 QueryRewrite → IntentClassify (route to 1-3 KBs) → Hybrid Search (vector cosine + BM25 ts_rank, RRF merge)
+→ Cross-doc Relation (3-channel: TF-IDF edges / query keyword recall / doc-level embedding — see [app/core/doc_relation.py](app/core/doc_relation.py))
 → Cross-encoder Rerank → MMR diversity (λ=0.7, ≤2 per doc) → TopK → Prompt injection → SSE stream
 ```
 
 **Document ingestion** ([app/ingestion/](app/ingestion/)):
 ```
 Parser → Cleaner → Structurer → Chunker → Metadata → Indexer (with incremental hash reuse + PII filtering)
+→ Cross-doc relation matrix build (precomputes TF-IDF edges for cross-doc retrieval)
 ```
 
 **Database**: 14 tables, `chunks.embedding` (pgvector) + `chunks.search_text` (GIN tsvector), `init_db()` is idempotent (CREATE TABLE IF NOT EXISTS + ALTER TABLE ADD COLUMN IF NOT EXISTS). Connection: `postgresql://ragent:ragent@localhost:5432/ragent`.
@@ -214,6 +216,18 @@ D:/miniConda/envs/rag/python.exe -c "import app.main"
 ├── docker-compose.yml
 └── requirements.txt
 
+## Cross-document relation retrieval
+
+[app/core/doc_relation.py](app/core/doc_relation.py) — `cross_doc_retriever` enables jumping between related documents. Three channels:
+
+1. **TF-IDF relation edges** — pre-built at ingest time, stored as a relation matrix per document.
+2. **Query keyword recall** — uses the user query to find related docs by keyword overlap.
+3. **Doc-level embedding** — semantic similarity between document-level vectors (not chunks).
+
+Zero LLM/embedding cost at query time — all relations are precomputed during ingestion. Results are tagged with `cross_doc=True` and the source document for provenance.
+
+Note: The most recent cross-doc design (`9db350d`) supersedes the earlier single-channel approach. See `app/core/retrieval.py` `_search_kb` for the integration point.
+
 ## Diagnostics subsystem
 
 Live RAG-pipeline telemetry, recorded per request and served to a standalone HTML viewer.
@@ -244,18 +258,19 @@ Live RAG-pipeline telemetry, recorded per request and served to a standalone HTM
 
 | Concern | Location |
 | ------- | -------- |
-| RAG main flow | [app/core/pipeline.py:86](app/core/pipeline.py#L86) `RAGPipeline.execute` |
-| Hybrid search + RRF | [app/store/pgvector_store.py:197](app/store/pgvector_store.py#L197) `hybrid_search` |
+| RAG main flow | [app/core/pipeline.py:105](app/core/pipeline.py#L105) `RAGPipeline.execute` |
+| Hybrid search + RRF | [app/store/pgvector_store.py:300](app/store/pgvector_store.py#L300) `hybrid_search` |
+| Cross-doc relation | [app/core/doc_relation.py](app/core/doc_relation.py) `cross_doc_retriever` |
 | MMR algorithm | [app/core/mmr.py:25](app/core/mmr.py#L25) `mmr_select` |
 | PII scanner (3-layer) | [app/core/pii_scanner.py:116](app/core/pii_scanner.py#L116) `scan` |
 | Incremental hash reuse | [app/ingestion/indexer.py:100](app/ingestion/indexer.py#L100) `existing.content_hash == doc_hash` |
-| Ingestion main flow | [app/ingestion/indexer.py:33](app/ingestion/indexer.py#L33) `DocumentIndexer.index` |
+| Ingestion main flow | [app/ingestion/indexer.py:32](app/ingestion/indexer.py#L32) `DocumentIndexer.index` |
 | Startup sequence | [app/main.py:44](app/main.py#L44) `startup` |
 | JWT middleware | [app/middleware/auth.py:56](app/middleware/auth.py#L56) `get_current_user` |
 | SSE stream endpoint | [app/api/chat.py:13](app/api/chat.py#L13) `stream_chat` |
 | Diag recorder | [app/core/diagnostics.py](app/core/diagnostics.py) `DiagContext` |
-| Conversation memory | [app/core/memory.py:68](app/core/memory.py#L68) `ConversationMemory` |
+| Conversation memory | [app/core/memory.py:69](app/core/memory.py#L69) `ConversationMemory` |
 | Document parser | [app/ingestion/parser.py:47](app/ingestion/parser.py#L47) `parse_bytes` |
-| Text chunker | [app/ingestion/chunker.py:51](app/ingestion/chunker.py#L51) `TextChunker.chunk` |
+| Text chunker | [app/ingestion/chunker.py:45](app/ingestion/chunker.py#L45) `TextChunker.chunk` |
 | Frontend SSE parser | [frontend/src/api/chat.ts:38](frontend/src/api/chat.ts#L38) `streamChat` |
 | Config (all settings) | [app/config.py](app/config.py) |
