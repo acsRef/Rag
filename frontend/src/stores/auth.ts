@@ -29,10 +29,9 @@ export const useAuthStore = defineStore('auth', () => {
 
   const isLoggedIn = computed(() => !!token.value && !!user.value)
   const permissions = computed(() => user.value?.permissions || [])
-  const isAdmin = computed(() => permissions.value.includes('admin'))
 
   function hasPermission(p: string) {
-    return permissions.value.includes(p) || permissions.value.includes('admin')
+    return permissions.value.includes(p)
   }
 
   async function login(username: string, password: string) {
@@ -73,7 +72,7 @@ export const useAuthStore = defineStore('auth', () => {
   }
 
   return {
-    user, token, isLoggedIn, permissions, isAdmin,
+    user, token, isLoggedIn, permissions,
     hasPermission, login, register, checkSession, logout,
   }
 })
