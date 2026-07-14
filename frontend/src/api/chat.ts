@@ -42,6 +42,7 @@ export const chatApi = {
     onToken: (token: string) => void,
     onMetadata: (data: { conversation_id: string }) => void,
     onSources: (sources: SourceInfo[]) => void,
+    onCrossDoc?: (groups: Array<{document_id: string; filename: string; title: string; chunk_count: number}>) => void,
     onDone: () => void,
     onError: (err: string) => void,
     onThinking?: (text: string) => void,
@@ -105,6 +106,10 @@ export const chatApi = {
             } else if (lastEventType === 'thinking') {
               lastEventType = ''
               if (onThinking) onThinking(data)
+            } else if (lastEventType === 'cross_doc') {
+              lastEventType = ''
+              try { if (onCrossDoc) onCrossDoc(JSON.parse(data)) }
+              catch { /* ignore */ }
             } else if (data.startsWith('{')) {
               try {
                 const parsed = JSON.parse(data)

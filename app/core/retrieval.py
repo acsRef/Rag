@@ -158,6 +158,9 @@ class RetrievalEngine:
                 for r in results[:10]  # 只记录前10个避免文件过大
             ]
 
+        # Save original chunk IDs before cross-doc inflates scores
+        original_chunk_ids = {r["chunk_id"] for r in results}
+
         # -- Cross-doc retrieval (three-channel jump) --
         cross_doc_extra_count = 0
         try:
@@ -167,6 +170,11 @@ class RetrievalEngine:
             )
             if extra:
                 cross_doc_extra_count = len(extra)
+                # Cap cross-doc chunk scores at max hybrid search score,
+                # 防止文档级相似度分压倒实际的 chunk 级检索分
+                max_original_score = max(r["score"] for r in results) if results else 0.3
+                for c in extra:
+                    c["score"] = min(c["score"], max_original_score)
                 results.extend(extra)
                 results.sort(key=lambda x: x["score"], reverse=True)
                 results = results[:candidate_k]
@@ -189,8 +197,22 @@ class RetrievalEngine:
                 t_rerank = time.monotonic()
                 reranked = await sf_rerank.rerank(query, texts)
                 if reranked:
-                    reranked_ids = [r["index"] for r in reranked if 0 <= r["index"] < len(results)]
-                    results = [results[i] for i in reranked_ids]
+                    # 降级判断: rerank 分数无明显区分度时，跳过 reordering
+                    # (短查询如"绿色闪烁"常导致 reranker 全给 0 分，
+                    #  此时重排序会随机打乱正确结果，被后续 MMR 淘汰)
+                    rerank_scores = [r.get("relevance_score", 0) for r in reranked]
+                    max_score = max(rerank_scores)
+                    min_score = min(rerank_scores)
+                    if max_score - min_score > 0.001:
+                        reranked_ids = [r["index"] for r in reranked if 0 <= r["index"] < len(results)]
+                        results = [results[i] for i in reranked_ids]
+                    else:
+                        logger.debug("retrieve.rerank.skip_degraded query_len=%d candidates=%d "
+                                     "score_range=[%.4f, %.4f]",
+                                     len(query), len(reranked), min_score, max_score)
+                        # Rerank 无区分度: 丢弃 cross-doc 额外 chunk,恢复原始搜索排序
+                        results = [r for r in results if r["chunk_id"] in original_chunk_ids]
+                        results.sort(key=lambda x: x["score"], reverse=True)
                 rerank_elapsed = (time.monotonic() - t_rerank) * 1000
                 # Milestone 4: 跨编码器重排(DEBUG,每次问答都打)
                 logger.debug(
@@ -199,7 +221,7 @@ class RetrievalEngine:
                 )
 
                 if round_data is not None:
-                    rerank_scores = [r.get("score", 0) for r in reranked]
+                    rerank_scores = [r.get("relevance_score", 0) for r in reranked]
                     top_score = max(rerank_scores) if rerank_scores else 0
                     bottom_score = min(rerank_scores) if rerank_scores else 0
                     score_range = f"{bottom_score:.4f} ~ {top_score:.4f}"

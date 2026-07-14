@@ -1,7 +1,7 @@
 # RAGent — Agent 工作指南
 
 > **目标读者**:AI 助手(主要) + 人类开发者
-> **用途**:本文件是项目的"系统提示",新对话开始时 AI 助手应**先读本文件再开始工作**
+> **用途**:新对话开始时 AI 助手应**先读本文件再开始工作**。CLAUDE.md 是本文件的补充(启动步骤、API 路由清单、环境变量、项目结构树)。
 
 ---
 
@@ -9,15 +9,14 @@
 
 **RAGent-py** — 文档处理与智能问答系统。Python 3.11 FastAPI 后端 + Vue 3.5 前端 + PostgreSQL 15/pgvector 存储 + MiniMax M3 + SiliconFlow 双 LLM 栈。
 
-核心能力:多格式文档解析 → 结构感知切块 → 向量化 + BM25 混合检索 → 跨编码器重排 → MMR 多样性 → 流式问答。PII 三层防御 + RBAC 8 权限 + 长对话摘要 + 增量 hash 复用。
+核心能力:多格式文档解析 → 结构感知切块 → 向量化 + BM25 混合检索 → 跨编码器重排 → MMR 多样性 → 流式问答。PII 三层防御 + RBAC 8 权限 + 长对话摘要 + 增量 hash 复用 + 跨文档关联检索(三通道)。
 
 ---
 
 ## 2. Build / Lint / Test 命令
 
-**本仓库没有 pytest,没有 tests/ 目录,不要创建。**
+**本仓库没有 pytest/tests/ 目录,不要创建。**
 
-### 后端
 ```bash
 # 启动数据库
 docker compose up -d
@@ -28,30 +27,19 @@ LOG_LEVEL=DEBUG python -m app.main  # DEBUG 日志看检索细节
 
 # 验证 import 链(替代测试)
 D:/miniConda/envs/rag/python.exe -c "import app.main"
-```
 
-### 前端
-```bash
-# 启动(在 frontend/ 目录)
-npm install   # 首次或 package.json 变更后
-npm run dev   # → http://localhost:5173
+# 前端(在 frontend/ 目录)
+npm install && npm run dev   # → http://localhost:5173
+npm run build                # vue-tsc + vite build(类型检查)
 
-# 构建(含 vue-tsc 类型检查)
-npm run build
-```
-
-### 启动后验证
-```bash
-curl http://localhost:8000/health        # 后端
-curl http://localhost:5173               # 前端
-# 登录抓 token:
+# 启动后验证
+curl http://localhost:8000/health
 curl -X POST http://localhost:8000/api/v1/auth/login \
   -H 'Content-Type: application/json' \
   -d '{"username":"admin","password":"admin123"}'
 ```
 
-### 默认管理员
-`admin` / `admin123`
+默认管理员: `admin` / `admin123`
 
 ---
 
@@ -61,63 +49,87 @@ curl -X POST http://localhost:8000/api/v1/auth/login \
 
 **导入顺序**:stdlib → 第三方 → 本地(`from app.xxx`),用空行分隔组。禁用 `from module import *`。
 
-**格式化**:4 空格缩进,行宽≈100。无 ruff/black/flake8 配置,保持与周围代码一致。
+```python
+import asyncio, json, logging, time          # stdlib
+from dataclasses import dataclass
+from enum import Enum
 
-**类型标注**:优先 Python 3.10+ 的 `X | None` 和 `list[dict]` 语法(Python 3.11 支持良好)。注意 `threading.Lock | None` 等非 type 对象不能用 `|` — 改 `Optional[X]`。
+from fastapi import APIRouter, Depends       # third-party
+from openai import AsyncOpenAI
+
+from app.config import settings              # local
+from app.store.db import get_session
+```
+
+**格式化**:4 空格缩进,行宽≈100。无 ruff/black/flake8 配置,**保持与周围代码一致**。
+
+**类型标注**:优先 Python 3.10+ 语法(`X | None`, `list[dict]`)。注意 `threading.Lock | None` 等非 type 对象不能用 `|` — 改 `Optional[X]`。函数签名加返回类型:
+
 ```python
 def search(kb_ids: list[str], top_k: int = 10) -> list[dict]: ...
 async def stream() -> AsyncGenerator[str, None]: ...
 ```
 
 **命名约定**:
-- 类: `PascalCase` (`RAGPipeline`, `Settings`, `DocumentParser`)
-- 函数/方法: `snake_case` (`get_current_user`, `mmr_select`, `_search_kb`)
-- 常量: `UPPER_SNAKE_CASE` (`FILE_TYPE_MAP`, `_FMT`, `_NL`)
-- 私有: 前导下划线 (`_build_sources`, `_rule_cache`)
-- 模块级单例: 全小写 (`settings`, `rag_pipeline`, `minimax_client`)
+- 类: `PascalCase` (`RAGPipeline`, `Settings`, `DocumentParser`, `CircuitBreaker`)
+- 函数/方法: `snake_case` (`get_current_user`, `mmr_select`, `_search_kb`, `create_access_token`)
+- 常量: `UPPER_SNAKE_CASE` (`FILE_TYPE_MAP`, `_FMT`, `_NL`, `_SUMMARY_FRESH`)
+- 私有: 前导下划线 (`_build_sources`, `_rule_cache`, `_check_breaker`, `_get_admin_role_id`)
+- 模块级单例: 全小写 (`settings`, `rag_pipeline`, `minimax_client`, `conversation_memory`)
+- 布尔字段/变量: `is_active`, `has_permission`, `can_read_all`, `pii_enabled`
 
 **错误处理**:
-- 自定义异常层次: `CircuitOpenError` → 熔断跳过; `PermanentError` → 不重试; `TemporaryError` → 退避重试
+- 自定义异常: `CircuitOpenError` → 熔断跳过; `PermanentError`(4xx) → 不重试不触发熔断; `TemporaryError`(5xx/超时) → 退避重试+熔断计数
 - `except:` 块内用 `logger.exception()` 记录完整 traceback
-- 数据库 session: **必须**用 `try/finally` 保证 `session.close()`
+- 数据库 session: **必须**用 `try/finally` 或 `get_db_ctx()` 上下文管理器保证 close
   ```python
   session = get_session()
   try:
-      rows = session.query(...).all()
-      return rows
+      return session.query(...).all()
   finally:
       session.close()
   ```
 
-**日志**:每个模块顶部 `logger = logging.getLogger(__name__)`,用结构化消息 `"action.key key=val key2=%s"`。
+**日志**:每个模块顶部 `logger = logging.getLogger(__name__)`,结构化消息。
 
-**配置**:统一通过 `app/config.py` 的 `Settings(BaseSettings)` 访问,`.env` 文件覆盖。
+**配置**:统一通过 `app/config.py` 的 `Settings(BaseSettings)` 访问,`.env` 文件覆盖。所有可调参数在同一文件,禁止散落魔数。
 
 **API 路由**:`APIRouter(prefix="/api/v1/...", tags=[...])`,认证用 `Depends(get_current_user)`。
 
+**数据库会话**:优先 `with get_db_ctx() as session:` 上下文管理器,避免手动 close。所有 DB 操作尽量放工具函数,不要在路由 handler 里写 SQL。
+
 ### TypeScript / Vue
 
-**导入**:相对路径 `../stores/auth`,使用 `import type` 导入类型。
+**导入**:相对路径 `../stores/auth`;类型导入用 `import type`。
 
-**命名**:变量/函数 camelCase,接口/类型 PascalCase (`User`, `ChatMessage`, `SourceInfo`)。
+```typescript
+import { defineStore } from 'pinia'
+import { ref, computed } from 'vue'
+import { authApi, type User } from '../api/auth'
+```
 
-**Vue**:`<script setup lang="ts">` Composition API,避免 Options API。
+**命名**:变量/函数 `camelCase`,接口/类型 `PascalCase` (`User`, `ChatMessage`, `SourceInfo`)。
 
-**样式**:Apple 设计语言(`#007aff` accent),纯手写 CSS(**零图标库** — 只用 emoji + 内联 SVG)。
+**Vue**:`<script setup lang="ts">` Composition API(Pinia `defineStore` + 组合式写法),避免 Options API。
 
-**API**:通过 `frontend/src/api/index.ts` 的 axios 实例,拦截器自动注 Bearer token,401 自动登出。
+**样式**:Apple 设计语言(`#007aff` accent),纯手写 CSS。**零图标库** — 只用 emoji + 内联 SVG。
+
+**API**:通过 `frontend/src/api/index.ts` 的 axios 实例,拦截器自动注 Bearer token,401 自动清 token 并跳转 `/login`。
 
 ---
 
 ## 4. 架构快照
 
+### 启动顺序
+`startup()`: `setup_logging()` → JWT/PII_KEY 校验 → `init_db()`(幂等建表+迁移) → `seed_defaults()`(角色/权限/admin) → `seed_pii_rules()` → 恢复 stuck 文档 → complete
+
 ### RAG 管线
 ```
-用户问题 → QueryRewrite(代词消解+子问题拆分)
-  → 对每个子问题 IntentClassify(路由到1-3个KB)
+QueryRewrite(代词消解+子问题拆分) → IntentClassify(路由到1-3个KB)
   → Hybrid Search(向量余弦+BM25 ts_rank,RRF合并)
+  → Cross-doc Relation(三通道:TF-IDF边/关键词召回/文档级embedding)
   → Cross-encoder Rerank → MMR多样性(λ=0.7,每文档≤2)
-  → TopK(默认5) → Prompt注入 → LLM SSE流式输出
+  → TopK(默认5) → Prompt注入(token预算裁剪) → LLM SSE流式输出
 ```
 
 ### 文档摄入
@@ -125,21 +137,21 @@ async def stream() -> AsyncGenerator[str, None]: ...
 Parser(多格式→Markdown) → Cleaner → Structurer → Chunker
   → Metadata生成 → PII扫描(mask/reject) → Embedding
   → pgvector入库(增量hash复用:content_hash不变则跳过)
-```
-
-### 启动顺序
-```
-startup(): setup_logging() → JWT/PII_KEY校验(hard raise)
-  → init_db()(幂等建表+迁移) → seed_defaults()(角色/权限/admin)
-  → seed_pii_rules() → 恢复stuck文档 → RAGent-py startup complete
+  → Cross-doc关系矩阵预构建(TF-IDF边)
 ```
 
 ### LLM 栈
-- **MiniMax M3**:对话 + 视觉(图片描述)
+- **MiniMax M3**:对话 + 视觉(图片描述)。AsyncOpenAI 兼容接口,支持 SSE streaming
 - **SiliconFlow**:Embedding `Qwen3-VL-Embedding-8B`(4096d) + Rerank `BAAI/bge-reranker-v2-m3`
+- **熔断器**:按 provider 隔离,5xx/超时/连接错才计失败,4xx 永久错误不计
 
 ### SSE 流式对话
-`POST /api/v1/chat/stream` → 事件序列: `metadata`(conv_id) → `sources` → `token`(流) → `done`/`error`
+`POST /api/v1/chat/stream` → 事件序列: `metadata`(conv_id) → `sources` → `thinking`(思考过程) → `token`(生成流) → `done`/`error`
+
+### 关键子系统
+- **Conversation Memory**(`app/core/memory.py`): Token 预算制窗口 + 自动摘要压缩,超出预算按 chunks→history→summary 倒序裁剪
+- **Diagnostics**(`app/core/diagnostics.py`): 每次 RAG 查询生成 JSON 诊断记录,写入 `diagnostics/` 目录,配套独立 HTML 查看器(`tools/diagnostics.html`)
+- **PII 三层防御**(`app/core/pii_scanner.py`): 正则检测 → 算法校验(Luhn/mod-11) → 上下文排除(±20字 "sample"/"test"),策略: mask/reject/audit
 
 ---
 
@@ -149,29 +161,32 @@ startup(): setup_logging() → JWT/PII_KEY校验(hard raise)
 |--------|------|
 | RAG 主流程 | `app/core/pipeline.py:89` `RAGPipeline.execute` |
 | 混合检索 RRF | `app/store/pgvector_store.py:196` `hybrid_search` |
+| 跨文档关联检索 | `app/core/doc_relation.py` `cross_doc_retriever` |
 | MMR 算法 | `app/core/mmr.py:25` `mmr_select` |
 | PII 三层防御 | `app/core/pii_scanner.py:116` `scan` |
-| 增量 hash 复用 | `app/ingestion/indexer.py:108` |
+| 增量 hash 复用 | `app/ingestion/indexer.py:100` |
 | JWT 中间件 | `app/middleware/auth.py:56` `get_current_user` |
 | SSE 流式端点 | `app/api/chat.py:12` `stream_chat` |
 | 摄取主流程 | `app/ingestion/indexer.py:29` `DocumentIndexer.index` |
 | 文档解析 | `app/ingestion/parser.py:47` `DocumentParser.parse_bytes` |
+| 对话记忆管理 | `app/core/memory.py:69` `ConversationMemory` |
+| 诊断记录器 | `app/core/diagnostics.py` `DiagContext` |
 | 前端 SSE 解析 | `frontend/src/api/chat.ts:38` `streamChat` |
+| 配置中心 | `app/config.py` `Settings` |
 
 ---
 
 ## 6. 改动禁区
 
-- ❌ 不要改 `app/store/db.py` 的**已有** SQLAlchemy 模型(需要数据库迁移)
-  - ✅ 允许:在 db.py 底部加**新** model + `init_db()` 里加 `CREATE TABLE IF NOT EXISTS`(幂等模式)
-  - ✅ 允许:在 `pgvector_store.py` 里加对应的 ORM 方法
+- ❌ 不要改 `app/store/db.py` 的**已有** SQLAlchemy 模型(需要数据库迁移)。✅ 允许:在 db.py 底部加**新** model + `init_db()` 里加 `CREATE TABLE IF NOT EXISTS`(幂等模式)
 - ❌ 不要接管 uvicorn 的 logger
 - ❌ 不要去掉 `app/ingestion/indexer.py` 的增量 hash 复用
 - ❌ 不要删/改 PII 5 条默认规则(可加新规则)
 - ❌ 不要在前端引入 icon 库(emoji + 内联 SVG)
-- ❌ 不要 commit 真实 API key(.env 不在 git 里)
+- ❌ 不要 commit 真实 API key(`.env` 在 gitignore 中)
 - ❌ 不要创建 `tests/` 目录或 pytest 测试文件
 - ❌ 不要引入 `trace_id`/`contextvars`(项目决策:不用全链路追踪)
+- ❌ 不要阻塞事件循环 — 所有 LLM I/O 是 async,DB 操作需用 `asyncio.to_thread`
 
 ---
 
@@ -179,74 +194,43 @@ startup(): setup_logging() → JWT/PII_KEY校验(hard raise)
 
 | 症状 | 原因 | 解决 |
 |------|------|------|
-| `No module named 'app'` | Windows 下 `python app/main.py` 不加 cwd 到 sys.path | 用 `python -m app.main` |
-| `conda activate` 后 python 仍指向 base | shell 没真正激活 conda | 用绝对路径 `D:/miniConda/envs/rag/python.exe -m app.main` |
-| `RuntimeError: 请设置 JWT_SECRET` | .env 没配 | 改 `.env` 的 `JWT_SECRET`/`PII_ENCRYPTION_KEY` |
+| `No module named 'app'` | Windows `python app/main.py` 不加 cwd 到 sys.path | 用 `python -m app.main` |
+| `conda activate` 后 python 仍指向 base | shell 没真正激活 conda | 用绝对路径 `D:/miniConda/envs/rag/python.exe` |
+| `RuntimeError: 请设置 JWT_SECRET` | `.env` 没配 | 改 `JWT_SECRET`/`PII_ENCRYPTION_KEY` |
 | 启动卡在 `init_db` | PostgreSQL 没起 | `docker compose up -d` + `pg_isready` |
 | Embedding 429 限流 | SiliconFlow RPS 超限 | 调 `embedding_rate_limit_rps`(默认 5) |
 | 检索 0 结果 | KB 没索引文档 | 先上传文档 |
-| f-string `\n` SyntaxError | Python 3.11 的 f-string 表达式不支持反斜杠 | 用 `chr(10)` 或常量 `_NL = '\\n'` 替代 |
-| `X | None` TypeError | 非 type 对象(如 `threading.Lock`)不能用 `|` | 改 `Optional[X]` |
+| f-string `\n` SyntaxError | Python 3.11 不支持 f-string 内反斜杠 | 用 `chr(10)` 或常量 `_NL = '\\n'` |
+| `X \| None` TypeError | 非 type 对象(如 `threading.Lock`)不能用 `\|` | 改 `Optional[X]` |
 
 ---
 
-## 9. Bug Fix History (2026-06-30)
+## 8. 熔断器 4xx 规则(重要)
 
-**34 bugs fixed** across two rounds, touching 16+ files. All fixes verified via import chain and end-to-end test (upload 4 docs → RAG query → SSE stream complete).
+Only 5xx/timeout/connection errors call `_on_failure()`. 4xx (auth, bad request, quota) must NOT trip breaker.
 
-### Round 1 — 33 bugs (bulk fix)
-| 文件 | 修复 |
-|------|------|
-| `app/llm/rerank.py` | 4xx 不触发熔断(仅 5xx 调 `_on_failure`); 复用 httpx.AsyncClient |
-| `app/core/retrieval.py` | Rerank 空数组不覆盖检索结果; `_collect_results` 用 `asyncio.to_thread` |
-| `app/store/pgvector_store.py` | `replace_chunks` 原子事务; `get_neighbor_chunks` SQL 加 seq 范围过滤 |
-| `app/ingestion/indexer.py` | 事务化 replace; PII 扫描缓存; Embedding 失败写 warning |
-| `app/api/documents.py` | Upload 预检 file.size; SSE `/events` 401 正确返回 |
-| `app/llm/embedding.py` | 15s 超时; RateLimiter 加 `asyncio.Lock`; embed 加重试 |
-| `app/llm/base.py` | `_JSON_FENCE_PATTERN` 匹配嵌套 JSON; HALF_OPEN 单探测 |
-| `app/core/memory.py` | DB 操作 `asyncio.to_thread`; 锁清理; DetachedInstanceError 防护 |
-| `app/core/diagnostics.py` | 线程安全文件写入 |
-| `app/core/pipeline.py` | ctx 遮蔽修复; 子问题并行 `asyncio.gather`; 进度事件; SSE \r 移除 |
-| `app/api/kb.py` | restricted KB 列表修复; delete_kb 级联清理 DocRoleAccess+KBRoleAccess |
-| `app/core/prompt.py` | 预算 ≤ 0 不保留 chunk; `_trim_history` 历史裁剪 |
-| `app/llm/chat.py` | 懒加载 client 按 event loop 重建; `async with response` |
-| `app/llm/vision.py` | 失败响应不写入缓存 |
-| `app/core/pii_scanner.py` | `_has_exclusion` substring → word boundary regex |
-
-### Round 2 — 7 missed fixes
-| 问题 | 文件 | 修复 |
-|------|------|------|
-| `embed_batch` 死代码 | `embedding.py` | 删除整个方法 |
-| 4xx 仍计入熔断 | `chat.py` (流式+同步), `embedding.py` | 先 `classify_llm_error(e)`, `isinstance(typed, PermanentError)` 则不调 `_on_failure()` |
-| KB owner 看不到自己 restricted KB | `api/kb.py` | 加 `or_(public_cond, owner_cond)` 到查询 |
-| `get_neighbor_chunks` SQL 全量查 | `store/pgvector_store.py` | `CAST(SUBSTRING(chunk_id FROM '_(\\\\d+)$') AS INTEGER) BETWEEN` 数值过滤 |
-| `vision._cache` 无淘汰 | `llm/vision.py` | `OrderedDict` + `max_cache=1000`, LRU 淘汰 |
-| PII 三重扫描 | `core/pii_scanner.py` + `ingestion/indexer.py` | `mask_text()` 加可选 `findings` 参数; indexer 复用缓存 |
-
-### Architecture Notes (from fixes)
-- **Circuit breaker 4xx rule**: ONLY 5xx/timeout/connection errors call `_on_failure()`. 4xx (auth, bad request, quota) must NOT trip breaker. Pattern: `classify_llm_error(e)` → `isinstance(typed, PermanentError)` → skip `_on_failure()`.
-- **embed_batch** is dead code (never called from anywhere in codebase), deleted.
-- **PII triple scan**: `mask_text()` now accepts optional `findings` param. Callers that already scanned should pass findings to avoid a 3rd scan pass.
-- **Vision cache**: LRU via `OrderedDict`, max_cache=1000.
-- **KB visibility**: Owner always sees their own KBs regardless of visibility setting.
-- **get_neighbor_chunks**: Uses PostgreSQL `CAST(SUBSTRING(...) AS INTEGER) BETWEEN` for accurate numerical seq filtering (string BETWEEN breaks at seq≥10).
-
-### End-to-end test docs
-Located in `test-docs/`:
-- `01-产品规格书_M3工业网关.md` — 10 chunks
-- `02-2026年销售策略与渠道政策.md` — 14 chunks
-- `03-员工手册_2026修订版.md` — 16 chunks
-- `04-2025年Q4经营分析报告.md` — 11 chunks
-
-Test KB ID: `a18e62187f234e7d` (from last session, may need recreation).
-
----
-
-## 10. Git LFS
-
-所有 `.py` 源文件通过 Git LFS 存储。克隆后:
-```bash
-git lfs install
-git lfs pull
+```python
+typed = classify_llm_error(e)
+if isinstance(typed, PermanentError):
+    # don't call _on_failure() — 4xx is permanent
+    raise typed
+# TemporaryError → retry + _on_failure()
 ```
-否则 `.py` 是 LFS 指针文件,import 会失败。
+
+---
+
+## 9. Git LFS
+
+所有 `.py` 源文件通过 Git LFS 存储。克隆后: `git lfs install && git lfs pull`。否则 `.py` 是 LFS 指针文件,import 会失败。
+
+---
+
+## 10. 关键设计决策
+
+| 决策 | 理由 |
+|------|------|
+| 不用全链路追踪(trace_id/contextvars) | 复杂度增加 > 收益,诊断已够用 |
+| 无 pytest/tests 目录 | import chain + 端到端手动验证替代 |
+| 增量 hash 复用 | 避免重复 embedding,大幅降低 SiliconFlow 调用量 |
+| PII 三层:正则有->算法验->上下文排除 | 减少误报,支持 "sample/test" 内容白名单 |
+| LLM 懒加载按 event loop 重建 | Windows + uvicorn reload 场景避免事件循环错乱 |

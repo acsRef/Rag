@@ -230,6 +230,7 @@ async function send() {
     (sources) => {
       currentSources.value = sources
     },
+    undefined,
     () => {
       messages.value.push({
         role: 'assistant',

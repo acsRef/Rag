@@ -187,7 +187,7 @@ class DocumentIndexer:
             if is_reused:
                 old = old_chunks_map[ch]
                 embedding = old["embedding"]
-                search_text = old.get("search_text", "") or tokenize(c.text)
+                search_text = old.get("search_text", "") or tokenize(c.text, stopwords=True)
                 embedded_count += 1
             else:
                 if new_idx < len(embed_results):
@@ -199,7 +199,7 @@ class DocumentIndexer:
                     embedded_count += 1
                 elif err:
                     error_messages.append(err)
-                search_text = tokenize(c.text)
+                search_text = tokenize(c.text, stopwords=True)
 
             # Skip chunks whose embedding permanently failed — they would be invisible
             # to vector search and storing NULL would cause pgvector issues.

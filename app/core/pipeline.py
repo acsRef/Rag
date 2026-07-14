@@ -262,6 +262,10 @@ class RAGPipeline:
                 else:
                     deduped.append(c)
             unique_chunks = deduped
+            # Fill filenames from already-resolved sources
+            source_map = {s.document_id: s.filename for s in sources}
+            for g in doc_groups:
+                g["filename"] = source_map.get(g["document_id"], g["filename"])
             yield f"event: cross_doc\ndata: {json.dumps(doc_groups)}\n\n"
 
         messages = prompt_builder.build_messages(
