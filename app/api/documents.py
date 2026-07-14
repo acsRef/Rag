@@ -10,7 +10,7 @@ from app.store.db import get_db_ctx, Document, Chunk, DocRoleAccess, PiiAlert, P
 from app.config import settings
 
 from app.models.schemas import DocumentUploadResponse, DocumentStatusResponse, DocumentListItem
-from app.middleware.auth import get_current_user
+from app.middleware.auth import get_current_user, _get_admin_role_id
 from fastapi import APIRouter, UploadFile, File, Form, Depends, HTTPException, BackgroundTasks, Request
 from fastapi.responses import StreamingResponse
 
@@ -61,7 +61,7 @@ def _resolve_sse_user(request: Request) -> dict | None:
         "display_name": user.display_name,
         "role_ids": role_ids,
         "permissions": permissions,
-        "is_admin": "admin" in permissions,
+        "is_admin": _get_admin_role_id() in role_ids,
     }
 
 

@@ -10,6 +10,21 @@ from app.store.auth_store import get_user_by_id, get_user_role_ids, get_user_per
 bearer_required = HTTPBearer(auto_error=True)
 bearer_optional = HTTPBearer(auto_error=False)
 
+_admin_role_id: int | None = None
+
+
+def _get_admin_role_id() -> int:
+    global _admin_role_id
+    if _admin_role_id is None:
+        from app.store.db import get_session, Role
+        session = get_session()
+        try:
+            role = session.query(Role).filter(Role.name == "admin").first()
+            _admin_role_id = role.id if role else 0
+        finally:
+            session.close()
+    return _admin_role_id
+
 
 def create_access_token(data: dict) -> str:
     to_encode = data.copy()
@@ -34,7 +49,7 @@ def _build_user_dict(user) -> dict:
         "display_name": user.display_name,
         "role_ids": role_ids,
         "permissions": permissions,
-        "is_admin": "admin" in permissions,
+        "is_admin": _get_admin_role_id() in role_ids,
     }
 
 

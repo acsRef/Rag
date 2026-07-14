@@ -2,7 +2,7 @@
 from app.core.pipeline import rag_pipeline
 from app.core.diagnostics import DiagContext
 from app.models.schemas import ChatRequest, ConversationResponse
-from app.middleware.auth import get_current_user, get_optional_user
+from app.middleware.auth import get_current_user
 from app.store.db import get_db_ctx, Conversation
 from fastapi import APIRouter, Depends, HTTPException
 
@@ -12,12 +12,14 @@ router = APIRouter(prefix="/api/v1/chat", tags=["Chat"])
 @router.post("/stream")
 async def stream_chat(
     req: ChatRequest,
-    current_user: dict | None = Depends(get_optional_user),
+    current_user: dict = Depends(get_current_user),
 ):
     from fastapi.responses import StreamingResponse
-    user_id = current_user["id"] if current_user else "anonymous"
-    user_role_ids = current_user.get("role_ids") if current_user else None
-    can_read_all = bool(current_user and (current_user["is_admin"] or "doc.read_all" in current_user["permissions"]))
+    if "chat" not in current_user["permissions"]:
+        raise HTTPException(status_code=403, detail="Permission denied")
+    user_id = current_user["id"]
+    user_role_ids = current_user["role_ids"]
+    can_read_all = current_user["is_admin"] or "doc.read_all" in current_user["permissions"]
     ctx = DiagContext(query=req.query)
     return StreamingResponse(
         rag_pipeline.execute(req, user_id=user_id, user_role_ids=user_role_ids, can_read_all=can_read_all, ctx=ctx),

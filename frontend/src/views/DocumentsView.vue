@@ -2,12 +2,13 @@
   <div style="display:flex;flex-direction:column;flex:1;overflow:hidden">
     <div class="page-header">
       <span>文档管理</span>
-      <button class="btn btn-primary" @click="triggerUpload">+ 上传</button>
+      <button v-if="auth.hasPermission('doc.upload')" class="btn btn-primary" @click="triggerUpload">+ 上传</button>
       <input ref="fileInput" type="file" style="display:none" multiple @change="handleFiles" />
     </div>
 
     <div class="doc-content">
       <div
+        v-if="auth.hasPermission('doc.upload')"
         class="upload-area"
         :class="{ 'drag-over': dragOver }"
         @drop.prevent="handleDrop"
@@ -55,7 +56,7 @@
             </td>
             <td style="color:var(--text-tertiary);font-size:12px">{{ formatDate(d.created_at) }}</td>
             <td>
-              <button class="btn btn-ghost" style="color:var(--red);padding:3px 10px;font-size:11px" @click="confirmDelete(d)">删除</button>
+              <button v-if="auth.hasPermission('doc.delete')" class="btn btn-ghost" style="color:var(--red);padding:3px 10px;font-size:11px" @click="confirmDelete(d)">删除</button>
             </td>
           </tr>
           <tr v-if="!docs.length">

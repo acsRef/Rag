@@ -7,7 +7,7 @@
         💬 对话
       </button>
       <button
-        v-if="auth.hasPermission('doc.upload') || auth.hasPermission('doc.read_all')"
+        v-if="auth.hasPermission('doc.upload') || auth.hasPermission('doc.read_all') || auth.hasPermission('doc.delete')"
         class="nav-item"
         :class="{ active: route.path === '/documents' }"
         @click="go('/documents')"

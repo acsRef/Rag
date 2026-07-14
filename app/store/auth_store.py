@@ -163,7 +163,7 @@ def seed_defaults():
 
             perms = {
                 admin_role.id: ["chat", "doc.upload", "doc.delete", "doc.read_all", "kb.create",
-                                "kb.delete", "kb.manage_visibility", "user.manage", "admin"],
+                                "kb.delete", "kb.manage_visibility", "user.manage"],
                 user_role.id: ["chat", "doc.upload", "doc.delete"],
             }
             for rid, plist in perms.items():
