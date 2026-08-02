@@ -5,7 +5,8 @@ from fastapi import APIRouter, Depends, HTTPException, status, Request
 from sqlalchemy.exc import IntegrityError
 from app.store.auth_store import (
     create_user, get_user_by_username, get_user_by_id,
-    get_user_role_ids, get_user_permissions, list_roles, verify_password, seed_defaults,
+    get_user_role_ids, get_user_permissions, list_roles, verify_password,
+    hash_password, seed_defaults,
 )
 from app.middleware.auth import create_access_token, get_current_user
 from app.models.schemas import RegisterRequest, LoginRequest, TokenResponse, UserResponse
@@ -17,6 +18,9 @@ _LOGIN_ATTEMPTS: dict[str, list[float]] = defaultdict(list)
 _LOGIN_WINDOW = 300  # seconds
 _LOGIN_MAX_ATTEMPTS = 10
 
+# 假哈希：用户不存在时也跑一次 bcrypt，拉平两条路径的耗时，防用户名枚举
+_DUMMY_HASH = hash_password("ragent-dummy-password-for-timing-equalization")
+
 
 def _get_workspace_kb_id(user_id: str) -> str:
     with get_db_ctx() as session:
@@ -24,17 +28,19 @@ def _get_workspace_kb_id(user_id: str) -> str:
         return kb.id if kb else ""
 
 
-def _check_rate_limit(key: str):
+def _check_rate_limit(key: str, message: str = "登录尝试过于频繁，请稍后再试"):
     now = time.time()
     window = _LOGIN_ATTEMPTS[key]
     window[:] = [t for t in window if now - t < _LOGIN_WINDOW]
     if len(window) >= _LOGIN_MAX_ATTEMPTS:
-        raise HTTPException(status_code=429, detail="登录尝试过于频繁，请稍后再试")
+        raise HTTPException(status_code=429, detail=message)
     window.append(now)
 
 
 @router.post("/register", response_model=TokenResponse)
-def register(body: RegisterRequest):
+def register(body: RegisterRequest, request: Request):
+    _check_rate_limit("register:" + request.client.host,
+                      message="注册过于频繁，请稍后再试")
     if get_user_by_username(body.username):
         raise HTTPException(status_code=400, detail="Username already exists")
     user_role = next((r for r in list_roles() if r.name == "user"), None)
@@ -79,7 +85,10 @@ def register(body: RegisterRequest):
 def login(body: LoginRequest, request: Request):
     _check_rate_limit(request.client.host)
     user = get_user_by_username(body.username)
-    if not user or not verify_password(body.password, user.hashed_password):
+    if user is None:
+        verify_password(body.password, _DUMMY_HASH)   # 时序拉平：存在/不存在耗时一致
+        raise HTTPException(status_code=401, detail="Invalid username or password")
+    if not verify_password(body.password, user.hashed_password):
         raise HTTPException(status_code=401, detail="Invalid username or password")
     if not user.is_active:
         raise HTTPException(status_code=403, detail="User is disabled")

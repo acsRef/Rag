@@ -30,6 +30,9 @@ def create_user(username: str, password: str, display_name: str = "", email: str
         for rid in (role_ids or []):
             session.add(UserRole(user_id=user.id, role_id=rid))
         session.commit()
+        # commit 默认 expire 所有属性，必须先 refresh 再 expunge，
+        # 否则调用方访问任何属性都会 DetachedInstanceError（register 曾因此必 500）
+        session.refresh(user)
         session.expunge(user)
         return user
     finally:
