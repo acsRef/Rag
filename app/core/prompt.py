@@ -250,7 +250,8 @@ class RAGPromptBuilder:
         if tokens <= budget or budget <= 0:
             return full, tokens
 
-        # Trim from oldest turns
+        # Trim from oldest turns：从新往旧选入，再还原为时间顺序（旧→新）渲染——
+        # 旧实现按选取顺序（新→旧）直接 append，渲染出的历史块顺序颠倒
         trimmed_lines = []
         if summary:
             trimmed_lines.append("## 对话历史摘要")
@@ -258,12 +259,17 @@ class RAGPromptBuilder:
             trimmed_lines.append("")
         trimmed_lines.append("## 近期对话原文")
 
+        kept: list[str] = []
+        probe = "\n".join(trimmed_lines)
         for m in reversed(history):
-            candidate = "\n".join(trimmed_lines) + "\n" + f"**{'用户' if m['role'] == 'user' else '助手'}**: {m['content']}"
+            line = f"**{'用户' if m['role'] == 'user' else '助手'}**: {m['content']}"
+            candidate = probe + "\n" + line
             if _est(candidate) <= budget:
-                trimmed_lines.append(f"**{'用户' if m['role'] == 'user' else '助手'}**: {m['content']}")
+                kept.append(line)
+                probe = candidate
             else:
                 break
+        trimmed_lines.extend(reversed(kept))
 
         result = "\n".join(trimmed_lines)
         return result, _est(result)

@@ -209,6 +209,12 @@ class RetrievalEngine:
             try:
                 t_rerank = time.monotonic()
                 reranked = await sf_rerank.rerank(query, texts)
+                if not reranked:
+                    # rerank 失败被吞成 []，与"无结果"不可区分——至少留条告警线索
+                    logger.warning(
+                        "retrieve.rerank.empty — reranker returned nothing for %d candidates, keeping search order",
+                        len(texts),
+                    )
                 if reranked:
                     # 降级判断: rerank 分数无明显区分度时，跳过 reordering
                     # (短查询如"绿色闪烁"常导致 reranker 全给 0 分，

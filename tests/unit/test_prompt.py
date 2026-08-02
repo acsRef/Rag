@@ -23,11 +23,6 @@ def test_trim_history_keeps_summary_and_chronological_order_when_fits():
     assert tokens > 0
 
 
-@pytest.mark.xfail(
-    reason="已知 bug：_trim_history 触发裁剪分支时按从新到旧 append，"
-           "渲染出的历史块顺序颠倒；待 llm-gateway-convergence plan 修复",
-    strict=False,
-)
 def test_trim_history_keeps_chronological_order_when_trimming():
     history = [{"role": "user", "content": "msg-%d %s" % (i, "x" * 60)} for i in range(6)]
     text, _ = prompt_builder._trim_history(history, "", budget=120)
