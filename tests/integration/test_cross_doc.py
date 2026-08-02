@@ -54,21 +54,55 @@ async def test_cross_doc_jump_returns_related_doc_chunks(ingest_docs):
     assert all(c["chunk_id"] not in initial_ids for c in extras)
 
 
-@pytest.mark.xfail(
-    reason="已知 bug：hybrid 模式下 cross-doc 附加 chunk 被 min(score, max_rrf) 压到 RRF 量纲，"
-           "候选截断后沉底，三通道机制失效；待 cross-doc-retrieval-overhaul plan 修复",
-    strict=False,
-)
-async def test_cross_doc_extras_survive_tight_candidate_cut(ingest_docs, monkeypatch):
+async def test_cross_doc_extras_reach_final_results(ingest_docs, monkeypatch):
+    """L1 回归：直连结果只有 doc1 时，doc2 只能经 cross-doc 通道进入最终结果。
+
+    旧实现 min(score, max_rrf) 把附加 chunk 压到 RRF 量纲，排序后沉底被截断。
+    fake 向量会让所有文档都"直连命中"，故 monkeypatch _collect_results
+    把直连结果固定为 doc1，隔离出映射逻辑本身。
+    """
+    import app.core.retrieval as retrieval_mod
     from app.config import settings as s
     from app.core.retrieval import retrieval_engine
+    from app.store import pgvector_store
 
+    doc1 = ingest_docs["transformer_basics.md"]
+    doc2 = ingest_docs["transformer_pytorch.md"]
+    d1_chunks = pgvector_store.get_chunks_by_document(doc1)[:5]
+    assert d1_chunks
+    for i, c in enumerate(d1_chunks):
+        c["score"] = 0.02 - i * 0.001   # RRF 量级的直连分
+
+    def fake_collect(kb_ids, query_emb, query, user_role_ids, can_read_all,
+                     top_k, seen_ids, results):
+        for c in d1_chunks:
+            seen_ids.add(c["chunk_id"])
+            results.append(dict(c))
+
+    monkeypatch.setattr(retrieval_mod, "_collect_results", fake_collect)
     monkeypatch.setattr(s, "mmr_enabled", False)
-    monkeypatch.setattr(s, "mmr_candidate_k", 2)   # 极小候选窗口放大分数量纲问题
-    # 查询用 doc1 独有术语（缩放/点积 只在 transformer_basics 中出现）：
-    # doc2 若进最终结果，只能经由 cross-doc 通道——断言才有判别力。
-    results = await retrieval_engine.retrieve(
-        "缩放点积", None, can_read_all=True,
-    )
+
+    results = await retrieval_engine.retrieve("多头注意力", None, can_read_all=True)
     doc_ids = {r.document_id for r in results}
-    assert ingest_docs["transformer_pytorch.md"] in doc_ids
+    assert doc2 in doc_ids, "cross-doc 附加 chunk 未能进入最终结果（L1 量纲塌方）"
+
+
+async def test_channel3_discovers_semantically_related_doc(ingest_docs, monkeypatch):
+    """阈值放开到 0 时，channel 3 应能独立发现无词法交集的文档 3。"""
+    from app.config import settings as s
+    from app.core import doc_relation as dr
+    from app.core.doc_relation import cross_doc_retriever
+    from app.store import pgvector_store
+
+    monkeypatch.setattr(s, "cross_doc_embedding_threshold", 0.0)
+    # 会话内历史文档会占满默认 5 个邻居名额，放开上限以观察发现能力
+    monkeypatch.setattr(dr, "_MAX_NEIGHBORS_PER_QUERY", 50)
+    doc1 = ingest_docs["transformer_basics.md"]
+    doc3 = ingest_docs["rag_chunking.md"]
+    initial = pgvector_store.get_chunks_by_document(doc1)[:2]
+    # 查询词与文档 3 无词法交集 → channel 1/2 不会发现它，只有 channel 3 能
+    extras = await cross_doc_retriever.retrieve(
+        "缩放点积公式推导", [0.1] * 4096, ["test-kb"], initial, can_read_all=True,
+    )
+    extra_docs = {c["document_id"] for c in extras}
+    assert doc3 in extra_docs, "channel 3 未能独立发现语义相关文档"

@@ -151,9 +151,19 @@ def ingest_docs(integration_db, fake_llm_stack):
     先预建 Document 行再 index——与 api/documents.py 的上传契约一致：
     indexer 的 add_chunks 先于 _save_document 执行，FK schema 下
     没有预建行的 index(document_id=None) 会直接 FK 违反。
+
+    每次调用先清空语料相关表：函数级 fixture 会多代累积同文本文档，
+    旧代副本与当代词法/向量不可区分，会污染跨文档测试的确定性。
     """
     from app.ingestion.indexer import document_indexer
     from app.store.db import get_db_ctx, Document, new_id, utc_now
+
+    with get_db_ctx() as session:
+        session.execute(text(
+            "TRUNCATE chunks, chunk_questions, documents, doc_entities, "
+            "doc_relations, doc_embeddings, doc_role_access RESTART IDENTITY"
+        ))
+        session.commit()
 
     ids = {}
     for name in ("transformer_basics.md", "transformer_pytorch.md", "rag_chunking.md"):

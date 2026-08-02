@@ -112,6 +112,13 @@ class RetrievalEngine:
             logger.warning("retrieve.embedding.failed — using zero-vector (BM25-only fallback)")
             query_emb = [0.0] * settings.embedding_dimension
             embed_elapsed = (time.monotonic() - t_embed) * 1000
+        if embedding_degraded and not settings.hybrid_search_enabled:
+            # 纯向量模式 + embedding 失败：零向量余弦排序未定义，宁可空结果触发上层兜底
+            logger.warning("retrieve.pure_vector_degraded — embedding failed with hybrid off, returning []")
+            if ctx:
+                ctx.track_error("embedding", "ZeroVectorNoHybrid",
+                                "pure-vector mode with failed embedding returns []", degraded=True)
+            return []
         # Milestone 2: query 嵌入完成(DEBUG,因为正常路径会调无数次)
         logger.debug(
             "retrieve.embedded dim=%d elapsed_ms=%.1f",
@@ -164,17 +171,23 @@ class RetrievalEngine:
         # -- Cross-doc retrieval (three-channel jump) --
         cross_doc_extra_count = 0
         try:
-            extra = await cross_doc_retriever.retrieve(
+            # retrieve_sync 内部全同步 DB 调用，必须 to_thread，否则阻塞事件循环
+            extra = await asyncio.to_thread(
+                cross_doc_retriever.retrieve_sync,
                 query, query_emb, target_kb_ids,
                 results, user_role_ids, can_read_all,
             )
             if extra:
                 cross_doc_extra_count = len(extra)
-                # Cap cross-doc chunk scores at max hybrid search score,
-                # 防止文档级相似度分压倒实际的 chunk 级检索分
-                max_original_score = max(r["score"] for r in results) if results else 0.3
+                # 归一化映射：附加 chunk 落在最强直连分的 70%~100% 区间，
+                # 保留邻居间次序，最终位置交给 rerank/MMR 决定——
+                # 旧的 min(score, max_rrf) 把通道分（0–1）压到 RRF 量纲（~0.01），
+                # 候选截断后附加 chunk 全部沉底，三通道形同虚设
+                max_neighbor = max(c["score"] for c in extra)
+                max_original = max((r["score"] for r in results), default=0.3)
                 for c in extra:
-                    c["score"] = min(c["score"], max_original_score)
+                    rel = c["score"] / max_neighbor if max_neighbor else 1.0
+                    c["score"] = max_original * (0.7 + 0.3 * rel)
                 results.extend(extra)
                 results.sort(key=lambda x: x["score"], reverse=True)
                 results = results[:candidate_k]
@@ -205,7 +218,11 @@ class RetrievalEngine:
                     min_score = min(rerank_scores)
                     if max_score - min_score > 0.001:
                         reranked_ids = [r["index"] for r in reranked if 0 <= r["index"] < len(results)]
-                        results = [results[i] for i in reranked_ids]
+                        reordered = [results[i] for i in reranked_ids]
+                        # reranker 未返回的候选按原序追加——不静默丢弃
+                        returned = set(reranked_ids)
+                        reordered += [r for i, r in enumerate(results) if i not in returned]
+                        results = reordered
                     else:
                         logger.debug("retrieve.rerank.skip_degraded query_len=%d candidates=%d "
                                      "score_range=[%.4f, %.4f]",
