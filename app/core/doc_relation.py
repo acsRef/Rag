@@ -14,10 +14,9 @@ Design notes:
   - ON DELETE CASCADE on source_doc cleans outgoing edges when a doc is
     deleted. Incoming edges (where the deleted doc is target_doc) must be
     cleaned manually via delete_doc_relations_by_doc_id.
-  - This module is async-def but internally uses ONLY synchronous
-    SQLAlchemy calls. It does NOT call any LLM, so await-ing these methods
-    will NOT block the event loop. If you add LLM calls inside, wrap them
-    in asyncio.to_thread.
+  - 本模块内部全部是同步 SQLAlchemy 调用（无 LLM）。在事件循环中
+    必须经 asyncio.to_thread（调用 retrieve_sync）执行，直接 await
+    async 包装版会阻塞整个 worker。
 """
 
 from __future__ import annotations
@@ -65,6 +64,7 @@ _COMPLEMENTARY_THRESHOLD = 0.3  # cosine >= this -> complementary candidate
 _DUPLICATE_JACCARD_LIMIT = 0.5  # jaccard >= this -> mark as duplicate, not complementary
 _QUERY_KEYWORD_MATCH_RATIO = 0.2  # channel-2 minimum coverage
 _CH2_MAX_CANDIDATES = 200  # channel-2 max docs to evaluate per query
+_CH3_FULL_SCAN_LIMIT = 200  # channel-3 语料 ≤ 此值时全量评估文档 embedding，否则只对 ch1/ch2 候选求交
 _MAX_NEIGHBORS_PER_QUERY = 5  # cap on cross-doc neighbor count
 
 
@@ -348,16 +348,31 @@ class CrossDocRetriever:
 
     Channel 1: precomputed TF-IDF relation edges (only 'complementary' edges).
     Channel 2: query entity overlap with target doc top-words (low-TF recall).
-    Channel 3: doc-level embedding cosine (semantic fallback, N>1000).
+    Channel 3: doc-level embedding cosine (semantic fallback — 可独立发现文档).
 
-    All DB calls are sync (SQLAlchemy). DO NOT add LLM calls without wrapping
-    them in asyncio.to_thread — this method runs inside the SSE chat handler.
+    内部全部同步（SQLAlchemy）。事件循环中请用
+    `asyncio.to_thread(cross_doc_retriever.retrieve_sync, ...)`；
+    async `retrieve` 仅为兼容保留，直接 await 会阻塞 worker。
     """
 
     def __init__(self) -> None:
         self._extractor = TfidfFeatureExtractor()
 
     async def retrieve(
+        self,
+        query: str,
+        query_emb: list[float] | None,
+        kb_ids: list[str] | None,
+        initial_chunks: list[dict],
+        user_role_ids: list[int] | None = None,
+        can_read_all: bool = False,
+    ) -> list[dict]:
+        """兼容入口：内部全同步，事件循环中应改用 retrieve_sync + to_thread。"""
+        return self.retrieve_sync(
+            query, query_emb, kb_ids, initial_chunks, user_role_ids, can_read_all,
+        )
+
+    def retrieve_sync(
         self,
         query: str,
         query_emb: list[float] | None,
@@ -392,7 +407,10 @@ class CrossDocRetriever:
                 if target in matched_doc_ids:
                     continue
                 if rel["relation_type"] == "complementary":
-                    neighbor_scores[target] = max(neighbor_scores[target], rel["cosine_scaled"])
+                    # cosine_scaled 是 int(cosine*1000)，除回 0–1 与其余通道同量纲
+                    neighbor_scores[target] = max(
+                        neighbor_scores[target], rel["cosine_scaled"] / 1000.0
+                    )
 
         # Channel 2: query keyword overlap — independently discover docs with
         # matching entity terms, regardless of whether channel 1 found them.
@@ -415,13 +433,18 @@ class CrossDocRetriever:
                     if match_ratio >= _QUERY_KEYWORD_MATCH_RATIO:
                         neighbor_scores[ndoc_id] = max(neighbor_scores[ndoc_id], match_ratio)
 
-        # Channel 3: doc-level embedding cosine (semantic fallback).
+        # Channel 3: doc-level embedding cosine — 语义兜底，可独立发现文档
+        # （不再只增强 ch1/ch2 已有候选）。批量取 embedding，消除 N+1。
+        # 语料 ≤ _CH3_FULL_SCAN_LIMIT 时全量评估；更大时只对已有候选求交（成本控制）。
         threshold = getattr(settings, "cross_doc_embedding_threshold", 0.7)
         if query_emb is not None:
-            for ndoc_id in list(neighbor_scores):
-                doc_emb = pgvector_store.get_doc_embedding(ndoc_id)
-                if doc_emb is None:
-                    continue
+            all_doc_ids = pgvector_store.get_all_doc_ids_with_entities(kb_ids)
+            if len(all_doc_ids) <= _CH3_FULL_SCAN_LIMIT:
+                ch3_candidates = [d for d in all_doc_ids if d not in matched_doc_ids]
+            else:
+                ch3_candidates = [d for d in list(neighbor_scores) if d not in matched_doc_ids]
+            doc_embs = pgvector_store.get_doc_embeddings_bulk(ch3_candidates)
+            for ndoc_id, doc_emb in doc_embs.items():
                 cos_sim = _cosine_similarity(query_emb, doc_emb)
                 if cos_sim >= threshold:
                     neighbor_scores[ndoc_id] = max(neighbor_scores[ndoc_id], cos_sim)
