@@ -79,7 +79,9 @@ class ConversationMemory:
                 conv = session.query(Conversation).filter_by(
                     conversation_id=conversation_id
                 ).first()
-                if conv:
+                # owner 校验：命中他人会话时静默新建，
+                # 防止凭 conversation_id 读他人历史/摘要或向他人会话写入（IDOR）
+                if conv and conv.user_id == user_id:
                     return conversation_id
             conv = Conversation(
                 conversation_id=new_id(),
