@@ -58,10 +58,18 @@ All under `/api/v1/`:
 
 ## Verify code changes
 
-There is **no test framework**. The project intentionally has no pytest/tests directory. Verification:
+Offline unit tests (never touch real DB / network / LLM — credentials are sentinelized by `tests/conftest.py`):
+
 ```bash
-D:/miniConda/envs/rag/python.exe -c "import app.main"  # import chain check
+D:/miniConda/envs/rag/python.exe -m pytest                                   # full suite (unit + integration)
+D:/miniConda/envs/rag/python.exe -m pytest tests/unit -q                     # offline unit only
+D:/miniConda/envs/rag/python.exe -m pytest tests/unit/test_mmr.py -v         # single file
+D:/miniConda/envs/rag/python.exe -c "import app.main"                        # import chain check
 ```
+
+Install dev deps first: `D:/miniConda/envs/rag/python.exe -m pip install -r requirements-dev.txt`.
+Tests live in `tests/unit` (offline) and `tests/integration` (uses a separate `ragent_test` database on localhost PG, auto-skips when PG is unreachable; never writes to the dev `ragent` DB). Always use the **rag** conda env — never another project's env.
+Known-bug-locking tests use `xfail(strict=False)` with a reason pointing at the fixing plan in `docs/plans/`.
 For runtime verification, start the app and exercise the affected endpoint.
 
 ## Build frontend
@@ -115,7 +123,7 @@ Strategies: `mask(partial)` (keep first 3/last 4), `mask(full)` → `[已脱敏]
 ## Constraints / do not change
 
 - Do **not** modify SQLAlchemy models in [app/store/db.py](app/store/db.py) (requires migrations)
-- Do **not** introduce pytest or a `tests/` directory
+- Tests live under `tests/` (pytest, see `pytest.ini`). New pure logic must ship offline unit tests; DB-dependent behavior uses `tests/integration` with the `ragent_test` database
 - Do **not** add icon libraries to the frontend (emoji + inline SVG only)
 - Do **not** remove the incremental hash reuse in [app/ingestion/indexer.py](app/ingestion/indexer.py)
 - Do **not** modify the 5 default PII rules (adding new rules is OK)
@@ -135,10 +143,15 @@ Strategies: `mask(partial)` (keep first 3/last 4), `mask(full)` → `[已脱敏]
 | Retrieval returns 0 results | KB has no indexed documents | Upload documents first |
 | f-string `\n` SyntaxError | Python 3.11 f-expressions don't allow backslash | Use `chr(10)` or constant `_NL = '\\n'` |
 | `X pipe None` TypeError | Non-type objects (e.g. `threading.Lock`) can't use `pipe` | Use `Optional[X]` instead |
+| 跑测试误用 `agent` 环境 | 别的项目环境缺 numpy/pgvector/jieba 等依赖 | 一律 `D:/miniConda/envs/rag/python.exe -m pytest` |
+| 担心 integration 测试污染开发库 | — | 不会：integration 只用自动创建的 `ragent_test` 库，fake 层不触真实 LLM；unit 层凭据全是哨兵值 |
 
 ## Quick verification
 
 ```bash
+# Test suite (unit + integration, see "Verify code changes" above)
+D:/miniConda/envs/rag/python.exe -m pytest -q
+
 # Backend health
 curl http://localhost:8000/health
 
@@ -211,10 +224,18 @@ D:/miniConda/envs/rag/python.exe -c "import app.main"
 │   ├── sample-detail.json     # (generated)
 │   └── sample-index.json      # (generated)
 ├── test-docs/                 # End-to-end test documents (4 .md files)
+├── tests/
+│   ├── conftest.py            # credential sentinel guard (unit never touches real services)
+│   ├── unit/                  # offline unit tests
+│   ├── integration/           # link tests on the ragent_test DB (never writes the dev DB / real LLM)
+│   └── fixtures/docs/         # crafted cross-document fixture docs
+├── docs/
+│   └── plans/                 # plan index + implementation plans (entry: docs/plans/README.md)
 ├── docker/
 │   └── Dockerfile             # postgres:15 + pgvector
 ├── docker-compose.yml
-└── requirements.txt
+├── requirements.txt
+└── requirements-dev.txt       # test deps (pytest / pytest-asyncio)
 
 ## Cross-document relation retrieval
 

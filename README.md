@@ -83,6 +83,19 @@ npm run dev
 
 默认管理员：`admin` / `admin123`
 
+## 测试
+
+```bash
+D:/miniConda/envs/rag/python.exe -m pip install -r requirements-dev.txt   # 首次安装测试依赖
+D:/miniConda/envs/rag/python.exe -m pytest                                # 全量（unit + integration）
+D:/miniConda/envs/rag/python.exe -m pytest tests/unit -q                  # 仅离线 unit
+RAGENT_LIVE_LLM=1 D:/miniConda/envs/rag/python.exe -m pytest tests/integration/test_live_llm.py -v  # 真实 API 冒烟（可选）
+```
+
+- `tests/unit`：完全离线。`tests/conftest.py` 在任何 `app` 模块导入前把凭据换成哨兵值，误触真实 DB / 网络 / LLM 会立即失败；
+- `tests/integration`：使用本机 PostgreSQL 上**独立的 `ragent_test` 库**（自动创建），不写开发库 `ragent`、不调真实 LLM（确定性 fake embedding / rerank / metadata 层，md5 词袋 4096 维向量）；PG 不可达时自动 skip，离线机器跑全量不受影响；
+- 已知 bug 用 `xfail(strict=False)` 锁定，reason 指向 `docs/plans/` 中的修复计划；修复后测试转 XPASS，届时删除标记。
+
 ## 项目结构
 
 ```
@@ -125,10 +138,18 @@ npm run dev
     │       └── pgvector_store.py   # 向量检索 + BM25 + 三路 RRF 混合搜索
 ├── frontend/
 │   └── src/                    # Vue 3 SPA
+├── tests/
+│   ├── conftest.py             # 凭据哨兵化护栏（unit 永不触真实服务）
+│   ├── unit/                   # 离线单测（熔断器/MMR/记忆/PII 规则等）
+│   ├── integration/            # ragent_test 库上的摄入/跨文档/检索/安全链路测试
+│   └── fixtures/docs/          # 自制跨文档场景 fixture 文档
+├── docs/
+│   └── plans/                  # 计划索引与实施计划（入口 docs/plans/README.md）
 ├── docker/
 │   └── Dockerfile              # postgres:15 + pgvector
 ├── docker-compose.yml
-└── requirements.txt
+├── requirements.txt
+└── requirements-dev.txt        # 测试依赖（pytest / pytest-asyncio）
 ```
 
 ## 关键配置
