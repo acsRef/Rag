@@ -101,7 +101,9 @@ def _needs_decomposition(query: str) -> bool:
         return True
 
     # Rule 4: anaphoric pronouns (need resolution from context)
-    if re.search(r"(它|他|她|这个|那个|这些|那些|其|该|上述|前面)", query):
+    # 不用裸单字 其/该/他/她——会误报 其他/其实/尤其/该文件 等常见词，
+    # 给无代词查询强加一次 LLM 改写
+    if re.search(r"(它|他们|她们|它们|这个|那个|这些|那些|这位|那位|上述|前面|上文)", query):
         return True
 
     return False

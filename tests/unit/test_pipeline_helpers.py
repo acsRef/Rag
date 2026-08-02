@@ -22,11 +22,6 @@ def test_decomp_simple_query_no_trigger():
     assert _needs_decomposition("什么是 RAG") is False
 
 
-@pytest.mark.xfail(
-    reason="已知 bug：正则单字候选 其|他 误报常见词（其他/其实/尤其），"
-           "给无代词的查询强加一次 LLM 改写；待 llm-gateway-convergence plan 修复",
-    strict=False,
-)
 def test_decomp_no_false_positive_on_common_words():
     assert _needs_decomposition("还有其他方案吗") is False
     assert _needs_decomposition("其实我不确定") is False

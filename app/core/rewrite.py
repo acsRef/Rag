@@ -105,10 +105,15 @@ class QueryRewriteService:
             if ctx:
                 ctx.track_error("rewrite", "JSONDecodeError", "failed to parse LLM JSON output", degraded=True)
             return RewriteResult(rewritten_query=question, sub_questions=[question])
-        return RewriteResult(
-            rewritten_query=data.get("rewritten_query", question),
-            sub_questions=data.get("sub_questions", [question]),
-        )
+        # 守卫：LLM 可能显式返回空 sub_questions（[] 会让 .get 默认值失效，
+        # 下游 pipeline 的 sub_queries[0] 直接 IndexError）；过滤非字符串/空白项，
+        # 空列表回退到 rewritten_query，rewritten 缺失再回退原 query。
+        rewritten = data.get("rewritten_query") or question
+        subs = [s for s in (data.get("sub_questions") or [])
+                if isinstance(s, str) and s.strip()]
+        if not subs:
+            subs = [rewritten]
+        return RewriteResult(rewritten_query=rewritten, sub_questions=subs)
 
 
 query_rewrite_service = QueryRewriteService()
