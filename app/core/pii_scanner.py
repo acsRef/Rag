@@ -185,8 +185,14 @@ def mask_text(text: str, findings: list[PiiMatch] | None = None) -> str:
 
     result = list(text)
     offset = 0
+    masked_spans: list[tuple[int, int]] = []   # 已掩码的原始区间
     for finding in findings:
         if finding.strategy not in ("mask",):
+            continue
+        # 与已处理区间重叠的 finding 整体跳过：
+        # 多规则命中同一段（如 18 位号同时过 id_card 与 bank_card 的 Luhn）时，
+        # 重复替换会让 offset 累加错乱、输出破损
+        if any(not (finding.end <= s or finding.start >= e) for s, e in masked_spans):
             continue
         start = finding.start + offset
         end = finding.end + offset
@@ -197,6 +203,7 @@ def mask_text(text: str, findings: list[PiiMatch] | None = None) -> str:
         delta = len(replacement) - (end - start)
         result[start:end] = replacement
         offset += delta
+        masked_spans.append((finding.start, finding.end))
 
     return "".join(result)
 

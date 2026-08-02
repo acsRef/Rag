@@ -72,6 +72,20 @@ DEFAULT_RULES = [
         "description": "中国因私普通护照号码（9 位数字）",
         "is_active": False,
     },
+    # 增量规则（按 CLAUDE.md 约束：5 条默认规则只增不改）：
+    # 原 cn_bank_card 正则 [1-5] 开头漏掉银联卡段（62/60/68/69），
+    # 中国大陆发卡以 62 开头银联卡为主，单独补一条。
+    {
+        "rule_name": "cn_bank_card_unionpay",
+        "display_name": "银行卡号(银联)",
+        "pattern": r"\b6[02589]\d{14,17}\b",
+        "validation_fn": "validate_bank_card",
+        "strategy": "mask",
+        "mask_mode": "partial",
+        "exclusion_words": "示例;例如;举例;模板;demo;test;测试;sample",
+        "description": "银联等 6 开头银行卡号（16-19 位，Luhn 校验）",
+        "is_active": True,
+    },
 ]
 
 
