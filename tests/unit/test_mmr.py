@@ -54,11 +54,6 @@ def test_max_per_doc_soft_penalty():
     assert [c["chunk_id"] for c in out] == ["a", "c"]
 
 
-@pytest.mark.xfail(
-    reason="已知 bug：chunk embedding 为 NULL 时 _embedding_to_list 返回 []，"
-           "np.array 行长度不一致直接 ValueError；待 cross-doc-retrieval-overhaul plan 修复",
-    strict=False,
-)
 def test_null_embedding_does_not_crash():
     cands = [
         _cand("a", 0.9, "doc1", [1.0, 0.0, 0.0]),
@@ -66,3 +61,24 @@ def test_null_embedding_does_not_crash():
     ]
     out = mmr_select(cands, lambda_=0.7, top_k=2)
     assert len(out) == 2
+
+
+def test_mmr_normalizes_vectors_cosine_semantics():
+    # 向量未归一化（范数 0.5）：旧实现用裸内积，多样性项几乎不起作用 → 选 b（同文档）；
+    # 归一化后 a、b 方向相同（cos=1），c 应凭多样性胜出。
+    cands = [
+        _cand("a", 0.9, "doc1", [0.5, 0.0, 0.0]),
+        _cand("b", 0.8, "doc1", [0.5, 0.0, 0.0]),
+        _cand("c", 0.7, "doc2", [0.0, 0.5, 0.0]),
+    ]
+    out = mmr_select(cands, lambda_=0.5, top_k=2, max_per_doc=99, doc_penalty=0.0)
+    assert [c["chunk_id"] for c in out] == ["a", "c"]
+
+
+def test_all_null_embeddings_falls_back_to_relevance():
+    cands = [
+        {"chunk_id": "a", "score": 0.9, "document_id": "d1", "embedding": None},
+        {"chunk_id": "b", "score": 0.5, "document_id": "d2", "embedding": None},
+    ]
+    out = mmr_select(cands, lambda_=0.7, top_k=2)
+    assert [c["chunk_id"] for c in out] == ["a", "b"]

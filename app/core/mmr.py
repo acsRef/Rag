@@ -3,7 +3,8 @@
 Designed to slot after cross-encoder rerank:
   cross-encoder → TopN → MMR(λ, max_per_doc) → TopK
 
-Embedding vectors must be L2-normalized (cosine similarity = dot product).
+Embeddings are L2-normalized inside mmr_select (cosine similarity = dot
+product after normalization); missing (None) embeddings are zero-filled.
 """
 
 import json as _json
@@ -67,9 +68,23 @@ def mmr_select(
     else:
         norm_scores = [1.0] * n
 
-    # Pre-extract document IDs and build embedding matrix (n, dim)
+    # Pre-extract document IDs and build embedding matrix (n, dim).
+    # 缺失 embedding（None）零填充；逐行 L2 归一化 → 内积即余弦，
+    # 不再依赖"上游已归一化"的口头承诺；零向量保持零。
     doc_ids = [c["document_id"] for c in candidates]
-    emb_matrix = np.array([_embedding_to_list(c["embedding"]) for c in candidates], dtype=np.float32)
+    raw_vecs = [_embedding_to_list(c["embedding"]) for c in candidates]
+    dim = max((len(v) for v in raw_vecs), default=0)
+    if dim == 0:
+        # 全部缺失 embedding：多样性无从谈起，退化为纯相关性排序
+        ranked = sorted(range(n), key=lambda i: scores[i], reverse=True)
+        return [candidates[i] for i in ranked[:top_k]]
+    emb_matrix = np.array(
+        [v + [0.0] * (dim - len(v)) if len(v) < dim else v for v in raw_vecs],
+        dtype=np.float32,
+    )
+    norms = np.linalg.norm(emb_matrix, axis=1)
+    nonzero = norms > 0
+    emb_matrix[nonzero] = emb_matrix[nonzero] / norms[nonzero, None]
 
     selected_indices: list[int] = []
     remaining = set(range(n))
@@ -85,7 +100,7 @@ def mmr_select(
 
             # Diversity term: max cosine similarity to any selected item
             if selected_indices:
-                # 余弦相似度 = 内积,因向量已 L2 归一化(见 retrieval 上游)
+                # 余弦相似度 = 内积（矩阵已逐行 L2 归一化）
                 sims = emb_matrix[idx] @ emb_matrix[selected_indices].T
                 max_sim = float(sims.max())
             else:
