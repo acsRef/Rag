@@ -64,3 +64,55 @@ async def test_history_excludes_empty_messages(integration_db):
 
     history = conversation_memory.get_history(conv)
     assert [m["content"] for m in history] == ["有内容"]
+
+
+async def test_slid_out_messages_are_never_lost(integration_db, monkeypatch, fake_summary_llm):
+    """核心回归：T1 摘要时在窗口内的消息，滑出后必须进入增量摘要（旧时间戳水位会永久丢失）。"""
+    monkeypatch.setattr(settings, "history_max_tokens", 60)      # 窗口 = 3 条
+    monkeypatch.setattr(settings, "summary_trigger_tokens", 30)  # 窗口外 ≥2 条即触发
+    conv = await asyncio.to_thread(
+        conversation_memory.get_or_create_conversation, None, "loss-user")
+
+    def msg(i):
+        return "L%d%s" % (i, "x" * 28)   # 每条 20 token，内容可辨识
+
+    # 阶段 1：m0..m4 → 窗口 m2..m4，首次摘要覆盖 m0,m1
+    for i in range(5):
+        await conversation_memory.add_message(conv, "user", msg(i), user_id="loss-user")
+        await _flush()
+    assert len(fake_summary_llm) == 1
+    assert msg(0) in fake_summary_llm[0] and msg(1) in fake_summary_llm[0]
+
+    # 阶段 2：m5,m6 → m2,m3 滑出（二者在阶段 1 都在窗口内、未被摘要）
+    for i in (5, 6):
+        await conversation_memory.add_message(conv, "user", msg(i), user_id="loss-user")
+        await _flush()
+    assert len(fake_summary_llm) == 2, "滑出消息未触发增量摘要（丢消息 bug）"
+    assert msg(2) in fake_summary_llm[1] and msg(3) in fake_summary_llm[1]
+
+    # 水位推进到 m3：摘要为 fake 返回值
+    assert conversation_memory.get_summary(conv) == _SUMMARY_TEXT
+
+
+async def test_summarize_does_not_block_add_message(integration_db, monkeypatch):
+    monkeypatch.setattr(settings, "history_max_tokens", 60)
+    monkeypatch.setattr(settings, "summary_trigger_tokens", 30)
+    finished = []
+
+    async def slow_chat(messages, **kw):
+        await asyncio.sleep(0.5)
+        finished.append(1)
+        return _SUMMARY_TEXT
+
+    monkeypatch.setattr(minimax_client, "chat", slow_chat)
+    conv = await asyncio.to_thread(
+        conversation_memory.get_or_create_conversation, None, "async-user")
+
+    t0 = time.monotonic()
+    for i in range(5):
+        await conversation_memory.add_message(conv, "user", "A%d%s" % (i, "x" * 28),
+                                              user_id="async-user")
+    elapsed = time.monotonic() - t0
+    assert elapsed < 0.4, "add_message 仍在同步等待摘要（实测 %.2fs）" % elapsed
+    await asyncio.sleep(0.8)
+    assert finished, "后台摘要任务未执行"

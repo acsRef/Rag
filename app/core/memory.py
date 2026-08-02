@@ -16,6 +16,8 @@ import logging
 import threading
 from typing import Optional
 
+from sqlalchemy import func
+
 from app.store.db import get_db_ctx, Message, Conversation, new_id
 from app.config import settings
 from app.llm.chat import minimax_client
@@ -163,120 +165,145 @@ class ConversationMemory:
                     conv.updated_at = datetime.now(timezone.utc)
                 session.commit()
         await asyncio.to_thread(_sync)
-        await self._maybe_summarize(conversation_id)
+        # 摘要移出请求路径：fire-and-forget，本轮对话用旧摘要即可
+        try:
+            task = asyncio.create_task(self._maybe_summarize(conversation_id))
+            task.add_done_callback(_consume_task_exception)
+        except RuntimeError:
+            logger.debug("summary task skipped (loop closing) conv=%s", conversation_id[:8])
 
     # ------------------------------------------------------------------
     # Auto-summarization — trigger by accumulated token overflow
     # ------------------------------------------------------------------
 
     async def _maybe_summarize(self, conversation_id: str) -> None:
-        """Check if old messages overflow the budget and trigger summarization.
+        """窗口外且未摘要（id > 水位）的消息累积到阈值时触发摘要。
 
-        Old messages = those that fall OUTSIDE the recent-window budget.
-        If their total estimated tokens exceed summary_trigger_tokens,
-        invoke LLM to generate/update the summary.
+        水位 = conversations.last_summarized_msg_id（Message.id 单调）。
+        滑出窗口的消息只要没被摘要过（id > 水位）就一定进入候选——
+        旧时间戳水位会永久丢失"摘要时还在窗口内"的消息，本实现结构性消除。
         """
-        with get_db_ctx() as session:
-            msgs = (
-                session.query(Message)
-                .filter_by(conversation_id=conversation_id)
-                .order_by(Message.created_at.asc())
-                .all()
-            )
-            conv = session.query(Conversation).filter_by(
-                conversation_id=conversation_id
-            ).first()
-            if not conv or not msgs:
-                return
-
-        outside_msgs = _get_outside_window(msgs)
-        if not outside_msgs:
-            return
-
-        token_outside = sum(_estimate_tokens(m.content or "") for m in outside_msgs)
-        if token_outside < settings.summary_trigger_tokens:
-            return
-
-        # Build the appropriate prompt (fresh vs incremental update)
         try:
-            has_summary = bool(conv.summary)
-            last_summary_at = conv.last_summary_at
-        except Exception:
-            has_summary = False
-            last_summary_at = None
-        if has_summary:
-            new_turns = "\n".join(
-                f"{m.role}: {m.content}"
-                for m in outside_msgs
-                if (not last_summary_at)
-                or (_safe_created(m) and _safe_created(m) > last_summary_at)
-            )
-            if not new_turns.strip():
-                return
-            prompt = _SUMMARY_UPDATE.format(
-                existing=conv.summary,
-                new_turns=new_turns,
-                max_tokens=settings.summary_max_tokens,
-            )
-        else:
-            conversation_text = "\n".join(
-                f"{m.role}: {m.content}" for m in outside_msgs
-            )
-            prompt = _SUMMARY_FRESH.format(
-                text=conversation_text,
-                max_tokens=settings.summary_max_tokens,
-            )
-
-        # Per-conversation lock — at most one summarization at a time
-        lock = _acquire_lock(conversation_id)
-        if lock is None:
-            return  # another thread is already summarizing
-
-        try:
-            new_summary = await call_llm_with_retry(
-                minimax_client.chat,
-                [{"role": "user", "content": prompt}],
-                tag="summary",
-                max_retries=1,
-            )
             with get_db_ctx() as session:
-                conv2 = (
-                    session.query(Conversation)
+                conv = session.query(Conversation).filter_by(
+                    conversation_id=conversation_id
+                ).first()
+                if not conv:
+                    return
+                recent = (
+                    session.query(Message)
                     .filter_by(conversation_id=conversation_id)
-                    .first()
+                    .order_by(Message.id.desc())
+                    .limit(_HISTORY_SCAN_LIMIT)
+                    .all()
                 )
-                if conv2:
-                    conv2.summary = new_summary.strip()
-                    conv2.last_summary_at = datetime.now(timezone.utc)
-                    session.commit()
-            logger.info(
-                "summary.updated conv=%s outside=%d tokens=%d",
-                conversation_id[:8], len(outside_msgs), token_outside,
-            )
+                if not recent:
+                    return
+                # 窗口边界：最新入窗消息的 id（全部入窗则为最旧那条）
+                acc = 0
+                boundary_id = recent[-1].id
+                for m in recent:
+                    t = _estimate_tokens(m.content or "")
+                    if acc + t > settings.history_max_tokens:
+                        break
+                    acc += t
+                    boundary_id = m.id
+
+                watermark = conv.last_summarized_msg_id or 0
+                # 触发判断走 SQL 聚合，不拉数据：字符数 / 1.5 ≈ token 估算
+                chars = session.query(
+                    func.coalesce(func.sum(func.length(Message.content)), 0)
+                ).filter(
+                    Message.conversation_id == conversation_id,
+                    Message.id < boundary_id,
+                    Message.id > watermark,
+                ).scalar() or 0
+                if chars / 1.5 < settings.summary_trigger_tokens:
+                    return
+                outside = (
+                    session.query(Message)
+                    .filter(
+                        Message.conversation_id == conversation_id,
+                        Message.id < boundary_id,
+                        Message.id > watermark,
+                    )
+                    .order_by(Message.id.asc())
+                    .all()
+                )
+                outside_items = [(m.id, m.role, m.content or "") for m in outside]
+                has_summary = bool(conv.summary)
+                existing_summary = conv.summary or ""
+
+            if not outside_items:
+                return
+
+            if has_summary:
+                new_turns = "\n".join(
+                    f"{role}: {content}" for _, role, content in outside_items
+                )
+                prompt = _SUMMARY_UPDATE.format(
+                    existing=existing_summary,
+                    new_turns=new_turns,
+                    max_tokens=settings.summary_max_tokens,
+                )
+            else:
+                conversation_text = "\n".join(
+                    f"{role}: {content}" for _, role, content in outside_items
+                )
+                prompt = _SUMMARY_FRESH.format(
+                    text=conversation_text,
+                    max_tokens=settings.summary_max_tokens,
+                )
+
+            # Per-conversation lock — at most one summarization at a time
+            lock = _acquire_lock(conversation_id)
+            if lock is None:
+                return
+
+            try:
+                new_summary = await call_llm_with_retry(
+                    minimax_client.chat,
+                    [{"role": "user", "content": prompt}],
+                    tag="summary",
+                    max_retries=1,
+                )
+                new_watermark = outside_items[-1][0]
+                with get_db_ctx() as session:
+                    conv2 = (
+                        session.query(Conversation)
+                        .filter_by(conversation_id=conversation_id)
+                        .first()
+                    )
+                    if conv2:
+                        conv2.summary = new_summary.strip()
+                        conv2.last_summarized_msg_id = new_watermark
+                        conv2.last_summary_at = datetime.now(timezone.utc)
+                        session.commit()
+                logger.info(
+                    "summary.updated conv=%s msgs=%d watermark=%s",
+                    conversation_id[:8], len(outside_items), new_watermark,
+                )
+            except Exception:
+                logger.exception("Summary failed for conv=%s", conversation_id[:8])
+            finally:
+                lock.release()
+                with _locks_guard:
+                    _summary_locks.pop(conversation_id, None)
         except Exception:
-            logger.exception("Summary failed for conv=%s", conversation_id[:8])
-        finally:
-            lock.release()
-            with _locks_guard:
-                _summary_locks.pop(conversation_id, None)
+            logger.exception("_maybe_summarize crashed conv=%s", conversation_id[:8])
 
 
 # ------------------------------------------------------------------
 # Helpers
 # ------------------------------------------------------------------
 
-def _get_outside_window(all_msgs: list) -> list:
-    """Return messages that fall outside the token-budget window.
-
-    Walks newest→oldest, accumulating tokens; everything beyond the
-    budget goes into the 'outside' bucket (candidates for summarization).
-    """
-    token_acc = 0
-    for i in range(len(all_msgs) - 1, -1, -1):
-        token_acc += _estimate_tokens(all_msgs[i].content or "")
-        if token_acc > settings.history_max_tokens:
-            return list(all_msgs[: i + 1])
-    return []
+def _consume_task_exception(task: asyncio.Task) -> None:
+    """fire-and-forget 摘要任务的 done-callback：消费异常，避免告警噪音。"""
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc:
+        logger.error("Background summarization task failed: %r", exc)
 
 
 def _acquire_lock(conversation_id: str) -> Optional[threading.Lock]:
@@ -287,13 +314,6 @@ def _acquire_lock(conversation_id: str) -> Optional[threading.Lock]:
     if not lock.acquire(blocking=False):
         return None
     return lock
-
-
-def _safe_created(msg) -> Optional[datetime]:
-    try:
-        return msg.created_at
-    except Exception:
-        return None
 
 
 conversation_memory = ConversationMemory()
