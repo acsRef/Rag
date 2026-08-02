@@ -6,12 +6,12 @@
 
 ## 进行中
 
-- [2026-08-02-test-infrastructure](2026-08-02-test-infrastructure.md) — 测试基建：pytest 离线单测（42 例锁 4 个已知 bug）+ integration 摄入/跨文档/检索全链路（自制 fixture 文档 + 确定性 fake 层），`ragent_test` 测试库隔离（实现已完成，待提交）
-- [2026-08-02-security-p0](2026-08-02-security-p0.md) — 安全 P0：诊断遥测鉴权收口、会话 IDOR、银联卡漏报 + 重叠掩码、白名单永久开洞、登录时序与注册限流
+（暂无）
 
 ## 已完成
 
-（暂无）
+- [2026-08-02-test-infrastructure](2026-08-02-test-infrastructure.md) — 测试基建：pytest 离线单测（42 例锁 4 个已知 bug）+ integration 摄入/跨文档/检索全链路（自制 fixture 文档 + 确定性 fake 层），`ragent_test` 测试库隔离（commit: ad3ac46，分支 feat/test-infrastructure）
+- [2026-08-02-security-p0](2026-08-02-security-p0.md) — 安全 P0：诊断遥测 admin 鉴权 + 删静态挂载、会话 IDOR、银联卡漏报 + 重叠掩码去重、白名单永久开洞、登录时序拉平、注册限流（commits: 297f9bf..b8cefbe，分支 fix/security-p0）
 
 ## 已归档
 

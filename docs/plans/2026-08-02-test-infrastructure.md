@@ -1,4 +1,4 @@
-> 状态: 进行中
+> 状态: 已完成（commit: ad3ac46，分支 feat/test-infrastructure）
 
 # 测试基建（test-infrastructure）实施计划
 
