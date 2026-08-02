@@ -66,6 +66,9 @@ def _estimate_tokens(text: str) -> int:
     return max(1, int(len(text) / 1.5))
 
 
+_HISTORY_SCAN_LIMIT = 100   # 窗口回看上限：预算内正常消息远少于此
+
+
 class ConversationMemory:
     # ------------------------------------------------------------------
     # Public API
@@ -95,23 +98,25 @@ class ConversationMemory:
     def get_history(self, conversation_id: str) -> list[dict]:
         """Return recent messages within token budget (history_max_tokens).
 
-        Walks newest→oldest, accumulating token estimates, stops before
-        exceeding the budget.  This replaces the old turn-based window.
+        DB 侧按 id 倒序取最新 _HISTORY_SCAN_LIMIT 条，再按预算从新往旧累加——
+        不再全表加载；按 id（单调）排序，消除 created_at 同值并列隐患。
+        空内容与 streaming 状态消息不进上下文。
         """
         with get_db_ctx() as session:
-            all_msgs = (
+            recent = (
                 session.query(Message)
                 .filter_by(conversation_id=conversation_id)
-                .order_by(Message.created_at.asc())
+                .order_by(Message.id.desc())
+                .limit(_HISTORY_SCAN_LIMIT)
                 .all()
             )
-        if not all_msgs:
-            return []
 
         selected: list[dict] = []
         token_total = 0
-        for m in reversed(all_msgs):  # newest-first scan
-            t = _estimate_tokens(m.content or "")
+        for m in recent:  # newest-first
+            if not m.content or m.status == "streaming":
+                continue
+            t = _estimate_tokens(m.content)
             if token_total + t > settings.history_max_tokens:
                 break
             selected.append({"role": m.role, "content": m.content})
