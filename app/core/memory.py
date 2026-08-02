@@ -14,6 +14,7 @@ Token budget layout (config.py):
 import asyncio
 import logging
 import threading
+import time
 from typing import Optional
 
 from sqlalchemy import func
@@ -29,14 +30,22 @@ logger = logging.getLogger(__name__)
 _summary_locks: dict[str, threading.Lock] = {}
 _locks_guard = threading.Lock()
 
+# 摘要失败退避：{conv_id: (连续失败次数, 上次失败时间)}
+_summary_failures: dict[str, tuple[int, float]] = {}
+_SUMMARY_PROMPT_CHAR_CAP = 8000   # fresh 摘要 prompt 的对话文本上限
+
+_SUMMARY_SECTIONS = (
+    "严格按以下四个小节输出（每节 1-3 行，无内容可写「无」）：\n"
+    "## 主题与结论\n"
+    "## 关键实体与数据\n"
+    "## 用户偏好与意图\n"
+    "## 可能被代词引用的概念\n"
+)
+
 _SUMMARY_FRESH = (
-    "请总结以下对话,保存关键信息:\n"
-    " - 讨论的核心主题和关键结论\n"
-    " - 重要术语、技术名词、数据\n"
-    " - 用户的偏好和意图\n"
-    " - 后续可能被代词引用(它、这个、那个、上面说的)的关键概念\n"
-    "\n"
-    "对话内容:\n"
+    "请总结以下对话,保存关键信息。\n"
+    "{sections}"
+    "\n对话内容:\n"
     "{text}\n"
     "\n"
     "控制在 {max_tokens} token 以内。只输出摘要,不要额外解释。"
@@ -44,9 +53,9 @@ _SUMMARY_FRESH = (
 )
 
 _SUMMARY_UPDATE = (
-    "请根据已有的摘要和新增的对话,生成更新后的摘要:\n"
-    "\n"
-    "已有摘要:\n"
+    "请根据已有的摘要和新增的对话,生成更新后的摘要。\n"
+    "{sections}"
+    "\n已有摘要:\n"
     "{existing}\n"
     "\n"
     "新增对话:\n"
@@ -163,6 +172,9 @@ class ConversationMemory:
                 session.add(msg)
                 if conv:
                     conv.updated_at = datetime.now(timezone.utc)
+                    # 首条用户消息即标题（确定性、零 LLM 成本）
+                    if role == "user" and content and not conv.title:
+                        conv.title = content[:30]
                 session.commit()
         await asyncio.to_thread(_sync)
         # 摘要移出请求路径：fire-and-forget，本轮对话用旧摘要即可
@@ -184,6 +196,12 @@ class ConversationMemory:
         旧时间戳水位会永久丢失"摘要时还在窗口内"的消息，本实现结构性消除。
         """
         try:
+            # 失败退避：60s → 120s → … 上限 15 分钟
+            fail = _summary_failures.get(conversation_id)
+            if fail:
+                n, ts = fail
+                if time.time() - ts < min(900.0, 60.0 * (2 ** (n - 1))):
+                    return
             with get_db_ctx() as session:
                 conv = session.query(Conversation).filter_by(
                     conversation_id=conversation_id
@@ -242,16 +260,15 @@ class ConversationMemory:
                     f"{role}: {content}" for _, role, content in outside_items
                 )
                 prompt = _SUMMARY_UPDATE.format(
+                    sections=_SUMMARY_SECTIONS,
                     existing=existing_summary,
                     new_turns=new_turns,
                     max_tokens=settings.summary_max_tokens,
                 )
             else:
-                conversation_text = "\n".join(
-                    f"{role}: {content}" for _, role, content in outside_items
-                )
                 prompt = _SUMMARY_FRESH.format(
-                    text=conversation_text,
+                    sections=_SUMMARY_SECTIONS,
+                    text=_capped_conversation_text(outside_items),
                     max_tokens=settings.summary_max_tokens,
                 )
 
@@ -279,12 +296,15 @@ class ConversationMemory:
                         conv2.last_summarized_msg_id = new_watermark
                         conv2.last_summary_at = datetime.now(timezone.utc)
                         session.commit()
+                _summary_failures.pop(conversation_id, None)
                 logger.info(
                     "summary.updated conv=%s msgs=%d watermark=%s",
                     conversation_id[:8], len(outside_items), new_watermark,
                 )
             except Exception:
                 logger.exception("Summary failed for conv=%s", conversation_id[:8])
+                n, _ = _summary_failures.get(conversation_id, (0, 0.0))
+                _summary_failures[conversation_id] = (n + 1, time.time())
             finally:
                 lock.release()
                 with _locks_guard:
@@ -304,6 +324,26 @@ def _consume_task_exception(task: asyncio.Task) -> None:
     exc = task.exception()
     if exc:
         logger.error("Background summarization task failed: %r", exc)
+
+
+def _capped_conversation_text(items: list[tuple[int, str, str]]) -> str:
+    """fresh 摘要 prompt 的对话文本：总量超上限时从最旧截断、保留最近的消息。
+
+    持续失败场景下 outside 集合会增长，此上限防止 prompt 无界膨胀。
+    """
+    lines = [f"{role}: {content}" for _, role, content in items]
+    full = "\n".join(lines)
+    if len(full) <= _SUMMARY_PROMPT_CHAR_CAP:
+        return full
+    kept: list[str] = []
+    total = 0
+    for line in reversed(lines):
+        if total + len(line) + 1 > _SUMMARY_PROMPT_CHAR_CAP:
+            break
+        kept.append(line)
+        total += len(line) + 1
+    dropped = len(lines) - len(kept)
+    return "（更早 %d 条消息已省略）\n%s" % (dropped, "\n".join(reversed(kept)))
 
 
 def _acquire_lock(conversation_id: str) -> Optional[threading.Lock]:

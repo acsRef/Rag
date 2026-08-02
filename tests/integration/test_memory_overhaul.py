@@ -116,3 +116,48 @@ async def test_summarize_does_not_block_add_message(integration_db, monkeypatch)
     assert elapsed < 0.4, "add_message 仍在同步等待摘要（实测 %.2fs）" % elapsed
     await asyncio.sleep(0.8)
     assert finished, "后台摘要任务未执行"
+
+
+async def test_summary_failure_backoff(integration_db, monkeypatch):
+    monkeypatch.setattr(settings, "history_max_tokens", 60)
+    monkeypatch.setattr(settings, "summary_trigger_tokens", 30)
+    # 重试退避归零，避免测试真实等待（与 unit 层 no_backoff 同手法）
+    import app.llm.base as llm_base
+    monkeypatch.setattr(llm_base, "jittered_backoff", lambda attempt, base=1.0: 0.0)
+    calls = []
+
+    async def failing_chat(messages, **kw):
+        calls.append(1)
+        raise RuntimeError("llm down")
+
+    monkeypatch.setattr(minimax_client, "chat", failing_chat)
+    conv = await asyncio.to_thread(
+        conversation_memory.get_or_create_conversation, None, "backoff-user")
+    for i in range(6):
+        await conversation_memory.add_message(conv, "user", "B%d%s" % (i, "x" * 28),
+                                              user_id="backoff-user")
+        await _flush()
+    # 首次触发：call_llm_with_retry(max_retries=1) 内部 2 次尝试；
+    # 之后 6 条里的后续 add 全部被退避拦截，不再调用
+    assert len(calls) == 2, "退避未按预期工作（实际 %d 次调用）" % len(calls)
+
+    # 模拟退避过期 → 允许重试（再触发 1 次 = 再 2 次尝试）
+    from app.core import memory as memory_mod
+    count, _ = memory_mod._summary_failures[conv]
+    memory_mod._summary_failures[conv] = (count, 0.0)
+    await conversation_memory.add_message(conv, "user", "B6%s" % ("x" * 28),
+                                          user_id="backoff-user")
+    await _flush()
+    assert len(calls) == 4
+
+
+async def test_title_from_first_user_message(integration_db):
+    from app.store.db import Conversation, get_db_ctx
+
+    conv = await asyncio.to_thread(
+        conversation_memory.get_or_create_conversation, None, "title-user")
+    await conversation_memory.add_message(conv, "user", "2024年各区域销售额排名",
+                                          user_id="title-user")
+    with get_db_ctx() as session:
+        title = session.query(Conversation).filter_by(conversation_id=conv).first().title
+    assert title == "2024年各区域销售额排名"
