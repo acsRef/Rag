@@ -35,3 +35,28 @@ def test_diag_index_admin_ok(client, admin_token):
     resp = client.get("/api/v1/diag/index",
                       headers={"Authorization": f"Bearer {admin_token}"})
     assert resp.status_code == 200
+
+
+def test_whitelist_does_not_pollute_rule_exclusions(client, admin_token, integration_db):
+    from app.store.db import get_db_ctx, PiiAlert, SensitiveRule
+
+    headers = {"Authorization": f"Bearer {admin_token}"}
+    with get_db_ctx() as session:
+        session.add(PiiAlert(
+            source_type="document", source_id="wl-test-doc",
+            rule_name="cn_phone", matched_text="13800138000",
+            context_snippet="联系人 13800138000", strategy="reject", status="pending",
+        ))
+        session.commit()
+        alert_id = session.query(PiiAlert).filter_by(source_id="wl-test-doc").first().id
+        before = session.query(SensitiveRule).filter_by(rule_name="cn_phone").first().exclusion_words
+
+    resp = client.post(f"/api/v1/admin/pii-alerts/{alert_id}/whitelist", headers=headers)
+    assert resp.status_code == 200, resp.text
+
+    with get_db_ctx() as session:
+        rule = session.query(SensitiveRule).filter_by(rule_name="cn_phone").first()
+        alert = session.query(PiiAlert).filter_by(id=alert_id).first()
+    assert "13800138000" not in (rule.exclusion_words or "")   # 真实号码不得进排除词
+    assert rule.exclusion_words == before                       # 规则配置完全不变
+    assert alert.status == "false_positive"                     # 告警本身正常关闭

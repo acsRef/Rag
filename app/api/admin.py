@@ -7,7 +7,6 @@ from app.store.auth_store import (
 from app.store.db import get_db_ctx, get_session, PiiAlert, PiiHold, utc_now, User, Role, Chunk, Document
 from app.middleware.auth import get_current_user
 from app.models.schemas import UserResponse, UserRoleUpdateRequest
-from app.core.pii_scanner import invalidate_cache
 from datetime import datetime
 from pydantic import BaseModel
 router = APIRouter(prefix="/api/v1/admin", tags=["admin"])
@@ -165,24 +164,17 @@ def false_positive_pii_alert(alert_id: int, current_user: dict = Depends(get_cur
 
 @router.post("/pii-alerts/{alert_id}/whitelist")
 def whitelist_pii_alert(alert_id: int, current_user: dict = Depends(get_current_user)):
+    """关闭告警并释放暂存文档。
+
+    安全约束：不得把命中的真实 PII 值写入 exclusion_words——
+    那会让该值在全站永久免检。exclusion_words 只承载上下文关键词
+    （示例/模板等），经规则管理接口维护。
+    """
     require_admin(current_user)
     with get_db_ctx() as session:
         alert = session.query(PiiAlert).filter(PiiAlert.id == alert_id).first()
         if not alert:
             raise HTTPException(status_code=404, detail="Alert not found")
-
-        from app.store.db import SensitiveRule
-        rule = session.query(SensitiveRule).filter(
-            SensitiveRule.rule_name == alert.rule_name
-        ).first()
-        if not rule:
-            raise HTTPException(status_code=404, detail="Rule not found")
-
-        existing = (rule.exclusion_words or "").split(";")
-        word = alert.matched_text[:20].split(";")[0]
-        if word not in existing:
-            existing.append(word)
-            rule.exclusion_words = ";".join(w for w in existing if w.strip())
 
         alert.status = "false_positive"
         alert.resolved_at = utc_now()
@@ -199,9 +191,7 @@ def whitelist_pii_alert(alert_id: int, current_user: dict = Depends(get_current_
         if hold:
             hold.status = "released"
         session.commit()
-
-        invalidate_cache()
-        return {"ok": True, "whitelisted": word}
+        return {"ok": True, "alert_id": alert_id, "new_status": "false_positive"}
 
 
 class ChunkInfo(BaseModel):
