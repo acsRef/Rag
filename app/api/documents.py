@@ -66,10 +66,16 @@ def _resolve_sse_user(request: Request) -> dict | None:
 
 
 def set_main_loop(loop: asyncio.AbstractEventLoop) -> None:
-    """在 FastAPI startup 时调一次,保存主事件循环引用,供后台线程 emit。"""
+    """在 FastAPI startup 时调一次,保存主事件循环引用,供后台线程 emit。
+
+    同时注册到 llm/base 的注册表：供 vision 同步包装把协程派发回主循环，
+    避免每次 asyncio.run 新建循环、反复重建并泄漏全局 AsyncOpenAI client。
+    """
     global _main_loop
     with _main_loop_lock:
         _main_loop = loop
+    from app.llm.base import set_main_loop as set_llm_main_loop
+    set_llm_main_loop(loop)
 
 
 async def subscribe_doc_events() -> asyncio.Queue:

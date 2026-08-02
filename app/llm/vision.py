@@ -98,6 +98,9 @@ class ImageDescriber:
 
     async def describe(self, image_bytes: bytes, filename: str = "image.png") -> str:
         """Describe a single image via vision API, with cache."""
+        # 小图过滤（docstring 早已声明，此处正式接线）：省 token 与配额
+        if self._should_skip(image_bytes):
+            return "[跳过] 图片过小，未调用视觉模型"
         key = self._image_key(image_bytes)
         cached = self._cache_get(key)
         if cached is not None:
@@ -136,11 +139,31 @@ class ImageDescriber:
 
     def describe_sync(self, image_bytes: bytes, filename: str = "image.png") -> str:
         """Sync wrapper for use in thread-pool (e.g. ingestion pipeline)."""
-        return asyncio.run(self.describe(image_bytes, filename))
+        return self._run_on_loop(self.describe(image_bytes, filename))
 
     def describe_batch_sync(self, images: list[tuple[bytes, str]]) -> list[str]:
         """Sync wrapper for batch description in thread-pool."""
-        return asyncio.run(self.describe_batch(images))
+        return self._run_on_loop(self.describe_batch(images))
+
+    @staticmethod
+    def _run_on_loop(coro):
+        """优先把协程派发回主事件循环执行。
+
+        旧实现每次 asyncio.run 新建循环，触发全局 minimax_client 按 loop-id
+        反复重建（旧 httpx 连接池从不关闭，socket 泄漏）。主循环不可用时
+        回落 asyncio.run 兜底。
+        """
+        from app.llm.base import get_main_loop
+        loop = get_main_loop()
+        if loop is not None and loop.is_running():
+            try:
+                return asyncio.run_coroutine_threadsafe(coro, loop).result(timeout=180)
+            except Exception:
+                logger.warning(
+                    "vision: main-loop dispatch failed, falling back to local loop",
+                    exc_info=True,
+                )
+        return asyncio.run(coro)
 
 
 image_describer = ImageDescriber()

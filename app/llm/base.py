@@ -364,3 +364,23 @@ async def call_llm_with_retry(
             await asyncio.sleep(delay)
 
     raise last_exc if last_exc else TemporaryError(f"{tag}: 调用失败")
+
+
+# ------------------------------------------------------------------
+# Main event loop registry
+# ------------------------------------------------------------------
+# 供同步包装（如 vision describe_sync 在 ingestion 线程池里调用）把协程
+# 派发回主事件循环执行——避免每次 asyncio.run 新建循环、按 loop-id 反复
+# 重建并泄漏全局 AsyncOpenAI client。由 main.py 启动时经
+# app.api.documents.set_main_loop 注册。
+
+_main_loop = None
+
+
+def set_main_loop(loop) -> None:
+    global _main_loop
+    _main_loop = loop
+
+
+def get_main_loop():
+    return _main_loop
