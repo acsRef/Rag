@@ -59,7 +59,9 @@ class CircuitBreaker:
             elapsed = time.monotonic() - self.last_failure_time
             if elapsed >= self.cooldown_seconds:
                 self.state = CircuitState.HALF_OPEN
-                self._probe_in_flight = False
+                # 转换调用本身占用 probe 名额——保证"恰好一个 probe"，
+                # 旧实现置 False 会让紧随的第二个并发请求也被放行
+                self._probe_in_flight = True
                 logger.info(
                     "Circuit breaker HALF_OPEN (probing after %.1fs cooldown)",
                     elapsed,

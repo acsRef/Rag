@@ -66,11 +66,6 @@ def test_breaker_probe_failure_reopens(monkeypatch):
     assert cb.allow_request() is False
 
 
-@pytest.mark.xfail(
-    reason="已知 bug：OPEN→HALF_OPEN 转换那次调用未占用 probe 名额，并发下会放行 2 个 probe；"
-           "待 llm-gateway-convergence plan 修复",
-    strict=False,
-)
 def test_breaker_half_open_allows_exactly_one_probe(monkeypatch):
     clock = [0.0]
     monkeypatch.setattr(base.time, "monotonic", lambda: clock[0])
