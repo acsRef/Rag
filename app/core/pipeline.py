@@ -25,12 +25,10 @@ def _pii_safe(text: str) -> str:
     return mask_text(text)
 
 
-def _build_sources(chunks: list[RetrievedChunk]) -> list[SourceInfo]:
-    """Resolve document filenames and build SourceInfo list for frontend."""
-    if not chunks:
-        return []
-    doc_ids = list({c.document_id for c in chunks if c.document_id})
+def _resolve_doc_map(chunks: list[RetrievedChunk]) -> dict[str, str]:
+    """document_id → filename 映射，供 sources 组装与跨文档标注共用。"""
     doc_map: dict[str, str] = {}
+    doc_ids = list({c.document_id for c in chunks if c.document_id})
     if doc_ids:
         from app.store.db import get_db_ctx, Document
         with get_db_ctx() as session:
@@ -39,7 +37,14 @@ def _build_sources(chunks: list[RetrievedChunk]) -> list[SourceInfo]:
             ).all()
             for row in rows:
                 doc_map[row.document_id] = row.filename
+    return doc_map
 
+
+def _build_sources(chunks: list[RetrievedChunk], doc_map: dict[str, str]) -> list[SourceInfo]:
+    """Build SourceInfo list for frontend. 必须在跨文档合并去重之后调用，
+    保证 [Source N] 编号与 UI 来源卡片、prompt 内编号三者一致。"""
+    if not chunks:
+        return []
     sources = []
     for c in chunks:
         text = c.text[:150].replace("\n", " ")
@@ -243,11 +248,12 @@ class RAGPipeline:
                         parts.append(nb["after"])
                     c.text = "\n".join(parts)
 
-        sources = _build_sources(unique_chunks)
-        yield f"event: sources\ndata: {json.dumps([s.model_dump() for s in sources])}\n\n"
+        # 先解析文件名；sources 事件延迟到跨文档合并去重之后发出，
+        # 否则按文档合并会使 [Source N] 编号整体位移，与 UI 来源卡片对不上
+        doc_map = _resolve_doc_map(unique_chunks)
 
         # Cross-doc synthesis: group chunks by document, annotate texts with source
-        doc_ids_in_result = list({s.document_id for s in sources if s.document_id})
+        doc_ids_in_result = list({c.document_id for c in unique_chunks if c.document_id})
         if len(doc_ids_in_result) > 1:
             annotated_texts, doc_groups = cross_doc_synthesizer.synthesize_texts(unique_chunks)
             text_map = {g["document_id"]: at for g, at in zip(doc_groups, annotated_texts)}
@@ -262,11 +268,12 @@ class RAGPipeline:
                 else:
                     deduped.append(c)
             unique_chunks = deduped
-            # Fill filenames from already-resolved sources
-            source_map = {s.document_id: s.filename for s in sources}
             for g in doc_groups:
-                g["filename"] = source_map.get(g["document_id"], g["filename"])
+                g["filename"] = doc_map.get(g["document_id"], g["filename"])
             yield f"event: cross_doc\ndata: {json.dumps(doc_groups)}\n\n"
+
+        sources = _build_sources(unique_chunks, doc_map)
+        yield f"event: sources\ndata: {json.dumps([s.model_dump() for s in sources])}\n\n"
 
         messages = prompt_builder.build_messages(
             query=req.query,
