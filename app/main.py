@@ -1,6 +1,5 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
 from app.api.chat import router as chat_router
 from app.api.documents import router as documents_router
 from app.api.auth import router as auth_router
@@ -11,7 +10,6 @@ from app.store.db import init_db, get_session, Document
 from app.store.auth_store import seed_defaults
 from app.core.pii_rules import seed_pii_rules
 from app.config import settings
-from pathlib import Path
 import asyncio
 import logging
 import uvicorn
@@ -33,11 +31,8 @@ app.include_router(documents_router)
 app.include_router(chat_router)
 app.include_router(diag_router)
 
-# Mount diagnostics static directory (for JSON records + HTML page)
-_diag_dir = Path(settings.diagnostics_dir)
-_diag_dir.mkdir(parents=True, exist_ok=True)
-app.mount("/diagnostics", StaticFiles(directory=str(_diag_dir), html=True), name="diagnostics")
-app.mount("/tools", StaticFiles(directory="tools"), name="tools")
+# 诊断遥测不再以静态目录暴露（曾无鉴权泄漏全量用户 query）：
+# JSON 一律经 /api/v1/diag/*（admin-only）访问；查看器 tools/diagnostics.html 从磁盘打开。
 
 
 @app.on_event("startup")

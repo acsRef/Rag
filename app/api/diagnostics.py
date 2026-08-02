@@ -1,16 +1,23 @@
-"""Diagnostics API — serves live pipeline telemetry for tools/diagnostics.html."""
+"""Diagnostics API — serves live pipeline telemetry for tools/diagnostics.html.
+
+安全约束：遥测含全量用户 query 与 chunk 文本，所有端点仅 admin 可访问。
+查看器（tools/diagnostics.html）从磁盘打开并携带 admin token 调用本 API。
+"""
 import json
 from pathlib import Path
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from app.config import settings
 from app.store.db import get_db_ctx, Chunk, Document
+from app.middleware.auth import get_current_user
+from app.api.admin import require_admin
 
 router = APIRouter(prefix="/api/v1/diag", tags=["diagnostics"])
 DIAG_DIR = Path(settings.diagnostics_dir)
 
 
 @router.get("/index")
-def diag_index():
+def diag_index(current_user: dict = Depends(get_current_user)):
+    require_admin(current_user)
     index_path = DIAG_DIR / "index.json"
     if not index_path.exists():
         return []
@@ -22,7 +29,8 @@ def diag_index():
 
 
 @router.get("/chunks")
-def diag_chunks(ids: str):
+def diag_chunks(ids: str, current_user: dict = Depends(get_current_user)):
+    require_admin(current_user)
     chunk_ids = [c.strip() for c in ids.split(",") if c.strip()]
     if not chunk_ids:
         return []
@@ -50,7 +58,8 @@ def diag_chunks(ids: str):
 
 
 @router.get("/detail/{diag_id:path}")
-def diag_detail(diag_id: str):
+def diag_detail(diag_id: str, current_user: dict = Depends(get_current_user)):
+    require_admin(current_user)
     today = sorted(
         (d for d in DIAG_DIR.iterdir() if d.is_dir()),
         reverse=True,
@@ -67,7 +76,8 @@ def diag_detail(diag_id: str):
 
 
 @router.get("/chunk-docs")
-def diag_chunk_docs():
+def diag_chunk_docs(current_user: dict = Depends(get_current_user)):
+    require_admin(current_user)
     chunk_dir = DIAG_DIR / "chunks"
     if not chunk_dir.exists():
         return []
@@ -89,7 +99,8 @@ def diag_chunk_docs():
 
 
 @router.get("/chunk-doc/{document_id}")
-def diag_chunk_doc(document_id: str):
+def diag_chunk_doc(document_id: str, current_user: dict = Depends(get_current_user)):
+    require_admin(current_user)
     path = DIAG_DIR / "chunks" / f"{document_id}.json"
     if not path.exists():
         raise HTTPException(status_code=404, detail="Chunk diagnostic not found")

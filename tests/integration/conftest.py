@@ -63,12 +63,14 @@ def integration_db():
     seed_pii_rules()
 
     with db_mod.get_db_ctx() as session:
-        # 注意：不能带 CASCADE——documents/messages 外键引用 users/knowledge_bases，
+        # 注意 1：不能带 CASCADE——documents/messages 外键引用 users/knowledge_bases，
         # CASCADE 会把 seed 目标表一并清空。表清单本身已是引用闭包。
+        # 注意 2：不要清 user_roles——seed_defaults 按"用户是否存在"跳过重建，
+        # 清掉后跨会话留存的 admin 用户会永久失去角色关联（is_admin=False）。
         session.execute(text(
             "TRUNCATE chunks, chunk_questions, documents, doc_entities, "
             "doc_relations, doc_embeddings, conversations, messages, "
-            "pii_alerts, pii_hold, doc_role_access, user_roles, kb_role_access "
+            "pii_alerts, pii_hold, doc_role_access, kb_role_access "
             "RESTART IDENTITY"
         ))
         session.execute(text("DELETE FROM knowledge_bases WHERE id = 'test-kb'"))
