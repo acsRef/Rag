@@ -24,6 +24,9 @@ def init_db():
                 text("ALTER TABLE conversations ADD COLUMN IF NOT EXISTS last_summary_at TIMESTAMP")
             )
             conn.execute(
+                text("ALTER TABLE conversations ADD COLUMN IF NOT EXISTS last_summarized_msg_id INTEGER")
+            )
+            conn.execute(
                 text("ALTER TABLE chunks ADD COLUMN IF NOT EXISTS search_text TEXT DEFAULT ''")
             )
             conn.execute(
@@ -238,6 +241,7 @@ class Conversation(Base):
     title = Column(String(256), default="")
     summary = Column(Text, default="")
     last_summary_at = Column(DateTime, nullable=True)
+    last_summarized_msg_id = Column(Integer, nullable=True)   # 摘要水位：已摘要到的最大 Message.id
     created_at = Column(DateTime, default=utc_now)
     updated_at = Column(DateTime, default=utc_now, onupdate=utc_now)
 

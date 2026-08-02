@@ -144,27 +144,16 @@ class ConversationMemory:
                 conv = session.query(Conversation).filter_by(
                     conversation_id=conversation_id
                 ).first()
-                if status == "streaming":
-                    existing = (
-                        session.query(Message)
-                        .filter_by(conversation_id=conversation_id, status="streaming")
-                        .first()
-                    )
-                    if existing:
-                        existing.content = content
-                        existing.thinking_content = thinking_content
-                        existing.metadata_json = existing.metadata_json or {}
-                else:
-                    msg = Message(
-                        message_id=new_id(),
-                        conversation_id=conversation_id,
-                        user_id=user_id,
-                        role=role,
-                        content=content,
-                        thinking_content=thinking_content,
-                        status=status,
-                    )
-                    session.add(msg)
+                msg = Message(
+                    message_id=new_id(),
+                    conversation_id=conversation_id,
+                    user_id=user_id,
+                    role=role,
+                    content=content,
+                    thinking_content=thinking_content,
+                    status=status,
+                )
+                session.add(msg)
                 if conv:
                     conv.updated_at = datetime.now(timezone.utc)
                 session.commit()
