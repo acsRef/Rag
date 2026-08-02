@@ -5,16 +5,21 @@ from app.core.doc_relation import cross_doc_retriever
 from app.store import pgvector_store
 
 
-@pytest.mark.xfail(
-    reason="已知 bug：get_chunks_by_document 返回 dict 缺 document_id 字段，"
-           "以这些 chunk 作 initial_chunks 时 cross_doc_retriever 因 matched_doc_ids 为空直接返回 []；"
-           "待 cross-doc-retrieval-overhaul plan 修复",
-    strict=False,
-)
 def test_get_chunks_by_document_includes_document_id(ingest_docs):
     chunks = pgvector_store.get_chunks_by_document(ingest_docs["transformer_basics.md"])
     assert chunks
     assert all(c.get("document_id") for c in chunks)
+
+
+def test_bulk_chunks_capped_per_doc(ingest_docs):
+    """邻居文档 chunk 再多，bulk 每文档也不超过 10 条（防 rerank 被淹没）。"""
+    from app.store.pgvector_store import get_chunks_by_documents_bulk
+
+    bulk = get_chunks_by_documents_bulk(list(ingest_docs.values()), can_read_all=True)
+    assert bulk
+    for doc_id, chunks in bulk.items():
+        assert len(chunks) <= 10
+        assert all(c.get("document_id") == doc_id for c in chunks)
 
 
 def test_relation_edge_between_related_docs_only(ingest_docs):

@@ -79,6 +79,7 @@ def get_chunks_by_document(document_id: str) -> list[dict]:
         return [
             {
                 "chunk_id": r.chunk_id,
+                "document_id": r.document_id,
                 "text": r.text,
                 "embedding": r.embedding,
                 "title": r.title,
@@ -689,6 +690,23 @@ def get_doc_embedding(document_id: str) -> list[float] | None:
         session.close()
 
 
+def get_doc_embeddings_bulk(doc_ids: list[str]) -> dict[str, list[float]]:
+    """批量取文档级 embedding：{document_id: embedding}（跳过 NULL）。"""
+    if not doc_ids:
+        return {}
+    from app.store.db import DocEmbedding
+    session = get_session()
+    try:
+        rows = (
+            session.query(DocEmbedding.document_id, DocEmbedding.embedding)
+            .filter(DocEmbedding.document_id.in_(doc_ids))
+            .all()
+        )
+        return {r.document_id: list(r.embedding) for r in rows if r.embedding is not None}
+    finally:
+        session.close()
+
+
 def upsert_doc_embedding(document_id: str, embedding: list[float], chunk_count: int):
     from app.store.db import DocEmbedding, utc_now
     session = get_session()
@@ -818,11 +836,19 @@ def clean_all_table_chunks(batch_size: int = 20) -> int:
     return update_count
 
 
+_CHUNKS_PER_NEIGHBOR_DOC = 10   # 跨文档邻居每文档上限：代表性上下文即可，最终条数由 rerank_top_k 收口
+
+
 def get_chunks_by_documents_bulk(
     doc_ids: list[str],
     user_role_ids: list[int] | None = None,
     can_read_all: bool = False,
 ) -> dict[str, list[dict]]:
+    """批量取多文档 chunk。
+
+    按 (document_id, id) 确定性排序，每文档最多保留
+    _CHUNKS_PER_NEIGHBOR_DOC 条——防止大文档邻居把 rerank 淹没。
+    """
     if not doc_ids:
         return {}
     session = get_session()
@@ -837,6 +863,7 @@ def get_chunks_by_documents_bulk(
                    OR visibility = 'public'
                    OR (visibility IN ('internal', 'restricted')
                        AND allowed_roles && :user_roles))
+            ORDER BY document_id, id
         """
         rows = session.execute(text(sql), {
             "doc_ids": doc_ids,
@@ -844,7 +871,11 @@ def get_chunks_by_documents_bulk(
             "user_roles": user_role_ids or [],
         }).fetchall()
         result: dict[str, list[dict]] = defaultdict(list)
+        per_doc_count: dict[str, int] = {}
         for r in rows:
+            if per_doc_count.get(r[1], 0) >= _CHUNKS_PER_NEIGHBOR_DOC:
+                continue
+            per_doc_count[r[1]] = per_doc_count.get(r[1], 0) + 1
             result[r[1]].append({
                 "chunk_id": r[0],
                 "document_id": r[1],
