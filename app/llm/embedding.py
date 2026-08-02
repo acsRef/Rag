@@ -25,9 +25,11 @@ class RateLimiter:
 
     async def acquire(self):
         while True:
-            now = time.monotonic()
             with self._lock:
-                elapsed = now - self.last
+                # now 必须在锁内读取：锁外读取时并发 acquire 会算出负 elapsed，
+                # 把 token 桶扣穿；max(0.0, ...) 再防时钟回拨
+                now = time.monotonic()
+                elapsed = max(0.0, now - self.last)
                 self.last = now
                 self.tokens = min(float(self.rps), self.tokens + elapsed * self.rps)
                 if self.tokens >= 1:

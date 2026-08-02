@@ -8,7 +8,7 @@ import asyncio
 import logging
 
 from app.llm.chat import minimax_client
-from app.llm.base import robust_json_parse
+from app.llm.base import robust_json_parse, call_llm_with_retry
 from app.ingestion.chunker import Chunk
 
 logger = logging.getLogger(__name__)
@@ -54,8 +54,12 @@ class ChunkMetadataGenerator:
         ntoks = max(1024, len(chunks) * 256)
 
         try:
-            resp = asyncio.run(minimax_client.chat(
+            # 经统一策略层：单次客户端 + 类型感知重试（chat 本身不再重试）
+            resp = asyncio.run(call_llm_with_retry(
+                minimax_client.chat,
                 [{"role": "user", "content": prompt}],
+                tag="metadata",
+                max_retries=1,
                 max_tokens=ntoks,
                 timeout=min(120, 15 * len(chunks)),
             ))

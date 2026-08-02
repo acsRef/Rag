@@ -210,8 +210,8 @@ provider_health = ProviderHealth()
 
 
 def jittered_backoff(attempt: int, base: float = 1.0) -> float:
-    """Exponential backoff with jitter."""
-    return base * (2 ** attempt) + random.uniform(0, 0.5)
+    """Exponential backoff with jitter, capped at 60s."""
+    return min(60.0, base * (2 ** attempt)) + random.uniform(0, 0.5)
 
 
 # ------------------------------------------------------------------
@@ -240,9 +240,12 @@ def robust_json_parse(text: str) -> dict | None:
     cleaned = text.strip().removeprefix("﻿")  # strip BOM
     cleaned = re.sub(r'<think>.*?</think>', '', cleaned, flags=re.DOTALL).strip()
 
+    # 契约：只返回 dict（调用方按 dict 用）；数组等一律 None。
     # Try direct parse first
     try:
-        return json.loads(cleaned)
+        parsed = json.loads(cleaned)
+        if isinstance(parsed, dict):
+            return parsed
     except json.JSONDecodeError:
         pass
 
@@ -251,7 +254,9 @@ def robust_json_parse(text: str) -> dict | None:
     if match:
         candidate = match.group(1)
         try:
-            return json.loads(candidate)
+            parsed = json.loads(candidate)
+            if isinstance(parsed, dict):
+                return parsed
         except json.JSONDecodeError:
             pass
 
@@ -260,7 +265,9 @@ def robust_json_parse(text: str) -> dict | None:
         try:
             result = fix(cleaned)
             if result is not None:
-                return json.loads(result)
+                parsed = json.loads(result)
+                if isinstance(parsed, dict):
+                    return parsed
         except json.JSONDecodeError:
             continue
 

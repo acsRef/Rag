@@ -7,7 +7,7 @@ from typing import AsyncGenerator
 from openai import AsyncOpenAI
 
 from app.config import settings
-from app.llm.base import CircuitOpenError, PermanentError, classify_llm_error, jittered_backoff, provider_health
+from app.llm.base import CircuitOpenError, PermanentError, classify_llm_error, provider_health
 
 logger = logging.getLogger(__name__)
 
@@ -99,38 +99,35 @@ class MiniMaxClient:
         self,
         messages: list[dict],
         timeout: int = 120,
-        max_retries: int = 2,
         max_tokens: int | None = None,
     ) -> str:
-        """Sync-style chat — async under the hood."""
-        for attempt in range(max_retries + 1):
-            self._check_breaker()
-            try:
-                response = await self.client.chat.completions.create(
-                    model=self.model,
-                    messages=messages,
-                    stream=False,
-                    temperature=0.7,
-                    max_tokens=max_tokens if max_tokens is not None else 4096,
-                    timeout=timeout,
-                )
-                if not response.choices:
-                    self._on_success()
-                    return ""
+        """Single-attempt chat — 重试策略统一由 call_llm_with_retry 负责。
+
+        本方法只做：单次调用 + 熔断记账 + 错误分类抛出。
+        （旧版自带重试循环，与 call_llm_with_retry 叠加会放大到 9 次。）
+        """
+        self._check_breaker()
+        try:
+            response = await self.client.chat.completions.create(
+                model=self.model,
+                messages=messages,
+                stream=False,
+                temperature=0.7,
+                max_tokens=max_tokens if max_tokens is not None else 4096,
+                timeout=timeout,
+            )
+            if not response.choices:
                 self._on_success()
-                return response.choices[0].message.content or ""
-            except CircuitOpenError:
-                raise
-            except Exception as e:
-                typed, should_retry = classify_llm_error(e)
-                if not isinstance(typed, PermanentError):
-                    self._on_failure()
-                if not should_retry:
-                    raise typed
-                if attempt < max_retries:
-                    await asyncio.sleep(jittered_backoff(attempt))
-                    continue
-                raise typed
+                return ""
+            self._on_success()
+            return response.choices[0].message.content or ""
+        except CircuitOpenError:
+            raise
+        except Exception as e:
+            typed, _ = classify_llm_error(e)
+            if not isinstance(typed, PermanentError):
+                self._on_failure()
+            raise typed
 
 
 minimax_client = MiniMaxClient()
