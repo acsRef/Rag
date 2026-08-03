@@ -16,6 +16,7 @@
 - [2026-08-02-cross-doc-retrieval-overhaul](2026-08-02-cross-doc-retrieval-overhaul.md) — 跨文档检索改造：三通道量纲统一、公平排序映射、channel 3 独立发现、document_id 补全、bulk 上限、事件循环解阻、rerank 不丢候选、MMR 真余弦、引用编号一致（commits: 4d9dcef..062d42b，分支 fix/cross-doc-overhaul）
 - [2026-08-02-llm-gateway-convergence](2026-08-02-llm-gateway-convergence.md) — LLM 调用收敛：客户端单次化去双层重试、HALF_OPEN 单 probe、退避封顶、JSON 契约、限流器钳制、门控正则、rewrite 守卫、prompt 对齐、`_trim_history` 顺序、vision 主循环复用 + 小图过滤（分支 fix/llm-gateway-convergence）
 - [2026-08-02-tag-stream-parser](2026-08-02-tag-stream-parser.md) — 标签流解析器：抽取 TagStreamParser 纯类（12 例单测），修 <answer> 标签泄漏、跨 token 断标签泄漏、展示/持久化不一致（分支 fix/tag-stream-parser）
+- [2026-08-02-ingestion-correctness](2026-08-02-ingestion-correctness.md) — 摄入正确性：questions 构造点对齐、Document 行先行（FK xfail 转正）、失败可重试、全失败保旧索引、稳定 chunk id + 孤儿清理、无 H3 尺寸闭环、get_image 修复（分支 fix/ingestion-correctness）
 
 ## 已归档
 
@@ -25,6 +26,4 @@
 
 以下主题来自 2026-08-02 全栈审查（记忆机制 / 链路设计 / 代码质量），按优先级排队，逐份细化为正式 plan：
 
-| 优先级 | slug（预定） | 主题 |
-|---|---|---|
-| P2 | `ingestion-correctness` | 摄入正确性：`zip` 错位挂错 questions、`unchanged` 不看 status、无 H3 文档单 chunk 坍缩、`_hard_split` 不递归 |
+（全部主题已细化并完成，见上方「已完成」区。）
