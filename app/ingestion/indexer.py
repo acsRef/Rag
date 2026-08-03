@@ -99,7 +99,10 @@ class DocumentIndexer:
                 existing = session.query(Document).filter(
                     Document.document_id == document_id
                 ).first()
-            if existing and existing.content_hash == doc_hash:
+            # 只有 indexed 算健康终态：failed/partial/indexing 的文档
+            # 用相同内容重试必须真正重索引，旧逻辑只比 hash 会永远卡死
+            if (existing and existing.content_hash == doc_hash
+                    and existing.status == "indexed"):
                 return {
                     "document_id": document_id,
                     "filename": filename,
@@ -134,10 +137,17 @@ class DocumentIndexer:
 
         doc_id = document_id or new_id()
 
+        # Document 行先于 chunks 落库：chunks 外键引用 documents，
+        # 旧顺序（chunks 后才写 document）令 index(document_id=None) 必然 FK 违反
+        self._save_document(doc_id, user_id, kb_id, filename, 0, "indexing", doc_hash)
+
         for c in chunks:
             c.content_hash = _content_hash(c.text)
 
-        self._save_chunk_diag(doc_id, filename, sections, chunks)
+        try:
+            self._save_chunk_diag(doc_id, filename, sections, chunks)
+        except OSError:
+            logger.exception("chunk diag save failed (non-fatal) doc=%s", doc_id[:8])
 
         old_chunks_map: dict[str, dict] = {}
         if document_id:
@@ -173,16 +183,21 @@ class DocumentIndexer:
             embed_results = _embed_fut.result()
         else:
             embed_results = []
-        chunk_seq = 0
         new_idx = 0
         chunks_data = []
+        question_source: list[tuple[str, list[str]]] = []
+        seen_chunk_ids: dict[str, int] = {}
         embedded_count = 0
         error_messages: list[str] = []
 
         for i, (c, is_reused) in enumerate(chunk_index):
             ch = c.content_hash
-            chunk_id = f"{doc_id}_{chunk_seq}"
-            chunk_seq += 1
+            # 稳定 chunk id：内容哈希派生——重索引时复用 chunk 保持原 id，
+            # 其问题向量行不再因 seq 位移而孤儿化；同文档重复内容追加后缀
+            base_id = f"{doc_id}_{ch[:10]}"
+            n = seen_chunk_ids.get(base_id, 0)
+            seen_chunk_ids[base_id] = n + 1
+            chunk_id = base_id if n == 0 else f"{base_id}_{n}"
 
             if is_reused:
                 old = old_chunks_map[ch]
@@ -213,8 +228,9 @@ class DocumentIndexer:
                 "kb_id": kb_id,
                 "text": c.text,
                 "embedding": embedding,
-                "title": c.title or (is_reused and old.get("title", "") or ""),
-                "summary": c.summary or (is_reused and old.get("summary", "") or ""),
+                # 复用 chunk 优先保留旧 LLM 元数据（chunker 的 section 标题不得覆盖之）
+                "title": (is_reused and old.get("title")) or c.title or "",
+                "summary": (is_reused and old.get("summary")) or c.summary or "",
                 "questions": "; ".join(c.questions) if c.questions else (is_reused and old.get("questions", "") or ""),
                 "section_path": " > ".join(c.section_path) if c.section_path else "",
                 "search_text": search_text,
@@ -222,6 +238,9 @@ class DocumentIndexer:
                 "visibility": visibility,
                 "allowed_roles": allowed_roles or [],
             })
+            # questions 与 chunk_id 在构造点绑定——后续不再依赖 zip(chunks, chunks_data)
+            if not is_reused:
+                question_source.append((chunk_id, list(c.questions or [])))
 
             try:
                 from app.api.documents import emit_doc_progress
@@ -270,23 +289,36 @@ class DocumentIndexer:
             doc_id[:8], len(chunks), embedded_count, len(old_chunks_map),
             status, (time.monotonic() - t_total) * 1000,
         )
+        # 新 chunk 全部 embedding 失败：保留旧索引，直接 failed（可重试恢复）。
+        # 旧逻辑会 replace_chunks(仅复用块)，把仍有效的旧 chunk 一并删掉
+        if total_new > 0 and embedded_count == len(old_chunks_map):
+            self._save_document(doc_id, user_id, kb_id, filename, len(chunks), "failed", doc_hash,
+                                embedded_chunk_count=embedded_count,
+                                error_message=final_error or "所有新增分块向量化失败，保留旧索引，请重试")
+            return {
+                "document_id": doc_id,
+                "filename": filename,
+                "status": "failed",
+                "chunk_count": len(chunks),
+            }
         try:
             if document_id:
                 pgvector_store.replace_chunks(document_id, chunks_data)
             else:
                 pgvector_store.add_chunks(chunks_data)
 
-            # Embed and store chunk questions for multi-channel retrieval
+            # Embed and store chunk questions for multi-channel retrieval.
+            # 用构造点绑定的 question_source——旧 zip(chunks, chunks_data)
+            # 在 embedding 失败跳块后错位，会把问题挂到错误的 chunk
             question_data = []
-            for c, cd in zip(chunks, chunks_data):
-                if c.questions:
-                    for pos, q in enumerate(c.questions):
-                        if q.strip():
-                            question_data.append({
-                                "chunk_id": cd["chunk_id"],
-                                "question": q,
-                                "position": pos,
-                            })
+            for cd_id, qs in question_source:
+                for pos, q in enumerate(qs):
+                    if q.strip():
+                        question_data.append({
+                            "chunk_id": cd_id,
+                            "question": q,
+                            "position": pos,
+                        })
             if question_data:
                 q_texts = [q["question"] for q in question_data]
                 q_emb_results = asyncio.run(
@@ -305,6 +337,10 @@ class DocumentIndexer:
                     pgvector_store.upsert_chunk_questions(valid_q)
                     logger.info("ingest.questions_stored chunk=%d questions=%d ok=%d",
                                 len(chunks), len(question_data), len(valid_q))
+
+            # 清理孤儿问题行：chunk 删除/历史 id 遗留后兜底
+            pgvector_store.delete_orphan_chunk_questions(
+                doc_id, [cd["chunk_id"] for cd in chunks_data])
 
             self._save_document(doc_id, user_id, kb_id, filename, len(chunks), status, doc_hash,
                                 embedded_chunk_count=embedded_count, error_message=final_error)

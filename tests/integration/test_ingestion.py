@@ -90,12 +90,6 @@ def test_ingest_masks_pii_before_persist(integration_db, fake_llm_stack):
         assert "110***********002X" in c["text"]
 
 
-@pytest.mark.xfail(
-    reason="已知 bug：indexer 以 document_id=None 调用时 add_chunks 先于 _save_document 执行，"
-           "FK schema 下直接违反 chunks_document_id_fkey；生产靠 API 层预建行规避；"
-           "待 ingestion-correctness plan 修复",
-    strict=False,
-)
 def test_index_without_precreated_document_row(integration_db, fake_llm_stack):
     """期望：indexer 自身能在 chunks 之前建好 Document 行。当前返回 failed。"""
     from app.ingestion.indexer import document_indexer
@@ -106,3 +100,95 @@ def test_index_without_precreated_document_row(integration_db, fake_llm_stack):
         kb_id="test-kb", user_id="test-user",
     )
     assert res["status"] == "indexed"
+
+
+def test_failed_doc_can_be_retried(integration_db, fake_llm_stack, monkeypatch):
+    """失败文档用相同内容重试必须真正重索引（旧逻辑 unchanged 短路，永远卡死）。"""
+    from app.ingestion.indexer import document_indexer
+    from app.llm.embedding import sf_embedding
+
+    NL = chr(10)
+    doc_id = _precreate_document_row("retry.md")
+    content = ("# 重试" + NL + NL + "这是用于重试测试的内容。" + NL).encode("utf-8")
+
+    async def all_fail(texts, **kw):
+        return [(None, "模拟失败") for _ in texts]
+
+    monkeypatch.setattr(sf_embedding, "embed_with_fallback", all_fail)
+    res1 = document_indexer.index("retry.md", content, kb_id="test-kb",
+                                  user_id="test-user", document_id=doc_id)
+    assert res1["status"] == "failed"
+
+    # 恢复可用的 embedding fake（本测试未依赖 fake_llm_stack 的 embed 路径）
+    from tests.integration.conftest import fake_vector
+
+    async def ok_embed(texts, **kw):
+        return [(fake_vector(t), None) for t in texts]
+
+    monkeypatch.setattr(sf_embedding, "embed_with_fallback", ok_embed)
+    res2 = document_indexer.index("retry.md", content, kb_id="test-kb",
+                                  user_id="test-user", document_id=doc_id)
+    assert res2["status"] == "indexed", "失败文档重试被 unchanged 短路"
+
+
+def test_questions_align_with_persisted_chunks(integration_db, fake_llm_stack, monkeypatch):
+    """单 chunk embedding 失败时，questions 不得挂到别的 chunk（旧 zip 错位）。"""
+    from app.ingestion.indexer import document_indexer
+    from app.llm.embedding import sf_embedding
+    from app.store import pgvector_store
+    from app.store.db import ChunkQuestion, get_db_ctx
+
+    async def selective_fail(texts, **kw):
+        from tests.integration.conftest import fake_vector
+        return [(None, "模拟失败") if "乙段失败标记" in t else (fake_vector(t), None)
+                for t in texts]
+
+    monkeypatch.setattr(sf_embedding, "embed_with_fallback", selective_fail)
+    doc_id = _precreate_document_row("align.md")
+    NL = chr(10)
+    md = NL.join([
+        "# 对齐测试",
+        "### 甲", "甲段内容文字。",
+        "### 乙", "乙段失败标记内容。",
+        "### 丙", "丙段内容文字。",
+    ])
+    res = document_indexer.index("align.md", md.encode("utf-8"), kb_id="test-kb",
+                                 user_id="test-user", document_id=doc_id)
+    assert res["status"] == "partial"
+
+    chunks = {c["chunk_id"]: c["text"] for c in pgvector_store.get_chunks_by_document(doc_id)}
+    assert len(chunks) == 2                      # 乙段被跳过
+    with get_db_ctx() as session:
+        rows = session.query(ChunkQuestion).filter(
+            ChunkQuestion.chunk_id.like(doc_id + "%")).all()
+    assert rows
+    for r in rows:
+        assert r.chunk_id in chunks
+        marker = "甲" if "甲" in r.question else "丙"
+        assert marker in chunks[r.chunk_id], "questions 挂错 chunk（zip 错位）"
+
+
+def test_all_embed_failed_keeps_old_index(integration_db, fake_llm_stack, monkeypatch):
+    """重索引时新 chunk 全部 embedding 失败 → failed 且旧索引原样保留。"""
+    from app.ingestion.indexer import document_indexer
+    from app.llm.embedding import sf_embedding
+    from app.store import pgvector_store
+
+    NL = chr(10)
+    doc_id = _precreate_document_row("keepold.md")
+    v1 = ("# 保留" + NL + NL + "第一版内容。" + NL).encode("utf-8")
+    res1 = document_indexer.index("keepold.md", v1, kb_id="test-kb",
+                                  user_id="test-user", document_id=doc_id)
+    assert res1["status"] == "indexed"
+    n_before = len(pgvector_store.get_chunks_by_document(doc_id))
+
+    async def all_fail(texts, **kw):
+        return [(None, "模拟失败") for _ in texts]
+
+    monkeypatch.setattr(sf_embedding, "embed_with_fallback", all_fail)
+    v2 = ("# 保留" + NL + NL + "第一版内容。" + NL + NL
+          + "### 新增" + NL + NL + "第二版新增内容。" + NL).encode("utf-8")
+    res2 = document_indexer.index("keepold.md", v2, kb_id="test-kb",
+                                  user_id="test-user", document_id=doc_id)
+    assert res2["status"] == "failed"
+    assert len(pgvector_store.get_chunks_by_document(doc_id)) == n_before

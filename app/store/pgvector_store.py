@@ -892,3 +892,18 @@ def get_chunks_by_documents_bulk(
         return dict(result)
     finally:
         session.close()
+
+def delete_orphan_chunk_questions(document_id: str, valid_chunk_ids: list[str]) -> None:
+    """删除指定文档下不再存在的 chunk 的问题行（chunk 删除/历史 id 遗留后兜底）。"""
+    if not document_id:
+        return
+    session = get_session()
+    try:
+        q = session.query(ChunkQuestion).filter(
+            ChunkQuestion.chunk_id.like(document_id + "_%"))
+        if valid_chunk_ids:
+            q = q.filter(~ChunkQuestion.chunk_id.in_(valid_chunk_ids))
+        q.delete(synchronize_session=False)
+        session.commit()
+    finally:
+        session.close()
