@@ -111,13 +111,32 @@ async def test_long_conversation_memory_invariants(corpus):
 
     assert answered >= 12, "16 轮中仅 %d 轮产出答案，过多失败" % answered
 
-    # 强制摘要收敛：最后一轮的后台摘要 LLM 调用可能仍在途，
-    # 直接 await _maybe_summarize 把水位推到应有位置，再断言不变式
-    # （异步触发本身已由前面 summary/watermark 非空断言覆盖）
+    # 等待摘要收敛：排水式摘要单次调用即收敛到位，但后台任务持锁时
+    # 本次调用会立即返回——轮询直到水位覆盖全部窗口外消息（最多 120s）
+    import time as _time
     from app.core.memory import conversation_memory as _cm
-    for _ in range(3):
+    deadline = _time.monotonic() + 120
+    while _time.monotonic() < deadline:
         await _cm._maybe_summarize(conv_id)
-        await asyncio.sleep(0.3)
+        with get_db_ctx() as session:
+            conv_chk = session.query(Conversation).filter_by(
+                conversation_id=conv_id).first()
+            wm = conv_chk.last_summarized_msg_id or 0
+            rows_chk = [(m.id, m.content or "") for m in session.query(Message)
+                        .filter_by(conversation_id=conv_id)
+                        .order_by(Message.id.asc()).all()]
+        rec = rows_chk[-_HISTORY_SCAN_LIMIT:]
+        acc2, bnd = 0, rec[-1][0]
+        for mid, content in reversed(rec):
+            t = _estimate_tokens(content)
+            if acc2 + t > settings.history_max_tokens:
+                break
+            acc2 += t
+            bnd = mid
+        out = [mid for mid, _ in rows_chk if mid < bnd]
+        if not out or max(out) <= wm:
+            break
+        await asyncio.sleep(2)
 
     with get_db_ctx() as session:
         conv = session.query(Conversation).filter_by(conversation_id=conv_id).first()

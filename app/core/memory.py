@@ -189,25 +189,30 @@ class ConversationMemory:
     # ------------------------------------------------------------------
 
     async def _maybe_summarize(self, conversation_id: str) -> None:
-        """窗口外且未摘要（id > 水位）的消息累积到阈值时触发摘要。
+        """排水式摘要入口：循环直到不再触发摘要。
 
-        水位 = conversations.last_summarized_msg_id（Message.id 单调）。
-        滑出窗口的消息只要没被摘要过（id > 水位）就一定进入候选——
-        旧时间戳水位会永久丢失"摘要时还在窗口内"的消息，本实现结构性消除。
+        摘要完成后 LLM 调用期间可能又累积了新消息，重新计算并继续，
+        直到低于阈值——持锁任务一次收敛到位；未抢到锁的任务安全跳过
+        （其覆盖区间由持锁者的排水过程兜底，不会丢消息）。
         """
+        while await self._summarize_once(conversation_id):
+            pass
+
+    async def _summarize_once(self, conversation_id: str) -> bool:
+        """单次摘要尝试：完成一次摘要返回 True（调用方继续排水），否则 False。"""
         try:
             # 失败退避：60s → 120s → … 上限 15 分钟
             fail = _summary_failures.get(conversation_id)
             if fail:
                 n, ts = fail
                 if time.time() - ts < min(900.0, 60.0 * (2 ** (n - 1))):
-                    return
+                    return False
             with get_db_ctx() as session:
                 conv = session.query(Conversation).filter_by(
                     conversation_id=conversation_id
                 ).first()
                 if not conv:
-                    return
+                    return False
                 recent = (
                     session.query(Message)
                     .filter_by(conversation_id=conversation_id)
@@ -216,7 +221,7 @@ class ConversationMemory:
                     .all()
                 )
                 if not recent:
-                    return
+                    return False
                 # 窗口边界：最新入窗消息的 id（全部入窗则为最旧那条）
                 acc = 0
                 boundary_id = recent[-1].id
@@ -237,7 +242,7 @@ class ConversationMemory:
                     Message.id > watermark,
                 ).scalar() or 0
                 if chars / 1.5 < settings.summary_trigger_tokens:
-                    return
+                    return False
                 outside = (
                     session.query(Message)
                     .filter(
@@ -253,7 +258,7 @@ class ConversationMemory:
                 existing_summary = conv.summary or ""
 
             if not outside_items:
-                return
+                return False
 
             if has_summary:
                 new_turns = "\n".join(
@@ -275,7 +280,7 @@ class ConversationMemory:
             # Per-conversation lock — at most one summarization at a time
             lock = _acquire_lock(conversation_id)
             if lock is None:
-                return
+                return False
 
             try:
                 new_summary = await call_llm_with_retry(
@@ -301,16 +306,19 @@ class ConversationMemory:
                     "summary.updated conv=%s msgs=%d watermark=%s",
                     conversation_id[:8], len(outside_items), new_watermark,
                 )
+                return True
             except Exception:
                 logger.exception("Summary failed for conv=%s", conversation_id[:8])
                 n, _ = _summary_failures.get(conversation_id, (0, 0.0))
                 _summary_failures[conversation_id] = (n + 1, time.time())
+                return False
             finally:
                 lock.release()
                 with _locks_guard:
                     _summary_locks.pop(conversation_id, None)
         except Exception:
-            logger.exception("_maybe_summarize crashed conv=%s", conversation_id[:8])
+            logger.exception("summarize crashed conv=%s", conversation_id[:8])
+            return False
 
 
 # ------------------------------------------------------------------
