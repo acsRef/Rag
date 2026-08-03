@@ -11,6 +11,8 @@
 """
 import logging
 import time
+from datetime import timedelta
+
 import jieba
 from sqlalchemy import text
 from app.store.db import get_session, Chunk, ChunkQuestion, utc_now
@@ -60,7 +62,7 @@ def add_chunks(chunks_data: list[dict]):
                 content_hash=c.get("content_hash", ""),
                 visibility=c.get("visibility", "public"),
                 allowed_roles=c.get("allowed_roles", []),
-                created_at=base_ts.replace(microsecond=base_ts.microsecond + i),
+                created_at=base_ts + timedelta(microseconds=i),  # timedelta 自动进位，不再微秒溢出
             ))
         session.commit()
     finally:
@@ -111,6 +113,7 @@ def search(
       - visibility = 'public', OR
       - allowed_roles overlaps with user_role_ids (PostgreSQL && operator)
     """
+    rows = []  # finally 的 debug 日志引用 rows；execute 抛错时不得再抛 UnboundLocalError 掩盖原始异常
     session = get_session()
     t0 = time.monotonic()
     logger.debug("vector.search.start kb_count=%d top_k=%d can_read_all=%s", len(kb_ids), top_k, can_read_all)
@@ -194,6 +197,7 @@ def bm25_search(
     or_query = " | ".join(query_tokens.split()) if query_tokens.strip() else query_tokens
     if not or_query.strip():
         return []
+    rows = []  # 同 search()：防 finally 日志以 UnboundLocalError 掩盖原始异常
     session = get_session()
     t0 = time.monotonic()
     logger.debug("bm25.search.start kb_count=%d top_k=%d", len(kb_ids), top_k)
@@ -285,6 +289,7 @@ def question_vector_search(
     Multiple questions per chunk → take the MIN distance (nearest question wins).
     ACL filtering mirrors vector_search.
     """
+    rows = []  # 同 search()：防 finally 日志以 UnboundLocalError 掩盖原始异常
     session = get_session()
     t0 = time.monotonic()
     logger.debug("question_vector.search.start kb_count=%d top_k=%d", len(kb_ids), top_k)
@@ -438,7 +443,7 @@ def replace_chunks(document_id: str, chunks_data: list[dict]):
                 content_hash=c.get("content_hash", ""),
                 visibility=c.get("visibility", "public"),
                 allowed_roles=c.get("allowed_roles", []),
-                created_at=base_ts.replace(microsecond=base_ts.microsecond + i),
+                created_at=base_ts + timedelta(microseconds=i),  # timedelta 自动进位，不再微秒溢出
             ))
         session.commit()
     finally:
