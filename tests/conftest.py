@@ -21,7 +21,14 @@ from app.config import settings  # noqa: E402
 
 @pytest.fixture(autouse=True)
 def block_external_services(monkeypatch):
-    """运行期二层护栏：运行期读取这些配置的代码路径也拿到哨兵值。"""
+    """运行期二层护栏：运行期读取这些配置的代码路径也拿到哨兵值。
+
+    RAGENT_LIVE_LLM=1 时让路——live 测试需要真实 key（由 live_env 注入），
+    否则本 autouse 会把真实 key 又 patch 回哨兵（曾导致 live 全线 401）。
+    """
+    if os.environ.get("RAGENT_LIVE_LLM") == "1":
+        yield
+        return
     monkeypatch.setattr(settings, "minimax_api_key", "test-not-real")
     monkeypatch.setattr(settings, "siliconflow_api_key", "test-not-real")
     yield

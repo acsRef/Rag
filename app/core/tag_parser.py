@@ -66,14 +66,12 @@ class TagStreamParser:
             found = [(i, m) for i, m in found if i >= 0]
             if found:
                 idx, mark = min(found, key=lambda x: x[0])
-                before = self._buf[:idx]
-                # 标记前的文本：通常可整段发出；若尾部恰好是某标记前缀则保留
-                keep = self._partial_prefix_len(before)
-                if keep:
-                    self._emit(events, before[:-keep])
-                    self._buf = before[-keep:] + self._buf[idx:]
-                    continue
-                self._emit(events, before)
+                # 完整标记就是边界：标记前的文本可整段发出。
+                # （旧实现若 before 尾部恰为某标记前缀会回退重组 buf 后 continue，
+                #   但标记位置不变 → 零进展死循环，曾把事件循环 100% 卡死。
+                #   before 内不可能藏更靠前的未闭合片段——它不含任何完整标记，
+                #   而其尾部前缀与 idx 处的完整标记重叠，已被该标记覆盖。）
+                self._emit(events, self._buf[:idx])
                 self._buf = self._buf[idx + len(mark):]
                 self._apply(mark)
                 continue
@@ -83,11 +81,10 @@ class TagStreamParser:
                 self._emit(events, self._buf)
                 self._buf = ""
                 break
+            # 只保留真正的标记前缀。旧实现额外保留任意末尾 9 字符，
+            # 会把独立空白吞进缓冲、延迟正文输出（标签为规定形态，
+            # 模型不会输出裸的 空格+换行 序列，无需泛保留）。
             keep = self._partial_prefix_len(self._buf)
-            if keep == 0:
-                # 无标记前缀风险时，仍保留末 _MAX_MARK_LEN-1 字符——
-                # 下个 token 可能补出完整标记
-                keep = min(len(self._buf), _MAX_MARK_LEN - 1)
             cut = len(self._buf) - keep
             if cut > 0:
                 self._emit(events, self._buf[:cut])

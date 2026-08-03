@@ -23,10 +23,12 @@ DOC_FILES = (
 
 
 @pytest.fixture(scope="module")
-def table_corpus(integration_db, live_env, clean_corpus):
+def table_corpus(integration_db, live_env):
     """摄入 5 份表格文档（真实 embedding/metadata），返回 {filename: doc_id}。"""
     from app.ingestion.indexer import document_indexer
+    from tests.integration.conftest import truncate_corpus
 
+    truncate_corpus(integration_db)
     ids = {}
     for name in DOC_FILES:
         res = document_indexer.index(

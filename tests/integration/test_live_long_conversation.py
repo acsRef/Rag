@@ -37,10 +37,12 @@ TURNS = [
 
 
 @pytest.fixture(scope="module")
-def corpus(integration_db, live_env, clean_corpus):
+def corpus(integration_db, live_env):
     """摄入华东/华南两份销售文档作为对话语料。"""
     from app.ingestion.indexer import document_indexer
+    from tests.integration.conftest import truncate_corpus
 
+    truncate_corpus(integration_db)
     ids = {}
     for name in ("sales_east_2024.md", "sales_south_2024.md"):
         res = document_indexer.index(
@@ -65,16 +67,20 @@ async def _run_turn(conv_id, query):
         user_id="long-conv-user",
         can_read_all=True,
     ):
-        line = raw.strip()
-        if line.startswith("event: "):
-            last_event = line[7:].strip()
-            kinds.add(last_event)
-        elif line.startswith("data: "):
-            data = line[6:]
-            if last_event == "token":
-                answer_parts.append(data)
-            elif last_event == "metadata" and not conv_id:
-                conv_id = json.loads(data).get("conversation_id", conv_id)
+        # pipeline 单次 yield 可能是多行 SSE 块，必须按行拆分
+        for line in raw.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            if line.startswith("event: "):
+                last_event = line[7:].strip()
+                kinds.add(last_event)
+            elif line.startswith("data: "):
+                data = line[6:]
+                if last_event == "token":
+                    answer_parts.append(data)
+                elif last_event == "metadata" and not conv_id:
+                    conv_id = json.loads(data).get("conversation_id", conv_id)
     return "".join(answer_parts), kinds, conv_id
 
 
@@ -105,8 +111,13 @@ async def test_long_conversation_memory_invariants(corpus):
 
     assert answered >= 12, "16 轮中仅 %d 轮产出答案，过多失败" % answered
 
-    # 等后台摘要任务收敛
-    await asyncio.sleep(6.0)
+    # 强制摘要收敛：最后一轮的后台摘要 LLM 调用可能仍在途，
+    # 直接 await _maybe_summarize 把水位推到应有位置，再断言不变式
+    # （异步触发本身已由前面 summary/watermark 非空断言覆盖）
+    from app.core.memory import conversation_memory as _cm
+    for _ in range(3):
+        await _cm._maybe_summarize(conv_id)
+        await asyncio.sleep(0.3)
 
     with get_db_ctx() as session:
         conv = session.query(Conversation).filter_by(conversation_id=conv_id).first()

@@ -6,6 +6,9 @@ class Settings(BaseSettings):
     minimax_api_key: str = ""
     minimax_base_url: str = "https://api.minimaxi.com/v1"
     minimax_model: str = "MiniMax-M3"
+    # 视觉理解固定用多模态模型：文本对话可切 highspeed 变体（如 MiniMax-M2.7-highspeed），
+    # 但图片描述必须走多模态模型，否则 vision 调用失败
+    vision_model: str = "MiniMax-M3"
 
     # SiliconFlow (Embedding + Rerank)
     siliconflow_api_key: str = ""

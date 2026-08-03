@@ -61,7 +61,8 @@ def test_partial_close_tag_across_tokens_not_leaked():
     e2 = p.feed(THINK_CLOSE[6:] + "答案")
     assert _text_of(e2, "thinking") == ""         # 标签片段不泄漏进思考
     e3 = p.flush()
-    assert _text_of(e3, "answer") == "答案"
+    ev = e1 + e2 + e3                             # 答案可能在 e2 已发出，按总量断言
+    assert _text_of(ev, "answer") == "答案"
     assert p.thinking_text == "内容"
     assert p.answer_text == "答案"
 
@@ -86,6 +87,28 @@ def test_flush_in_think_keeps_thinking():
     events += p.flush()
     assert _text_of(events, "thinking") == "未闭合的思考"
     assert _text_of(events, "answer") == ""
+
+
+def test_partial_prefix_before_mark_in_same_buffer():
+    """回归：文本尾部为标签前缀、同一缓冲内紧跟完整标记——
+    旧实现会在此零进展死循环（曾卡死事件循环 40 分钟）。"""
+    p = TagStreamParser()
+    events = p.feed("abc" + " " + chr(10) + "<" + "think>推理")
+    events += p.flush()
+    # THINK_OPEN 以 空格+换行 开头：abc 后的空格属标记本身，被整体消费
+    assert _text_of(events, "answer") == "abc"
+    assert _text_of(events, "thinking") == "推理"
+
+
+def test_partial_prefix_then_mark_across_tokens():
+    """开标签跨 token 拆分（契约：标签以 空格+换行 开头，裸 <think> 是普通文本）。"""
+    p = TagStreamParser()
+    e1 = p.feed("abc" + THINK_OPEN[:3])       # 尾部保留标记前缀
+    e2 = p.feed(THINK_OPEN[3:] + "推理" + THINK_CLOSE + "答")
+    e3 = p.flush()
+    ev = e1 + e2 + e3
+    assert _text_of(ev, "answer") == "abc答"
+    assert _text_of(ev, "thinking") == "推理"
 
 
 def test_empty_token():

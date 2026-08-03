@@ -71,7 +71,7 @@ class MiniMaxClient:
         self._check_breaker()
         try:
             response = await self.client.chat.completions.create(
-                model=self.model,
+                model=self.model,  # 流式只用于文本对话；vision 走 chat(model=...)
                 messages=messages,
                 stream=True,
                 temperature=temperature,
@@ -100,16 +100,19 @@ class MiniMaxClient:
         messages: list[dict],
         timeout: int = 120,
         max_tokens: int | None = None,
+        model: str | None = None,
     ) -> str:
         """Single-attempt chat — 重试策略统一由 call_llm_with_retry 负责。
 
         本方法只做：单次调用 + 熔断记账 + 错误分类抛出。
+        `model` 覆盖默认模型：图片理解必须用多模态模型（settings.vision_model），
+        即使文本对话模型切成了非多模态的 highspeed 变体。
         （旧版自带重试循环，与 call_llm_with_retry 叠加会放大到 9 次。）
         """
         self._check_breaker()
         try:
             response = await self.client.chat.completions.create(
-                model=self.model,
+                model=model or self.model,  # vision 调用经 model= 固定走多模态模型
                 messages=messages,
                 stream=False,
                 temperature=0.7,

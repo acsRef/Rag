@@ -112,13 +112,15 @@ class ImageDescriber:
         data_url = f"data:{mime};base64,{b64}"
 
         try:
+            from app.config import settings as _settings
+            # 固定走多模态模型：文本模型可能是非多模态的 highspeed 变体
             resp = await minimax_client.chat([
                 {"role": "system", "content": "你是一个图片分析助手，擅长识别图片类型并提取关键信息。"},
                 {"role": "user", "content": [
                     {"type": "text", "text": IMAGE_DESCRIBE_PROMPT},
                     {"type": "image_url", "image_url": {"url": data_url}},
                 ]},
-            ])
+            ], model=_settings.vision_model)
         except Exception as e:
             return f"[未知] 图片描述失败：{str(e)}"
 
