@@ -170,6 +170,7 @@ class RAGPipeline:
         if not needs_decomp:
             # Fast path: no LLM rewrite/intent, search all KBs directly
             sub_queries = [req.query]
+            rewritten_query = req.query
         else:
             rewrite_result = await query_rewrite_service.rewrite(req.query, history, summary, ctx=ctx)
             if ctx:
@@ -179,6 +180,7 @@ class RAGPipeline:
                     sub_questions=rewrite_result.sub_questions,
                 )
             sub_queries = rewrite_result.sub_questions
+            rewritten_query = rewrite_result.rewritten_query or req.query
 
         # --- Retrieve ---
         yield "event: status\ndata: {\"phase\":\"retrieving\",\"message\":\"正在检索知识库...\"}\n\n"
@@ -220,8 +222,9 @@ class RAGPipeline:
 
         if not all_chunks:
             try:
+                # 兜底用改写后的独立查询——旧实现用原始 query，代词未消解
                 chunks = await retrieval_engine.retrieve(
-                    req.query, None,
+                    rewritten_query, None,
                     user_role_ids=user_role_ids,
                     can_read_all=can_read_all,
                     ctx=ctx,
@@ -284,6 +287,13 @@ class RAGPipeline:
 
         sources = _build_sources(unique_chunks, doc_map)
         yield f"event: sources\ndata: {json.dumps([s.model_dump() for s in sources])}\n\n"
+
+        if not unique_chunks:
+            # 全链路检索空结果：给用户可见信号（前端未识别事件安全忽略），
+            # 并在诊断中留痕；LLM 端已由 SYSTEM_ANSWER_TEMPLATE 约束如实告知
+            if ctx:
+                ctx.record("retrieval_empty", query=req.query)
+            yield "event: no_context\ndata: {}\n\n"
 
         messages = prompt_builder.build_messages(
             query=req.query,
