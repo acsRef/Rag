@@ -42,7 +42,7 @@ export const chatApi = {
     onToken: (token: string) => void,
     onMetadata: (data: { conversation_id: string }) => void,
     onSources: (sources: SourceInfo[]) => void,
-    onCrossDoc?: (groups: Array<{document_id: string; filename: string; title: string; chunk_count: number}>) => void,
+    onCrossDoc: ((groups: Array<{document_id: string; filename: string; title: string; chunk_count: number}>) => void) | undefined,
     onDone: () => void,
     onError: (err: string) => void,
     onThinking?: (text: string) => void,
@@ -110,6 +110,13 @@ export const chatApi = {
               lastEventType = ''
               try { if (onCrossDoc) onCrossDoc(JSON.parse(data)) }
               catch { /* ignore */ }
+            } else if (lastEventType === 'degraded') {
+              // 后端降级信号（熔断中的 provider 列表）——旧实现静默丢弃
+              lastEventType = ''
+              try {
+                const parsed = JSON.parse(data)
+                if (onStatus) onStatus('degraded', '部分服务暂时降级：' + (parsed.providers || []).join(', '))
+              } catch { /* ignore */ }
             } else if (data.startsWith('{')) {
               try {
                 const parsed = JSON.parse(data)
