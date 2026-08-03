@@ -31,7 +31,9 @@ _TITLE_BLACKLIST = (
 
 
 def _is_blacklist_title(title: str) -> bool:
-    return any(black in title for black in _TITLE_BLACKLIST)
+    # 精确匹配：子串匹配曾把"目录结构说明"这类真实章节整段丢弃（数据丢失）。
+    # 宁可漏拦变体样板，不可误删正文。
+    return title.strip() in _TITLE_BLACKLIST
 
 
 class DocumentStructurer:
