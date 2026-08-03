@@ -17,6 +17,7 @@
 - [2026-08-02-llm-gateway-convergence](2026-08-02-llm-gateway-convergence.md) — LLM 调用收敛：客户端单次化去双层重试、HALF_OPEN 单 probe、退避封顶、JSON 契约、限流器钳制、门控正则、rewrite 守卫、prompt 对齐、`_trim_history` 顺序、vision 主循环复用 + 小图过滤（分支 fix/llm-gateway-convergence）
 - [2026-08-02-tag-stream-parser](2026-08-02-tag-stream-parser.md) — 标签流解析器：抽取 TagStreamParser 纯类（12 例单测），修 <answer> 标签泄漏、跨 token 断标签泄漏、展示/持久化不一致（分支 fix/tag-stream-parser）
 - [2026-08-02-ingestion-correctness](2026-08-02-ingestion-correctness.md) — 摄入正确性：questions 构造点对齐、Document 行先行（FK xfail 转正）、失败可重试、全失败保旧索引、稳定 chunk id + 孤儿清理、无 H3 尺寸闭环、get_image 修复（分支 fix/ingestion-correctness）
+- [2026-08-02-audit-residual-fixes](2026-08-02-audit-residual-fixes.md) — 审查遗留修复：搜索异常可见性、微秒溢出、意图路由复活（KB 名称 + 默认全库）、rewritten 兜底 + no_context 信号、PII 中文排除词、坏正则告警、限流硬化（XFF + 上界）、默认口令读配置、黑名单精确匹配、前端 degraded 事件（分支 fix/residual-fixes）
 
 ## 已归档
 
