@@ -7,26 +7,7 @@ from app.config import settings
 
 pytestmark = pytest.mark.live_llm
 
-
-@pytest.fixture
-def live_env(monkeypatch):
-    if os.environ.get("RAGENT_LIVE_LLM") != "1":
-        pytest.skip("未设置 RAGENT_LIVE_LLM=1，跳过真实 API 冒烟")
-    from dotenv import dotenv_values
-    vals = dotenv_values(".env")
-    mm_key = (vals.get("MINIMAX_API_KEY") or "").strip()
-    sf_key = (vals.get("SILICONFLOW_API_KEY") or "").strip()
-    if not mm_key or not sf_key:
-        pytest.skip(".env 缺少 MINIMAX_API_KEY / SILICONFLOW_API_KEY")
-    monkeypatch.setattr(settings, "minimax_api_key", mm_key)
-    monkeypatch.setattr(settings, "siliconflow_api_key", sf_key)
-    # 强制按新 key 重建底层 client（client 属性按 loop 缓存，持有旧 key）
-    from app.llm.chat import minimax_client
-    from app.llm.embedding import sf_embedding
-    for client in (minimax_client, sf_embedding):
-        monkeypatch.setattr(client, "_client", None, raising=False)
-        monkeypatch.setattr(client, "_client_loop_id", None, raising=False)
-    yield
+# live_env fixture 已提取到 tests/integration/conftest.py 共享
 
 
 async def test_live_embedding_dimension(live_env):

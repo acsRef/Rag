@@ -182,3 +182,40 @@ def ingest_docs(integration_db, fake_llm_stack):
         assert res["status"] == "indexed", "摄入 %s 失败: %s" % (name, res)
         ids[name] = doc_id
     return ids
+
+
+@pytest.fixture
+def live_env(monkeypatch):
+    """真实 API 环境：RAGENT_LIVE_LLM=1 且 .env 有真实 key 才放行。
+
+    供所有 live_llm 集成测试共享（key 注入 + 强制按新 key 重建 client）。
+    """
+    import os as _os
+    if _os.environ.get("RAGENT_LIVE_LLM") != "1":
+        pytest.skip("未设置 RAGENT_LIVE_LLM=1，跳过真实 API 测试")
+    from dotenv import dotenv_values
+    vals = dotenv_values(".env")
+    mm_key = (vals.get("MINIMAX_API_KEY") or "").strip()
+    sf_key = (vals.get("SILICONFLOW_API_KEY") or "").strip()
+    if not mm_key or not sf_key:
+        pytest.skip(".env 缺少 MINIMAX_API_KEY / SILICONFLOW_API_KEY")
+    monkeypatch.setattr(settings, "minimax_api_key", mm_key)
+    monkeypatch.setattr(settings, "siliconflow_api_key", sf_key)
+    from app.llm.chat import minimax_client
+    from app.llm.embedding import sf_embedding
+    for client in (minimax_client, sf_embedding):
+        monkeypatch.setattr(client, "_client", None, raising=False)
+        monkeypatch.setattr(client, "_client_loop_id", None, raising=False)
+    yield
+
+
+@pytest.fixture
+def clean_corpus(integration_db):
+    """清空语料相关表：live 模块间共享 session，语料会跨模块累积，
+    污染 top-k 检索断言；每个 live 模块摄入前先清场。"""
+    with integration_db.get_db_ctx() as session:
+        session.execute(text(
+            "TRUNCATE chunks, chunk_questions, documents, doc_entities, "
+            "doc_relations, doc_embeddings, doc_role_access RESTART IDENTITY"))
+        session.commit()
+    yield
