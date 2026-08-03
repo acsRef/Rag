@@ -70,6 +70,17 @@ D:/miniConda/envs/rag/python.exe -c "import app.main"                        # i
 Install dev deps first: `D:/miniConda/envs/rag/python.exe -m pip install -r requirements-dev.txt`.
 Tests live in `tests/unit` (offline) and `tests/integration` (uses a separate `ragent_test` database on localhost PG, auto-skips when PG is unreachable; never writes to the dev `ragent` DB). Always use the **rag** conda env — never another project's env.
 Known-bug-locking tests use `xfail(strict=False)` with a reason pointing at the fixing plan in `docs/plans/`.
+
+Live real-API tests (`live_llm` marker, skipped unless enabled):
+
+```bash
+RAGENT_LIVE_LLM=1 D:/miniConda/envs/rag/python.exe -m pytest tests/integration -m live_llm -v
+# 可选加速：RAGENT_LIVE_MODEL=MiniMax-M2.7-highspeed（仅文本对话；
+# 图片理解固定走 settings.vision_model 的多模态模型，不受该开关影响）
+```
+
+需要 `.env` 真实 key；覆盖 16 轮长对话记忆不变式（有界滞后）、平安一季报 PDF 摄入检索、5 份复杂表格文档的跨文档检索。约 10 分钟。
+
 For runtime verification, start the app and exercise the affected endpoint.
 
 ## Build frontend
