@@ -22,6 +22,10 @@ class Settings(BaseSettings):
     jwt_algorithm: str = "HS256"
     access_token_expire_minutes: int = 1440  # 24h
 
+    # 首次启动种子账号（CLAUDE.md 宣称可配，旧实现硬编码 admin/admin123）
+    default_username: str = "admin"
+    default_password: str = "admin123"
+
     # RAG params
     vector_search_top_k: int = 10
     rerank_top_k: int = 5

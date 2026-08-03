@@ -17,6 +17,18 @@ router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
 _LOGIN_ATTEMPTS: dict[str, list[float]] = defaultdict(list)
 _LOGIN_WINDOW = 300  # seconds
 _LOGIN_MAX_ATTEMPTS = 10
+_RATE_LIMIT_MAX_KEYS = 10000  # 桶数量上界：超出整体清空，防 key 只增不删的缓慢泄漏
+
+
+def _client_ip(request) -> str:
+    """限流桶的 key：反代部署时取 X-Forwarded-For 首段真实客户端 IP。
+
+    旧实现直接用 request.client.host——反代后全体用户共享一个桶，
+    要么互相锁死，要么限流形同虚设。
+    """
+    fwd = request.headers.get("x-forwarded-for", "")
+    first = fwd.split(",")[0].strip() if fwd else ""
+    return first or (request.client.host if request.client else "unknown")
 
 # 假哈希：用户不存在时也跑一次 bcrypt，拉平两条路径的耗时，防用户名枚举
 _DUMMY_HASH = hash_password("ragent-dummy-password-for-timing-equalization")
@@ -29,6 +41,9 @@ def _get_workspace_kb_id(user_id: str) -> str:
 
 
 def _check_rate_limit(key: str, message: str = "登录尝试过于频繁，请稍后再试"):
+    if len(_LOGIN_ATTEMPTS) > _RATE_LIMIT_MAX_KEYS:
+        # key 只增不删会缓慢泄漏：超过上界整体清空重建（简单有界）
+        _LOGIN_ATTEMPTS.clear()
     now = time.time()
     window = _LOGIN_ATTEMPTS[key]
     window[:] = [t for t in window if now - t < _LOGIN_WINDOW]
@@ -39,7 +54,7 @@ def _check_rate_limit(key: str, message: str = "登录尝试过于频繁，请�
 
 @router.post("/register", response_model=TokenResponse)
 def register(body: RegisterRequest, request: Request):
-    _check_rate_limit("register:" + request.client.host,
+    _check_rate_limit("register:" + _client_ip(request),
                       message="注册过于频繁，请稍后再试")
     if get_user_by_username(body.username):
         raise HTTPException(status_code=400, detail="Username already exists")
@@ -83,7 +98,7 @@ def register(body: RegisterRequest, request: Request):
 
 @router.post("/login", response_model=TokenResponse)
 def login(body: LoginRequest, request: Request):
-    _check_rate_limit(request.client.host)
+    _check_rate_limit(_client_ip(request))
     user = get_user_by_username(body.username)
     if user is None:
         verify_password(body.password, _DUMMY_HASH)   # 时序拉平：存在/不存在耗时一致

@@ -1,4 +1,5 @@
 """User & role CRUD operations."""
+from app.config import settings
 from app.store.db import get_session, User, Role, UserRole, RolePermission, new_id
 from passlib.context import CryptContext
 
@@ -173,8 +174,8 @@ def seed_defaults():
                 for p in plist:
                     session.add(RolePermission(role_id=rid, permission=p))
 
-            admin_pw = hash_password("admin123")
-            admin = User(id=new_id(), username="admin", hashed_password=admin_pw,
+            admin_pw = hash_password(settings.default_password)
+            admin = User(id=new_id(), username=settings.default_username, hashed_password=admin_pw,
                          display_name="Administrator", email="admin@ragent.local")
             session.add(admin)
             session.flush()
