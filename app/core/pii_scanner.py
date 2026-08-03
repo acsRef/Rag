@@ -14,11 +14,14 @@
   - audit:只告警,文本不动(预留)
 """
 
+import logging
 import re
 import time
 from typing import NamedTuple
 from app.config import settings
 from app.core.pii_rules import VALIDATORS, DEFAULT_RULES
+
+logger = logging.getLogger(__name__)
 
 
 class PiiMatch(NamedTuple):
@@ -56,43 +59,51 @@ def load_rules(force: bool = False) -> list[dict]:
     """Load active rules from DB with in-memory cache (TTL = pii_cache_ttl).
 
     Falls back to DEFAULT_RULES if DB is not available.
+    单条规则 pattern 非法时仅跳过该条并记 warning——旧实现整包 try/except，
+    一条坏规则会让全部自定义规则静默回退默认，无任何告警。
     """
     global _rule_cache, _cache_ts
     now = time.time()
     if not force and _rule_cache is not None and (now - _cache_ts) < settings.pii_cache_ttl:
         return _rule_cache
 
+    session = None
     try:
         from app.store.db import get_session, SensitiveRule
         session = get_session()
-    except Exception:
-        _rule_cache = _fallback_rules()
-        _cache_ts = now
-        return _rule_cache
-
-    try:
         rows = session.query(SensitiveRule).filter(SensitiveRule.is_active == True).all()
-        _rule_cache = [
-            {
-                "rule_name": r.rule_name,
-                "pattern": re.compile(r.pattern) if r.pattern else None,
-                "validation_fn": r.validation_fn,
-                "strategy": r.strategy,
-                "mask_mode": r.mask_mode,
-                "exclusion_words": set(
-                    w.strip() for w in (r.exclusion_words or "").split(";") if w.strip()
-                ),
-            }
-            for r in rows if r.pattern
-        ]
-        _cache_ts = now
-        return _rule_cache
     except Exception:
+        logger.warning("PII rules: DB unavailable, falling back to default rules")
         _rule_cache = _fallback_rules()
         _cache_ts = now
         return _rule_cache
     finally:
-        session.close()
+        if session is not None:
+            session.close()
+
+    compiled = []
+    for r in rows:
+        if not r.pattern:
+            continue
+        try:
+            pat = re.compile(r.pattern)
+        except re.error:
+            logger.warning("PII rules: invalid pattern for rule %r skipped: %s",
+                           r.rule_name, r.pattern[:80])
+            continue
+        compiled.append({
+            "rule_name": r.rule_name,
+            "pattern": pat,
+            "validation_fn": r.validation_fn,
+            "strategy": r.strategy,
+            "mask_mode": r.mask_mode,
+            "exclusion_words": set(
+                w.strip() for w in (r.exclusion_words or "").split(";") if w.strip()
+            ),
+        })
+    _rule_cache = compiled
+    _cache_ts = now
+    return _rule_cache
 
 
 def invalidate_cache():
@@ -103,12 +114,19 @@ def invalidate_cache():
 
 
 def _has_exclusion(text: str, match_start: int, match_end: int, exclusion_words: set[str]) -> bool:
-    """Check if exclusion words appear within a window before/after the match."""
+    """Check if exclusion words appear within a window before/after the match.
+
+    含 CJK 的排除词用子串匹配——`\b` 在汉字之间不存在词边界，
+    旧实现对中文排除词（示例/测试/例如等）永不命中，防误报形同虚设。
+    """
     if not exclusion_words:
         return False
     window = text[max(0, match_start - 20): min(len(text), match_end + 20)]
     for word in exclusion_words:
-        if re.search(r'\b' + re.escape(word) + r'\b', window, re.IGNORECASE):
+        if re.search(r'[一-鿿]', word):
+            if word in window:
+                return True
+        elif re.search(r'\b' + re.escape(word) + r'\b', window, re.IGNORECASE):
             return True
     return False
 
