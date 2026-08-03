@@ -108,7 +108,7 @@ class DocumentParser:
             result = self.converter.convert(tmp_path)
             md = result.document.export_to_markdown()
             if result.document.pictures:
-                md = self._replace_embedded_images(md, result.document.pictures)
+                md = self._replace_embedded_images(md, result.document.pictures, result.document)
             return md
         finally:
             os.unlink(tmp_path)
@@ -117,10 +117,12 @@ class DocumentParser:
 
     _IMG_PATTERN = re.compile(r'!\[([^\]]*)\]\(([^)]+)\)')
 
-    def _replace_embedded_images(self, md: str, pictures) -> str:
+    def _replace_embedded_images(self, md: str, pictures, doc) -> str:
         """Replace each Markdown image in Docling output with a text description from vision API.
 
         Only describes images that pass size/filter checks; skips or drops the rest.
+        `doc` 为 DoclingDocument：PictureItem.get_image 必须携带它才能解出图片
+        （旧实现漏传该参数，TypeError 被吞，内嵌图片描述功能整体静默失效）。
         """
         matches = list(self._IMG_PATTERN.finditer(md))
         if not matches or not pictures:
@@ -133,7 +135,7 @@ class DocumentParser:
             if i >= len(matches):
                 break
             try:
-                pil_img = pic.get_image()
+                pil_img = pic.get_image(doc)
                 if pil_img is None:
                     continue
                 buf = io.BytesIO()
