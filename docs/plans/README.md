@@ -6,7 +6,7 @@
 
 ## 进行中
 
-（暂无，ingestion-correctness 待细化）
+（暂无）
 
 ## 已完成
 
