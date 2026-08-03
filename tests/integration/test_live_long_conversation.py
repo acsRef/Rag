@@ -137,8 +137,9 @@ async def test_long_conversation_memory_invariants(corpus):
                 break
             acc2 += t
             bnd = mid
-        out = [mid for mid, _ in rows_chk if mid < bnd]
-        if not out or max(out) <= wm:
+        gap = sum(_estimate_tokens(c) for mid, c in rows_chk
+                  if mid < bnd and mid > wm)
+        if gap <= settings.summary_trigger_tokens:
             break
         await asyncio.sleep(2)
 
@@ -165,10 +166,10 @@ async def test_long_conversation_memory_invariants(corpus):
     assert summary.strip(), "16 轮对话后 summary 仍为空"
     assert watermark, "last_summarized_msg_id 为空（水位未推进）"
 
-    # 4) 无丢失不变式：窗口外（id < boundary）的消息必须全部 ≤ 水位，
-    #    即不存在"既不在窗口、又未被摘要"的空洞
+    # 4) 有界滞后不变式：摘要按"溢出累积到 summary_trigger_tokens 才触发"
+    #    批量执行，因此任意时刻"既不在窗口、又未被摘要"的消息总 token 量
+    #    不得超过触发阈值（超了说明摘要机制失效，会越拖越多）
     from app.config import settings as st
-    recent_ids = [mid for mid, _, _, _ in msg_rows][- _HISTORY_SCAN_LIMIT:]
     recent = [(mid, content) for mid, _, content, _ in msg_rows][- _HISTORY_SCAN_LIMIT:]
     acc, boundary = 0, recent[-1][0]
     for mid, content in reversed(recent):
@@ -177,10 +178,12 @@ async def test_long_conversation_memory_invariants(corpus):
             break
         acc += t
         boundary = mid
-    outside = [mid for mid, _, _, _ in msg_rows if mid < boundary]
-    if outside:
-        assert max(outside) <= watermark, (
-            "存在丢消息空洞：窗口外最大 id %d > 水位 %d" % (max(outside), watermark))
+    gap = sum(_estimate_tokens(content)
+              for mid, _, content, _ in msg_rows
+              if mid < boundary and mid > (watermark or 0))
+    assert gap <= st.summary_trigger_tokens, (
+        "摘要滞后越界：未覆盖溢出 %d token > 触发阈值 %d（水位 %s，边界 %s）"
+        % (gap, st.summary_trigger_tokens, watermark, boundary))
 
     # 5) 预算约束：get_history 返回内容不超 token 预算
     history = conversation_memory.get_history(conv_id)
