@@ -132,10 +132,15 @@ class TextChunker:
         if preamble_elems:
             chunk_text = self._build_chunk_text(preamble_elems, preamble_path)
             title_val = preamble_path[0] if preamble_path else ""
-            chunks.insert(
-                0,
-                Chunk(text=chunk_text, title=title_val, section_path=list(preamble_path)),
-            )
+            # 无 H3 的文档全文都走 preamble 分支——同样必须受尺寸约束，
+            # 旧实现直接合成单 chunk，长文档被 embedding 截断、后半段不可检索
+            if len(chunk_text) > self.max_chunk_size:
+                chunks[:0] = self._hard_split(chunk_text, title_val, preamble_path)
+            else:
+                chunks.insert(
+                    0,
+                    Chunk(text=chunk_text, title=title_val, section_path=list(preamble_path)),
+                )
 
         return chunks
 
@@ -171,16 +176,28 @@ class TextChunker:
     # ── Hard split fallback for oversized sections ─────────────────────────
 
     def _hard_split(self, text: str, title: str, section_path: list[str]) -> list[Chunk]:
-        result = []
-        if len(text) <= self.max_chunk_size:
-            return [Chunk(text=text, title=title, section_path=list(section_path))]
-        end = self._find_break_point(text, self.max_chunk_size)
-        first = text[:end].strip()
-        rest = text[end:].strip()
-        if first:
-            result.append(Chunk(text=first, title=title, section_path=list(section_path)))
-        if rest:
-            result.append(Chunk(text=rest, title=title, section_path=list(section_path)))
+        """迭代切分直到所有片段 ≤ max_chunk_size。
+
+        旧实现只切一刀：超过 2 倍上限的 section 其 rest 原样成 chunk，
+        同样被 embedding 截断。
+        """
+        result: list[Chunk] = []
+        pending = [text]
+        while pending:
+            piece = pending.pop(0)
+            if len(piece) <= self.max_chunk_size:
+                if piece.strip():
+                    result.append(
+                        Chunk(text=piece.strip(), title=title, section_path=list(section_path)))
+                continue
+            end = self._find_break_point(piece, self.max_chunk_size)
+            first = piece[:end].strip()
+            rest = piece[end:].strip()
+            if first:
+                result.append(
+                    Chunk(text=first, title=title, section_path=list(section_path)))
+            if rest:
+                pending.append(rest)
         return result
 
     def _find_break_point(self, text: str, limit: int) -> int:
