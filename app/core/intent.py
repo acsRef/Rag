@@ -11,6 +11,8 @@
 
 无意图命中时,上层 `RAGPipeline` 会把 query 撒向所有 KB 做兜底。
 """
+import asyncio
+
 from app.llm.chat import minimax_client
 from app.llm.base import CircuitOpenError, PermanentError, TemporaryError, call_llm_with_retry, robust_json_parse
 from app.models.schemas import IntentResult, IntentMatch
@@ -84,7 +86,15 @@ class IntentClassifier:
         if not kb_ids:
             return IntentResult(sub_question=question, matches=[], intent_type="KB")
 
-        kb_list_str = "\n".join(f"- {kid}" for kid in kb_ids)
+        # KB 名称与 id 一并给 LLM：旧实现只给 hex id，LLM 无从语义路由，
+        # 意图分类形同虚设。名称解析失败时退回纯 id，不阻断主流程。
+        try:
+            kb_names = await asyncio.to_thread(_resolve_kb_names, kb_ids)
+            kb_list_str = "\n".join(
+                f"- {kid}（{kb_names.get(kid, '未命名')}）" for kid in kb_ids)
+        except Exception:
+            logger.warning("intent: KB name resolution failed, using bare ids")
+            kb_list_str = "\n".join(f"- {kid}" for kid in kb_ids)
         prompt = INTENT_CLASSIFIER_PROMPT.format(
             kb_list=kb_list_str,
             question=question,
@@ -115,6 +125,15 @@ class IntentClassifier:
             matches=matches[:settings.max_intent_count],
             intent_type=data.get("intent_type", "KB"),
         )
+
+
+def _resolve_kb_names(kb_ids: list[str]) -> dict[str, str]:
+    """kb_id → 名称，供意图 prompt 使用（LLM 只对名称能做语义路由）。"""
+    from app.store.db import get_db_ctx, KnowledgeBase
+    with get_db_ctx() as session:
+        rows = session.query(KnowledgeBase.id, KnowledgeBase.name).filter(
+            KnowledgeBase.id.in_(kb_ids)).all()
+        return {r.id: r.name for r in rows}
 
 
 intent_classifier = IntentClassifier()

@@ -8,6 +8,7 @@ from app.llm.chat import minimax_client
 from app.llm.base import CircuitOpenError, provider_health
 from app.core.doc_relation import cross_doc_synthesizer
 from app.core.tag_parser import TagStreamParser
+from app.store import pgvector_store
 from app.models.schemas import ChatRequest, RetrievedChunk, SourceInfo
 from app.config import settings
 from typing import AsyncGenerator
@@ -161,6 +162,9 @@ class RAGPipeline:
         history = await asyncio.to_thread(conversation_memory.get_history, conv_id)
         summary = await asyncio.to_thread(conversation_memory.get_summary, conv_id)
         all_kb_ids = req.knowledge_base_ids
+        if not all_kb_ids:
+            # 默认全库路由：旧实现传 None 会让意图分类器短路，路由从未真正工作
+            all_kb_ids = await asyncio.to_thread(pgvector_store.list_kb_ids)
 
         needs_decomp = _needs_decomposition(req.query)
         if not needs_decomp:
