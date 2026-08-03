@@ -7,6 +7,7 @@ from app.core.diagnostics import DiagContext
 from app.llm.chat import minimax_client
 from app.llm.base import CircuitOpenError, provider_health
 from app.core.doc_relation import cross_doc_synthesizer
+from app.core.tag_parser import TagStreamParser
 from app.models.schemas import ChatRequest, RetrievedChunk, SourceInfo
 from app.config import settings
 from typing import AsyncGenerator
@@ -66,6 +67,9 @@ _NL = "\\n"  # literal backslash-n for SSE JSON encoding
 def _sse_safe(text: str) -> str:
     """Escape text for safe SSE data field (remove \r, encode \n)."""
     return text.replace(chr(10), _NL).replace(chr(13), "")
+
+_EOL = chr(10)
+_EOL2 = chr(10) * 2
 
 def _norm(text: str) -> str:
     text = re.sub(r'\n{3,}', '\n\n', text)
@@ -309,18 +313,11 @@ class RAGPipeline:
         yield "event: status\ndata: {\"phase\":\"thinking\",\"message\":\"AI 正在思考...\"}\n\n"
 
         full_buffer = ""      # raw accumulation for diagnostics
-        thinking_text = ""    # content inside <think>...</think>
-        answer_text = ""      # content outside <think> or inside <answer>
         stream_start = time.monotonic()
         first_token = True
         chat_degraded = False
 
-        # Tag-state machine
-        _STATE_NORMAL = 0
-        _STATE_IN_THINK = 1
-        _STATE_AFTER_THINK = 2
-        tag_state = _STATE_NORMAL
-        tag_buffer = ""  # short buffer for partial tag matching
+        parser = TagStreamParser()
 
         try:
             async for raw_token in minimax_client.chat_stream(
@@ -334,56 +331,14 @@ class RAGPipeline:
                     first_token = False
 
                 full_buffer += raw_token
-                tag_buffer += raw_token
-
-                if tag_state == _STATE_NORMAL:
-                    idx = tag_buffer.find("<think>")
-                    if idx >= 0:
-                        # Flush text before <think> as normal token
-                        before = tag_buffer[:idx]
-                        if before.strip():
-                            answer_text += before
-                            yield f"event: token\ndata: {_sse_safe(_norm(before))}\n\n"
-                        tag_buffer = tag_buffer[idx + 7:]  # skip "<think>"
-                        tag_state = _STATE_IN_THINK
-                    elif len(tag_buffer) > 60 and "<" not in tag_buffer[-8:]:
-                        # No tag start possible — safe to emit (buffer 60+ chars so _norm has context)
-                        answer_text += tag_buffer[:-3] if len(tag_buffer) > 3 else tag_buffer
-                        chunk = tag_buffer
-                        tag_buffer = ""
-                        if chunk.strip():
-                            yield f"event: token\ndata: {_sse_safe(_norm(chunk))}\n\n"
-                    elif len(tag_buffer) > 120:
-                        # Still buffering but it's long enough — force emit
-                        answer_text += tag_buffer
-                        chunk = tag_buffer
-                        tag_buffer = ""
-                        if chunk.strip():
-                            yield f"event: token\ndata: {_sse_safe(_norm(chunk))}\n\n"
-
-                elif tag_state == _STATE_IN_THINK:
-                    idx = tag_buffer.find("</think>")
-                    if idx >= 0:
-                        think_chunk = tag_buffer[:idx]
-                        thinking_text += think_chunk
-                        if think_chunk.strip():
-                            yield f"event: thinking\ndata: {_sse_safe(think_chunk)}\n\n"
-                        tag_buffer = tag_buffer[idx + 8:]  # skip "</think>"
-                        tag_state = _STATE_AFTER_THINK
-                    elif len(tag_buffer) > 3 and "<" not in tag_buffer[-4:]:
-                        # Safe to emit a chunk of thinking
-                        emit_chunk = tag_buffer[:-2] if len(tag_buffer) > 2 else ""
-                        thinking_text += emit_chunk
-                        if emit_chunk.strip():
-                            yield f"event: thinking\ndata: {_sse_safe(emit_chunk)}\n\n"
-                        tag_buffer = tag_buffer[-2:] if len(tag_buffer) > 2 else tag_buffer
-
-                elif tag_state == _STATE_AFTER_THINK:
-                    # Everything after </think> is answer
-                    answer_text += tag_buffer
-                    if tag_buffer.strip():
-                        yield f"event: token\ndata: {_sse_safe(_norm(tag_buffer))}\n\n"
-                    tag_buffer = ""
+                for evt in parser.feed(raw_token):
+                    evt_text = evt["text"]
+                    if not evt_text:
+                        continue
+                    if evt["kind"] == "thinking":
+                        yield "event: thinking" + _EOL + "data: " + _sse_safe(evt_text) + _EOL2
+                    else:
+                        yield "event: token" + _EOL + "data: " + _sse_safe(_norm(evt_text)) + _EOL2
 
         except CircuitOpenError:
             chat_degraded = True
@@ -392,11 +347,11 @@ class RAGPipeline:
 
         except GeneratorExit:
             # User interrupted or connection lost
-            if answer_text or thinking_text:
+            if parser.answer_text or parser.thinking_text:
                 await conversation_memory.add_message(
                     conv_id, "assistant",
-                    _pii_safe(answer_text),
-                    thinking_content=_pii_safe(thinking_text) if thinking_text else None,
+                    _pii_safe(_norm(parser.answer_text)),
+                    thinking_content=_pii_safe(_norm(parser.thinking_text)) if parser.thinking_text else None,
                     status="interrupted",
                     user_id=user_id,
                 )
@@ -410,11 +365,11 @@ class RAGPipeline:
             import logging
             logging.getLogger(__name__).exception("Chat stream failed")
             chat_degraded = True
-            if answer_text or thinking_text:
+            if parser.answer_text or parser.thinking_text:
                 await conversation_memory.add_message(
                     conv_id, "assistant",
-                    _pii_safe(answer_text),
-                    thinking_content=_pii_safe(thinking_text) if thinking_text else None,
+                    _pii_safe(_norm(parser.answer_text)),
+                    thinking_content=_pii_safe(_norm(parser.thinking_text)) if parser.thinking_text else None,
                     status="interrupted",
                     user_id=user_id,
                 )
@@ -427,14 +382,17 @@ class RAGPipeline:
             yield "event: done\ndata: {}\n\n"
             return
 
-        # Normal completion — flush remaining buffer to correct target
-        if tag_buffer:
-            target = thinking_text if tag_state == _STATE_IN_THINK else answer_text
-            target += tag_buffer
-            tag_buffer = ""
-        answer_text = _norm(answer_text)
-        if thinking_text:
-            thinking_text = _norm(thinking_text)
+        # Normal completion —— 排空解析器缓冲（展示与持久化同源于事件流）
+        for evt in parser.flush():
+            evt_text = evt["text"]
+            if not evt_text:
+                continue
+            if evt["kind"] == "thinking":
+                yield "event: thinking" + _EOL + "data: " + _sse_safe(evt_text) + _EOL2
+            else:
+                yield "event: token" + _EOL + "data: " + _sse_safe(_norm(evt_text)) + _EOL2
+        answer_text = _norm(parser.answer_text)
+        thinking_text = _norm(parser.thinking_text)
         if answer_text or (thinking_text and not answer_text):
             if not answer_text and thinking_text:
                 answer_text = thinking_text
@@ -453,6 +411,7 @@ class RAGPipeline:
                 status="completed",
                 user_id=user_id,
             )
+
 
         degraded_providers = provider_health.is_degraded()
         if settings.degradation_hint_enabled and degraded_providers:

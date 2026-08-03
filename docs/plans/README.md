@@ -6,7 +6,7 @@
 
 ## 进行中
 
-（暂无）
+（暂无，ingestion-correctness 待细化）
 
 ## 已完成
 
@@ -15,6 +15,7 @@
 - [2026-08-02-memory-overhaul](2026-08-02-memory-overhaul.md) — 记忆机制改造：id 水位修丢消息 bug、摘要异步化、窗口化查询、失败退避、自动标题、结构化摘要（commits: 335d007..d315b34，分支 fix/memory-overhaul）
 - [2026-08-02-cross-doc-retrieval-overhaul](2026-08-02-cross-doc-retrieval-overhaul.md) — 跨文档检索改造：三通道量纲统一、公平排序映射、channel 3 独立发现、document_id 补全、bulk 上限、事件循环解阻、rerank 不丢候选、MMR 真余弦、引用编号一致（commits: 4d9dcef..062d42b，分支 fix/cross-doc-overhaul）
 - [2026-08-02-llm-gateway-convergence](2026-08-02-llm-gateway-convergence.md) — LLM 调用收敛：客户端单次化去双层重试、HALF_OPEN 单 probe、退避封顶、JSON 契约、限流器钳制、门控正则、rewrite 守卫、prompt 对齐、`_trim_history` 顺序、vision 主循环复用 + 小图过滤（分支 fix/llm-gateway-convergence）
+- [2026-08-02-tag-stream-parser](2026-08-02-tag-stream-parser.md) — 标签流解析器：抽取 TagStreamParser 纯类（12 例单测），修 <answer> 标签泄漏、跨 token 断标签泄漏、展示/持久化不一致（分支 fix/tag-stream-parser）
 
 ## 已归档
 
@@ -26,8 +27,4 @@
 
 | 优先级 | slug（预定） | 主题 |
 |---|---|---|
-| P1 | `tag-stream-parser` | 抽取标签流解析器为纯类：修 `<answer>` 泄漏、`
-</think>
-
-` 断标签泄漏、flush 丢字符 |
 | P2 | `ingestion-correctness` | 摄入正确性：`zip` 错位挂错 questions、`unchanged` 不看 status、无 H3 文档单 chunk 坍缩、`_hard_split` 不递归 |
