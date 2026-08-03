@@ -115,8 +115,12 @@ async def test_long_conversation_memory_invariants(corpus):
     # 本次调用会立即返回——轮询直到水位覆盖全部窗口外消息（最多 120s）
     import time as _time
     from app.core.memory import conversation_memory as _cm
-    deadline = _time.monotonic() + 120
+    deadline = _time.monotonic() + 180
     while _time.monotonic() < deadline:
+        # 清退避态：对话期间的偶发 LLM 失败会计入退避（该行为由
+        # test_summary_failure_backoff 专测）；此处只验证收敛性本身
+        from app.core.memory import _summary_failures
+        _summary_failures.pop(conv_id, None)
         await _cm._maybe_summarize(conv_id)
         with get_db_ctx() as session:
             conv_chk = session.query(Conversation).filter_by(
