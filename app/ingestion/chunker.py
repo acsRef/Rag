@@ -123,7 +123,7 @@ class TextChunker:
             title_val = section_path[-1]
 
             if len(chunk_text) > self.max_chunk_size:
-                chunks.extend(self._hard_split(chunk_text, title_val, section_path))
+                chunks.extend(self._pack_oversized(sec.elements, section_path, title_val))
             else:
                 chunks.append(
                     Chunk(text=chunk_text, title=title_val, section_path=list(section_path))
@@ -135,7 +135,7 @@ class TextChunker:
             # 无 H3 的文档全文都走 preamble 分支——同样必须受尺寸约束，
             # 旧实现直接合成单 chunk，长文档被 embedding 截断、后半段不可检索
             if len(chunk_text) > self.max_chunk_size:
-                chunks[:0] = self._hard_split(chunk_text, title_val, preamble_path)
+                chunks[:0] = self._pack_oversized(preamble_elems, preamble_path, title_val)
             else:
                 chunks.insert(
                     0,
@@ -175,16 +175,64 @@ class TextChunker:
 
     # ── Hard split fallback for oversized sections ─────────────────────────
 
+    _SPLIT_OVERLAP = 64   # 相邻硬切片段的重叠窗口（保留切点上下文）
+
+    def _pack_oversized(self, elements: list, section_path: list[str], title: str) -> list[Chunk]:
+        """超长 section 的元素级装箱：按元素边界打包，atomic 块（代码/表格/图片）
+        整体不拆；仅当单个元素自身超限时才退回文本级硬切。
+
+        旧实现对整段拼接文本硬切，切点可能落在表格行中间，embedding 信号
+        与检索可读性双输。
+        """
+        header = "【" + " / ".join(section_path) + "】\n" if len(section_path) > 1 else ""
+        packed: list[Chunk] = []
+        cur_parts: list[str] = []
+        cur_len = len(header)
+
+        def flush() -> None:
+            nonlocal cur_parts, cur_len
+            if cur_parts:
+                packed.append(Chunk(
+                    text=header + "\n".join(cur_parts),
+                    title=title, section_path=list(section_path)))
+                cur_parts = []
+                cur_len = len(header)
+
+        for elem in elements:
+            # 与 _build_chunk_text 保持内容一致（heading 行同样入文）
+            t = (elem.text or "").strip()
+            if not t:
+                continue
+            if elem.type == "table":
+                t = _clean_table_text(t)
+            e_len = len(t) + 1
+            if cur_parts and cur_len + e_len > self.max_chunk_size:
+                flush()
+            if e_len > self.max_chunk_size:
+                # 单元素超限（巨型 atomic 块）：无法整体保留，文本级硬切
+                flush()
+                packed.extend(self._hard_split(t, title, section_path))
+                continue
+            cur_parts.append(t)
+            cur_len += e_len
+        flush()
+        return packed
+
     def _hard_split(self, text: str, title: str, section_path: list[str]) -> list[Chunk]:
         """迭代切分直到所有片段 ≤ max_chunk_size。
 
         旧实现只切一刀：超过 2 倍上限的 section 其 rest 原样成 chunk，
-        同样被 embedding 截断。
+        同样被 embedding 截断。相邻片段携带 _SPLIT_OVERLAP 字符重叠，
+        避免切点处的语义被拦腰截断（README 宣称的「重叠窗口」）。
         """
         result: list[Chunk] = []
         pending = [text]
+        prev_tail = ""
         while pending:
             piece = pending.pop(0)
+            if prev_tail:
+                piece = prev_tail + piece
+                prev_tail = ""
             if len(piece) <= self.max_chunk_size:
                 if piece.strip():
                     result.append(
@@ -196,6 +244,7 @@ class TextChunker:
             if first:
                 result.append(
                     Chunk(text=first, title=title, section_path=list(section_path)))
+                prev_tail = first[-self._SPLIT_OVERLAP:]
             if rest:
                 pending.append(rest)
         return result

@@ -8,7 +8,6 @@ import re
 from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException
 from app.config import settings
-from app.store.db import get_db_ctx, Chunk, Document
 from app.middleware.auth import get_current_user
 from app.api.admin import require_admin
 
@@ -41,29 +40,9 @@ def diag_index(current_user: dict = Depends(get_current_user)):
 def diag_chunks(ids: str, current_user: dict = Depends(get_current_user)):
     require_admin(current_user)
     chunk_ids = [c.strip() for c in ids.split(",") if c.strip()]
-    if not chunk_ids:
-        return []
-    with get_db_ctx() as session:
-        rows = (
-            session.query(
-                Chunk.chunk_id, Chunk.document_id, Chunk.kb_id,
-                Chunk.title, Chunk.section_path, Chunk.text,
-                Chunk.content_hash, Chunk.visibility,
-                Document.filename,
-            )
-            .outerjoin(Document, Chunk.document_id == Document.document_id)
-            .filter(Chunk.chunk_id.in_(chunk_ids))
-            .all()
-        )
-        return [
-            {
-                "chunk_id": r.chunk_id, "document_id": r.document_id, "kb_id": r.kb_id,
-                "filename": r.filename or "", "title": r.title or "",
-                "section_path": r.section_path or "", "text": r.text[:500] if r.text else "",
-                "content_hash": r.content_hash or "", "visibility": r.visibility,
-            }
-            for r in rows
-        ]
+    # 与 /admin/chunks 共用查询实现（此前两处重复）
+    from app.api.admin import chunk_info_rows
+    return chunk_info_rows(chunk_ids)
 
 
 @router.get("/detail/{diag_id:path}")

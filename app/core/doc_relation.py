@@ -439,7 +439,7 @@ class CrossDocRetriever:
         # Channel 3: doc-level embedding cosine — 语义兜底，可独立发现文档
         # （不再只增强 ch1/ch2 已有候选）。批量取 embedding，消除 N+1。
         # 语料 ≤ _CH3_FULL_SCAN_LIMIT 时全量评估；更大时只对已有候选求交（成本控制）。
-        threshold = getattr(settings, "cross_doc_embedding_threshold", 0.7)
+        threshold = settings.cross_doc_embedding_threshold
         if query_emb is not None:
             all_doc_ids = pgvector_store.get_all_doc_ids_with_entities(kb_ids)
             if len(all_doc_ids) <= _CH3_FULL_SCAN_LIMIT:

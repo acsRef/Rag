@@ -39,8 +39,9 @@ class RateLimiter:
             await asyncio.sleep(sleep_for)
 
 
-# Kept as a module-level import to avoid circular import on first eval
-import time as _time
+# 单批请求上限：SiliconFlow embeddings 接口对单次 input 数组有大小限制，
+# 超限整批失败。分片后失败只退化对应小批，不再整单退化为逐条。
+_EMBED_BATCH_SIZE = 32
 
 
 class SFEmbedding:
@@ -153,28 +154,38 @@ class SFEmbedding:
         if not texts:
             return []
 
-        t0 = _time.monotonic()
-        logger.debug("embed.batch.start batch=%d", len(texts))
-        batch_result = await _try_batch_with_retry(self, texts)
-        if batch_result is not None:
-            logger.info("embed.batch.ok batch=%d elapsed_ms=%.1f", len(texts), (_time.monotonic() - t0) * 1000)
-            return [(emb, None) for emb in batch_result]
+        t0 = time.monotonic()
+        results: list[tuple[list[float] | None, str | None]] = []
+        for start in range(0, len(texts), _EMBED_BATCH_SIZE):
+            batch = texts[start:start + _EMBED_BATCH_SIZE]
+            t_batch = time.monotonic()
+            logger.debug("embed.batch.start batch=%d", len(batch))
+            batch_result = await _try_batch_with_retry(self, batch)
+            if batch_result is not None:
+                logger.info("embed.batch.ok batch=%d elapsed_ms=%.1f",
+                            len(batch), (time.monotonic() - t_batch) * 1000)
+                results.extend((emb, None) for emb in batch_result)
+                continue
 
-        logger.warning("Batch embedding failed for %d texts, falling back to single-chunk", len(texts))
-        results = []
-        ok_count = 0
-        for i, text in enumerate(texts):
-            t_chunk = _time.monotonic()
-            emb, err = await self.embed_single_chunk(text)
-            chunk_ms = (_time.monotonic() - t_chunk) * 1000
-            if emb is not None:
-                ok_count += 1
-                logger.debug("embed.single.ok idx=%d/%d elapsed_ms=%.1f", i + 1, len(texts), chunk_ms)
-            else:
-                logger.warning("embed.single.fail idx=%d/%d elapsed_ms=%.1f err=%s", i + 1, len(texts), chunk_ms, err)
-            results.append((emb, err))
-        logger.info("embed.fallback.done batch=%d ok=%d fail=%d elapsed_ms=%.1f",
-                     len(texts), ok_count, len(texts) - ok_count, (_time.monotonic() - t0) * 1000)
+            logger.warning("Batch embedding failed for %d texts, falling back to single-chunk",
+                           len(batch))
+            ok_count = 0
+            for i, text in enumerate(batch):
+                t_chunk = time.monotonic()
+                emb, err = await self.embed_single_chunk(text)
+                chunk_ms = (time.monotonic() - t_chunk) * 1000
+                if emb is not None:
+                    ok_count += 1
+                    logger.debug("embed.single.ok idx=%d/%d elapsed_ms=%.1f", i + 1, len(batch), chunk_ms)
+                else:
+                    logger.warning("embed.single.fail idx=%d/%d elapsed_ms=%.1f err=%s",
+                                   i + 1, len(batch), chunk_ms, err)
+                results.append((emb, err))
+            logger.info("embed.fallback.done batch=%d ok=%d fail=%d elapsed_ms=%.1f",
+                        len(batch), ok_count, len(batch) - ok_count,
+                        (time.monotonic() - t_batch) * 1000)
+        logger.info("embed.all.done total=%d elapsed_ms=%.1f",
+                    len(texts), (time.monotonic() - t0) * 1000)
         return results
 
 

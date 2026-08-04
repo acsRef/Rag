@@ -20,6 +20,10 @@ def client(integration_db):
 
 def test_register_workspace_kb_defaults_to_restricted(client, integration_db):
     import uuid
+    # 限流桶是进程级共享状态：test_security_api 的限流用例会把它打满，
+    # 此处先清空，避免跨用例串扰
+    import app.api.auth as auth_mod
+    auth_mod._LOGIN_ATTEMPTS.clear()
     resp = client.post("/api/v1/auth/register", json={
         "username": "ws_user_%s" % uuid.uuid4().hex[:10], "password": "password123",
     })

@@ -10,6 +10,7 @@
   visibility='public' 或 allowed_roles 与用户角色有交集的 chunk。
 """
 import logging
+import re
 import time
 from datetime import timedelta
 
@@ -164,6 +165,21 @@ def search(
         logger.debug("vector.search.done row_count=%d elapsed_ms=%.1f", len(rows), (time.monotonic() - t0) * 1000)
 
 
+# tsquery 运算符/分隔符字符——jieba 分词结果若携带这些字符（如查询 "C++"、
+# 带引号/括号的短语），拼进 to_tsquery 会直接 SQL 语法错误，异常被
+# _search_kb 吞掉后 BM25 通道静默消失。只保留词字符与连字符。
+_TSQUERY_UNSAFE_RE = re.compile(r"[^\w-]", re.UNICODE)
+
+
+def _sanitize_ts_token(tok: str) -> str:
+    cleaned = _TSQUERY_UNSAFE_RE.sub("", tok)
+    # 纯符号 token（+++ 之类）清洗后为空或只剩连字符：丢弃，
+    # 裸 '-' 进 tsquery 同样是语法隐患
+    if not cleaned or not re.search(r"\w", cleaned, re.UNICODE):
+        return ""
+    return cleaned
+
+
 def tokenize(text: str, stopwords: bool = False) -> str:
     """jieba tokenize for BM25 full-text search.
 
@@ -173,11 +189,13 @@ def tokenize(text: str, stopwords: bool = False) -> str:
 
     Returns:
         Space-separated tokens ready for PostgreSQL tsvector/tsquery.
+        Tokens are sanitized so they can never break to_tsquery syntax.
     """
     tokens = jieba.cut(text)
     if stopwords:
         tokens = [t for t in tokens if t not in _STOP_WORDS]
-    return " ".join(tokens)
+    cleaned = [_sanitize_ts_token(t) for t in tokens]
+    return " ".join(t for t in cleaned if t)
 
 
 def bm25_search(

@@ -135,9 +135,13 @@ def confirm_pii_alert(alert_id: int, current_user: dict = Depends(get_current_us
         return {"ok": True, "alert_id": alert_id, "new_status": "confirmed"}
 
 
-@router.post("/pii-alerts/{alert_id}/false-positive")
-def false_positive_pii_alert(alert_id: int, current_user: dict = Depends(get_current_user)):
-    require_admin(current_user)
+def _resolve_alert_as_false_positive(alert_id: int) -> dict:
+    """关闭告警 + 释放对应暂存文档。false-positive 与 whitelist 共用。
+
+    安全约束：不得把命中的真实 PII 值写入 exclusion_words——
+    那会让该值在全站永久免检。exclusion_words 只承载上下文关键词
+    （示例/模板等），经规则管理接口维护。
+    """
     with get_db_ctx() as session:
         alert = session.query(PiiAlert).filter(PiiAlert.id == alert_id).first()
         if not alert:
@@ -162,36 +166,17 @@ def false_positive_pii_alert(alert_id: int, current_user: dict = Depends(get_cur
         return {"ok": True, "alert_id": alert_id, "new_status": "false_positive"}
 
 
+@router.post("/pii-alerts/{alert_id}/false-positive")
+def false_positive_pii_alert(alert_id: int, current_user: dict = Depends(get_current_user)):
+    require_admin(current_user)
+    return _resolve_alert_as_false_positive(alert_id)
+
+
 @router.post("/pii-alerts/{alert_id}/whitelist")
 def whitelist_pii_alert(alert_id: int, current_user: dict = Depends(get_current_user)):
-    """关闭告警并释放暂存文档。
-
-    安全约束：不得把命中的真实 PII 值写入 exclusion_words——
-    那会让该值在全站永久免检。exclusion_words 只承载上下文关键词
-    （示例/模板等），经规则管理接口维护。
-    """
+    """关闭告警并释放暂存文档（历史端点，行为与 false-positive 一致）。"""
     require_admin(current_user)
-    with get_db_ctx() as session:
-        alert = session.query(PiiAlert).filter(PiiAlert.id == alert_id).first()
-        if not alert:
-            raise HTTPException(status_code=404, detail="Alert not found")
-
-        alert.status = "false_positive"
-        alert.resolved_at = utc_now()
-
-        hold = (
-            session.query(PiiHold)
-            .filter(
-                PiiHold.source_type == alert.source_type,
-                PiiHold.source_id == alert.source_id,
-                PiiHold.status == "pending",
-            )
-            .first()
-        )
-        if hold:
-            hold.status = "released"
-        session.commit()
-        return {"ok": True, "alert_id": alert_id, "new_status": "false_positive"}
+    return _resolve_alert_as_false_positive(alert_id)
 
 
 class ChunkInfo(BaseModel):
@@ -204,6 +189,36 @@ class ChunkInfo(BaseModel):
     text: str
     content_hash: str
     visibility: str
+
+
+def chunk_info_rows(chunk_ids: list[str]) -> list[dict]:
+    """按 chunk_id 批量取 chunk 详情（含来源文件名）。
+
+    /admin/chunks 与 /diag/chunks 共用——两处此前是重复实现。
+    """
+    if not chunk_ids:
+        return []
+    with get_db_ctx() as session:
+        rows = (
+            session.query(
+                Chunk.chunk_id, Chunk.document_id, Chunk.kb_id,
+                Chunk.title, Chunk.section_path, Chunk.text,
+                Chunk.content_hash, Chunk.visibility,
+                Document.filename,
+            )
+            .outerjoin(Document, Chunk.document_id == Document.document_id)
+            .filter(Chunk.chunk_id.in_(chunk_ids))
+            .all()
+        )
+        return [
+            {
+                "chunk_id": r.chunk_id, "document_id": r.document_id, "kb_id": r.kb_id,
+                "filename": r.filename or "", "title": r.title or "",
+                "section_path": r.section_path or "", "text": r.text[:500] if r.text else "",
+                "content_hash": r.content_hash or "", "visibility": r.visibility,
+            }
+            for r in rows
+        ]
 
 
 @router.get("/chunks", response_model=list[ChunkInfo])
@@ -220,24 +235,4 @@ def lookup_chunks(
     if not ids:
         return []
     chunk_ids = [c.strip() for c in ids.split(",") if c.strip()]
-    with get_db_ctx() as session:
-        rows = (
-            session.query(
-                Chunk.chunk_id, Chunk.document_id, Chunk.kb_id,
-                Chunk.title, Chunk.section_path, Chunk.text,
-                Chunk.content_hash, Chunk.visibility,
-                Document.filename,
-            )
-            .outerjoin(Document, Chunk.document_id == Document.document_id)
-            .filter(Chunk.chunk_id.in_(chunk_ids))
-            .all()
-        )
-        return [
-            ChunkInfo(
-                chunk_id=r.chunk_id, document_id=r.document_id, kb_id=r.kb_id,
-                filename=r.filename or "", title=r.title or "",
-                section_path=r.section_path or "", text=r.text[:500],
-                content_hash=r.content_hash or "", visibility=r.visibility,
-            )
-            for r in rows
-        ]
+    return [ChunkInfo(**row) for row in chunk_info_rows(chunk_ids)]

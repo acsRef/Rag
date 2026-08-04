@@ -20,6 +20,19 @@ def test_search_propagates_original_error(monkeypatch):
         assert "db down" in str(e)
 
 
+def test_bm25_special_char_query_does_not_raise(integration_db):
+    """含 tsquery 运算符字符的查询（如 C++）不得让 BM25 通道抛错。
+
+    旧实现 jieba 结果直接拼 to_tsquery，`+` 等字符触发 SQL 语法错误，
+    被 _search_kb 吞掉后词法通道静默消失。
+    """
+    from app.store import pgvector_store
+
+    for q in ("C++ 是什么", "a|b & c", "(括号) '引号'", "100% 完成率"):
+        rows = pgvector_store.bm25_search(["test-kb"], q, can_read_all=True, top_k=5)
+        assert isinstance(rows, list)
+
+
 def test_add_chunks_microsecond_overflow(integration_db):
     """基准微秒接近上限时，多 chunk 写入不得 ValueError。"""
     from app.store import pgvector_store

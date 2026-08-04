@@ -51,7 +51,6 @@ class Settings(BaseSettings):
     history_max_tokens: int = 2000      # 近期对话的 token 预算
     summary_max_tokens: int = 800       # 历史摘要的最大 token 数
     summary_trigger_tokens: int = 2000  # 旧消息累积超过此值时触发摘要
-    chunks_max_tokens: int = 6000       # 检索 chunks 的最大 token 预算
 
     # PII / Sensitive data
     pii_enabled: bool = True

@@ -90,7 +90,7 @@ def get_messages(conversation_id: str, current_user: dict = Depends(get_current_
         msgs = (
             session.query(Message)
             .filter(Message.conversation_id == conversation_id)
-            .order_by(Message.created_at.asc())
+            .order_by(Message.id.asc())   # 单调序，与 memory 模块约定一致
             .all()
         )
         return [
