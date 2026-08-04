@@ -189,8 +189,14 @@ class RAGPipeline:
         async def _retrieve_one(sub_q: str) -> list[RetrievedChunk]:
             intent = None
             if needs_decomp:
-                intent = await intent_classifier.classify(sub_q, all_kb_ids, ctx=ctx)
-                if ctx:
+                try:
+                    intent = await intent_classifier.classify(sub_q, all_kb_ids, ctx=ctx)
+                except Exception:
+                    # 守卫兜底：意图分类的任何意外不得打死整条检索链路
+                    logging.getLogger(__name__).exception(
+                        "intent.classify_failed q=%s", sub_q[:40])
+                    intent = None
+                if ctx and intent is not None:
                     ctx.append("intent", {
                         "sub_query": sub_q,
                         "kbs": [

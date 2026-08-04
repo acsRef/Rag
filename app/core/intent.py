@@ -73,6 +73,42 @@ INTENT_CLASSIFIER_PROMPT = """你是一个知识库路由分类器。你的任�
 □ score 是否反映了真实相关度？"""
 
 
+def _normalize_matches(
+    raw, kb_ids: list[str], kb_names: dict[str, str],
+) -> list[IntentMatch]:
+    """归一 LLM 的 matches 输出：容忍畸形条目，名称反查 id。
+
+    prompt 允许返回「知识库ID或名称」（示例全用名称）——旧实现把返回值直接
+    当 kb_id 塞进 SQL，LLM 返回名称时 0 命中，且高分令全库兜底不触发，
+    路由静默断链。缺键/错型条目一律丢弃，不再外抛 KeyError。
+    """
+    if not isinstance(raw, list):
+        return []
+    id_set = set(kb_ids)
+    name_to_id = {name: kid for kid, name in kb_names.items() if name}
+    out: list[IntentMatch] = []
+    for m in raw:
+        if not isinstance(m, dict):
+            continue
+        key = m.get("kb_id")
+        if not isinstance(key, str) or not key.strip():
+            continue
+        key = key.strip()
+        if key in id_set:
+            kb_id = key
+        elif key in name_to_id:
+            kb_id = name_to_id[key]
+        else:
+            logger.warning("intent: LLM 返回未知 KB %r，丢弃该匹配", key[:40])
+            continue
+        try:
+            score = float(m.get("score"))
+        except (TypeError, ValueError):
+            continue
+        out.append(IntentMatch(kb_id=kb_id, score=score))
+    return out
+
+
 class IntentClassifier:
     async def classify(self, question: str, kb_ids: list[str] | None = None, ctx=None) -> IntentResult:
         """把 question 路由到最相关的 1-3 个 KB。
@@ -88,6 +124,7 @@ class IntentClassifier:
 
         # KB 名称与 id 一并给 LLM：旧实现只给 hex id，LLM 无从语义路由，
         # 意图分类形同虚设。名称解析失败时退回纯 id，不阻断主流程。
+        kb_names: dict[str, str] = {}
         try:
             kb_names = await asyncio.to_thread(_resolve_kb_names, kb_ids)
             kb_list_str = "\n".join(
@@ -118,7 +155,7 @@ class IntentClassifier:
             if ctx:
                 ctx.track_error("intent", "JSONDecodeError", "failed to parse LLM JSON output", degraded=True)
             return IntentResult(sub_question=question, matches=[], intent_type="KB")
-        matches = [IntentMatch(kb_id=m["kb_id"], score=m["score"]) for m in data.get("matches", [])]
+        matches = _normalize_matches(data.get("matches"), kb_ids, kb_names)
         matches = [m for m in matches if m.score >= settings.intent_min_score]
         return IntentResult(
             sub_question=question,
