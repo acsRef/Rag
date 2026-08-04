@@ -6,13 +6,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 [AGENTS.md](AGENTS.md) is the primary AI-assistant guide. Read it before doing anything else. This file covers what AGENTS.md doesn't.
 
-## Git LFS — critical
-
-All `.py` files are Git LFS pointers. After a fresh clone, you **must** run:
-```bash
-git lfs install && git lfs pull
-```
-Without this, Python files read as binary garbage and imports fail.
+**Stale AGENTS.md items — this file wins:**
+- "本仓库没有 pytest/tests/ 目录，不要创建" (§2/§6/§10) — outdated. `tests/` + `pytest.ini` now exist; see "Verify code changes" below.
+- "Git LFS" (§9) — outdated. No `.gitattributes`, no LFS-tracked files; `.py` files are plain text and no `git lfs pull` is needed after cloning.
 
 ## Start the app
 
@@ -51,7 +47,7 @@ All under `/api/v1/`:
 | Prefix | File | Notes |
 | ------ | ---- | ----- |
 | `/auth` | [app/api/auth.py](app/api/auth.py) | Register, login, profile |
-| `/chat/stream` | [app/api/chat.py](app/api/chat.py) | SSE stream: `metadata`→`sources`→`token`→`done`/`error` |
+| `/chat/stream` | [app/api/chat.py](app/api/chat.py) | SSE stream: `metadata`→`status`→`cross_doc`→`sources`→`thinking`/`token`→`degraded`→`done`/`error` (plus `no_context` when retrieval is empty) |
 | `/documents` | [app/api/documents.py](app/api/documents.py) | Upload (with incremental update), list, delete |
 | `/kb` | [app/api/kb.py](app/api/kb.py) | Knowledge base CRUD |
 | `/admin` | [app/api/admin.py](app/api/admin.py) | User management + PII audit (confirm/false-positive/whitelist) |
@@ -95,12 +91,14 @@ cd frontend && npm run build   # runs vue-tsc -b && vite build
 
 **LLM providers**: MiniMax M3 (chat/vision) + SiliconFlow (embedding Qwen3-VL-Embedding-8B 4096d + rerank BAAI/bge-reranker-v2-m3)
 
-**RAG pipeline** (see [app/core/pipeline.py:105](app/core/pipeline.py#L105) `RAGPipeline.execute`):
+**RAG pipeline** (see [app/core/pipeline.py:118](app/core/pipeline.py#L118) `RAGPipeline.execute`):
 ```
-QueryRewrite → IntentClassify (route to 1-3 KBs) → Hybrid Search (vector cosine + BM25 ts_rank, RRF merge)
+QueryRewrite → IntentClassify (route to 1-3 KBs) → Hybrid Search (vector cosine + BM25 ts_rank + question-vector
+channel, RRF merge; relaxed-BM25 fallback when < top_k)
 → Cross-doc Relation (3-channel: TF-IDF edges / query keyword recall / doc-level embedding — see [app/core/doc_relation.py](app/core/doc_relation.py))
 → Cross-encoder Rerank → MMR diversity (λ=0.7, ≤2 per doc) → TopK → Prompt injection → SSE stream
 ```
+The question channel is on by default (`question_channel_enabled`, RRF weight 0.15): at ingest time the LLM generates candidate questions per chunk into `chunk_questions`, embedded separately. Streaming output passes through `TagStreamParser` ([app/core/tag_parser.py](app/core/tag_parser.py)) so SSE display and DB persistence share one think/answer event stream.
 
 **Document ingestion** ([app/ingestion/](app/ingestion/)):
 ```
@@ -108,9 +106,9 @@ Parser → Cleaner → Structurer → Chunker → Metadata → Indexer (with inc
 → Cross-doc relation matrix build (precomputes TF-IDF edges for cross-doc retrieval)
 ```
 
-**Database**: 14 tables, `chunks.embedding` (pgvector) + `chunks.search_text` (GIN tsvector), `init_db()` is idempotent (CREATE TABLE IF NOT EXISTS + ALTER TABLE ADD COLUMN IF NOT EXISTS). Connection: `postgresql://ragent:ragent@localhost:5432/ragent`.
+**Database**: 18 tables (incl. `chunk_questions` for the question channel and `doc_entities`/`doc_embeddings`/`doc_relations` for cross-doc), `chunks.embedding` (pgvector) + `chunks.search_text` (GIN tsvector), `init_db()` is idempotent (CREATE TABLE IF NOT EXISTS + ALTER TABLE ADD COLUMN IF NOT EXISTS). Connection: `postgresql://ragent:ragent@localhost:5432/ragent`.
 
-**Auth**: JWT + bcrypt, 8 RBAC permissions, 3-tier KB visibility (public/internal/restricted). Middleware at [app/middleware/auth.py](app/middleware/auth.py:56).
+**Auth**: JWT + bcrypt, 8 RBAC permissions, 3-tier KB visibility (public/internal/restricted). Middleware at [app/middleware/auth.py:71](app/middleware/auth.py#L71).
 
 **PII detection** (3-layer, see [app/core/pii_scanner.py](app/core/pii_scanner.py)):
 
@@ -200,6 +198,7 @@ D:/miniConda/envs/rag/python.exe -c "import app.main"
 │   │   ├── prompt.py          # Prompt assembly with token budgeting
 │   │   ├── pii_scanner.py     # 3-layer PII detection
 │   │   ├── pii_rules.py       # 5 default PII regex rules
+│   │   ├── tag_parser.py      # TagStreamParser: think/answer tag parsing for the SSE stream (pure logic)
 │   │   └── diagnostics.py     # DiagContext recorder
 │   ├── ingestion/             # Document processing pipeline
 │   │   ├── parser.py          # Parse bytes → Markdown (multi-format)
@@ -231,10 +230,8 @@ D:/miniConda/envs/rag/python.exe -c "import app.main"
 │       ├── components/        # Reusable UI components
 │       └── styles/            # Global styles (Apple design language)
 ├── tools/
-│   ├── diagnostics.html       # Standalone RAG pipeline viewer
-│   ├── sample-detail.json     # (generated)
-│   └── sample-index.json      # (generated)
-├── test-docs/                 # End-to-end test documents (4 .md files)
+│   └── diagnostics.html       # Standalone RAG pipeline viewer
+├── test-docs/                 # End-to-end test documents (13 .md files; gitignored — local only, absent in fresh clones)
 ├── tests/
 │   ├── conftest.py            # credential sentinel guard (unit never touches real services)
 │   ├── unit/                  # offline unit tests
@@ -247,6 +244,7 @@ D:/miniConda/envs/rag/python.exe -c "import app.main"
 ├── docker-compose.yml
 ├── requirements.txt
 └── requirements-dev.txt       # test deps (pytest / pytest-asyncio)
+```
 
 ## Cross-document relation retrieval
 
@@ -290,19 +288,20 @@ Live RAG-pipeline telemetry, recorded per request and served to a standalone HTM
 
 | Concern | Location |
 | ------- | -------- |
-| RAG main flow | [app/core/pipeline.py:105](app/core/pipeline.py#L105) `RAGPipeline.execute` |
-| Hybrid search + RRF | [app/store/pgvector_store.py:300](app/store/pgvector_store.py#L300) `hybrid_search` |
+| RAG main flow | [app/core/pipeline.py:118](app/core/pipeline.py#L118) `RAGPipeline.execute` |
+| Hybrid search + RRF | [app/store/pgvector_store.py:340](app/store/pgvector_store.py#L340) `hybrid_search` |
 | Cross-doc relation | [app/core/doc_relation.py](app/core/doc_relation.py) `cross_doc_retriever` |
-| MMR algorithm | [app/core/mmr.py:25](app/core/mmr.py#L25) `mmr_select` |
-| PII scanner (3-layer) | [app/core/pii_scanner.py:116](app/core/pii_scanner.py#L116) `scan` |
-| Incremental hash reuse | [app/ingestion/indexer.py:100](app/ingestion/indexer.py#L100) `existing.content_hash == doc_hash` |
-| Ingestion main flow | [app/ingestion/indexer.py:32](app/ingestion/indexer.py#L32) `DocumentIndexer.index` |
-| Startup sequence | [app/main.py:44](app/main.py#L44) `startup` |
-| JWT middleware | [app/middleware/auth.py:56](app/middleware/auth.py#L56) `get_current_user` |
+| MMR algorithm | [app/core/mmr.py:26](app/core/mmr.py#L26) `mmr_select` |
+| PII scanner (3-layer) | [app/core/pii_scanner.py:134](app/core/pii_scanner.py#L134) `scan` |
+| Incremental hash reuse | [app/ingestion/indexer.py:104](app/ingestion/indexer.py#L104) `existing.content_hash == doc_hash` |
+| Ingestion main flow | [app/ingestion/indexer.py:35](app/ingestion/indexer.py#L35) `DocumentIndexer.index` |
+| Startup sequence | [app/main.py:39](app/main.py#L39) `startup` |
+| JWT middleware | [app/middleware/auth.py:71](app/middleware/auth.py#L71) `get_current_user` |
 | SSE stream endpoint | [app/api/chat.py:13](app/api/chat.py#L13) `stream_chat` |
+| SSE think/answer tag parser | [app/core/tag_parser.py](app/core/tag_parser.py) `TagStreamParser` |
 | Diag recorder | [app/core/diagnostics.py](app/core/diagnostics.py) `DiagContext` |
-| Conversation memory | [app/core/memory.py:69](app/core/memory.py#L69) `ConversationMemory` |
+| Conversation memory | [app/core/memory.py:83](app/core/memory.py#L83) `ConversationMemory` |
 | Document parser | [app/ingestion/parser.py:47](app/ingestion/parser.py#L47) `parse_bytes` |
-| Text chunker | [app/ingestion/chunker.py:45](app/ingestion/chunker.py#L45) `TextChunker.chunk` |
+| Text chunker | [app/ingestion/chunker.py:85](app/ingestion/chunker.py#L85) `TextChunker.chunk` |
 | Frontend SSE parser | [frontend/src/api/chat.ts:38](frontend/src/api/chat.ts#L38) `streamChat` |
 | Config (all settings) | [app/config.py](app/config.py) |

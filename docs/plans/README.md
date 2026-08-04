@@ -6,7 +6,7 @@
 
 ## 进行中
 
-（暂无）
+- [2026-08-04-audit-followups](2026-08-04-audit-followups.md) — 全栈审查遗留修复：增量更新丢复用 chunk 问题向量、邻居扩展对 hash chunk id 失效、前端 XSS（P0）；意图路由归一、diag 路径穿越、熔断文案流式、工作空间 ACL、SSE 进度过滤（P1）；事件循环阻塞、tsquery 消毒、embedding 分片、chunker 装箱/重叠、死代码（P2）
 
 ## 已完成
 
