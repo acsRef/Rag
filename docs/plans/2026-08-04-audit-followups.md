@@ -1,4 +1,4 @@
-> 状态: 进行中（分支 fix/audit-followups）
+> 状态: 已完成（分支 fix/audit-followups；commits: c36e3f6 / b9c323f / 8cf390a / e5524d9 / 7b69a94 / 372fe24 / ff23398；全量 152 passed + 13 skipped，前端 build 通过）
 
 # 全栈审查遗留修复（audit-followups）实施计划
 
@@ -101,55 +101,55 @@
 
 ### Task 1: P0-1 + P0-2（摄入/检索正确性核心）
 
-- [ ] **Step 1**: integration 测试先行：`test_incremental_update_preserves_reused_questions`（首摄 → 记录复用 chunk 的问题行数 → 追加小节增量更新 → 断言存活 chunk 的问题行仍在、新 chunk 问题行新增）、`test_neighbor_expansion_returns_context`（真实锚点取 ±2 邻居，断言 before/after 非空且来自相邻块）。
-- [ ] **Step 2**: `replace_chunks` 差量化 + `created_at` 顺序刷新 + `delete_orphan_chunk_questions` LIKE 转义。
-- [ ] **Step 3**: `get_neighbor_chunks` 重写（anchors 对 + created_at 排序 + Python 切片），pipeline 调用点适配。
-- [ ] **Step 4**: 跑 `pytest tests/integration/test_ingestion.py tests/integration/test_cross_doc.py tests/integration/test_retrieval_e2e.py -q`，全绿后 commit。
+- [x] **Step 1**: integration 测试先行：`test_incremental_update_preserves_reused_questions`（首摄 → 记录复用 chunk 的问题行数 → 追加小节增量更新 → 断言存活 chunk 的问题行仍在、新 chunk 问题行新增）、`test_neighbor_expansion_returns_context`（真实锚点取 ±2 邻居，断言 before/after 非空且来自相邻块）。
+- [x] **Step 2**: `replace_chunks` 差量化 + `created_at` 顺序刷新 + `delete_orphan_chunk_questions` LIKE 转义。
+- [x] **Step 3**: `get_neighbor_chunks` 重写（anchors 对 + created_at 排序 + Python 切片），pipeline 调用点适配。
+- [x] **Step 4**: 跑 `pytest tests/integration/test_ingestion.py tests/integration/test_cross_doc.py tests/integration/test_retrieval_e2e.py -q`，全绿后 commit。
 
 ### Task 2: P0-3 前端 XSS
 
-- [ ] **Step 1**: 建 `frontend/src/util/render.ts`（转义 → marked → 协议过滤），ChatView 两处 v-html 接入。
-- [ ] **Step 2**: `npm run build`（vue-tsc 类型检查）通过，commit。
+- [x] **Step 1**: 建 `frontend/src/util/render.ts`（转义 → marked → 协议过滤），ChatView 两处 v-html 接入。
+- [x] **Step 2**: `npm run build`（vue-tsc 类型检查）通过，commit。
 
 ### Task 3: P1-4 意图归一 + 守卫
 
-- [ ] **Step 1**: 先写 `tests/unit/test_intent_guard.py`（缺键/坏类型/名称替身/非 dict 条目 → 不抛且归一正确）。
-- [ ] **Step 2**: `_normalize_matches` 落地 + pipeline classify 兜底，单测 + 回归绿，commit。
+- [x] **Step 1**: 先写 `tests/unit/test_intent_guard.py`（缺键/坏类型/名称替身/非 dict 条目 → 不抛且归一正确）。
+- [x] **Step 2**: `_normalize_matches` 落地 + pipeline classify 兜底，单测 + 回归绿，commit。
 
 ### Task 4: P1-5/7 安全批（路径穿越 + 工作空间 ACL）
 
-- [ ] **Step 1**: `tests/unit/test_diag_path_guard.py`（合法/非法 id 判定）。
-- [ ] **Step 2**: integration：双用户场景——A 的 restricted 工作空间文档，B 检索不得命中、A 本人可命中、admin 可命中；`GET /api/v1/diag/detail/../../...` 返回 404。
-- [ ] **Step 3**: 实现 SQL owner 旁路（四处）+ 全链路 user_id 透传 + register 默认 restricted + diag id 守卫，测试绿，commit。
+- [x] **Step 1**: `tests/unit/test_diag_path_guard.py`（合法/非法 id 判定）。
+- [x] **Step 2**: integration：双用户场景——A 的 restricted 工作空间文档，B 检索不得命中、A 本人可命中、admin 可命中；`GET /api/v1/diag/detail/../../...` 返回 404。
+- [x] **Step 3**: 实现 SQL owner 旁路（四处）+ 全链路 user_id 透传 + register 默认 restricted + diag id 守卫，测试绿，commit。
 
 ### Task 5: P1-6/8 + P2-9（pipeline/documents 行为批）
 
-- [ ] **Step 1**: integration：monkeypatch `chat_stream` 抛 `CircuitOpenError`，断言 SSE 含降级文案 token 且消息入库。
-- [ ] **Step 2**: `tests/unit/test_sse_delivery.py`：按 user 过滤 + QueueFull 丢旧不丢新（asyncio 直测）。
-- [ ] **Step 3**: 实现熔断文案流式、SSE 过滤/丢旧/节流、三处 to_thread，测试绿，commit。
+- [x] **Step 1**: integration：monkeypatch `chat_stream` 抛 `CircuitOpenError`，断言 SSE 含降级文案 token 且消息入库。
+- [x] **Step 2**: `tests/unit/test_sse_delivery.py`：按 user 过滤 + QueueFull 丢旧不丢新（asyncio 直测）。
+- [x] **Step 3**: 实现熔断文案流式、SSE 过滤/丢旧/节流、三处 to_thread，测试绿，commit。
 
 ### Task 6: P2-10/11/14（检索/摄入质量批）
 
-- [ ] **Step 1**: 先写单测：`test_tsquery_sanitize.py`（`tokenize("C++")` 无运算符；integration 补 `bm25_search("C++")` 不抛）、`test_embed_batching.py`（70 条 → 32/32/6 分片；单批失败只退化该批）、`test_chunker.py` 扩展（超长 section 装箱不切断 atomic；hard split 带重叠）。
-- [ ] **Step 2**: 实现三处，测试绿，commit。
+- [x] **Step 1**: 先写单测：`test_tsquery_sanitize.py`（`tokenize("C++")` 无运算符；integration 补 `bm25_search("C++")` 不抛）、`test_embed_batching.py`（70 条 → 32/32/6 分片；单批失败只退化该批）、`test_chunker.py` 扩展（超长 section 装箱不切断 atomic；hard split 带重叠）。
+- [x] **Step 2**: 实现三处，测试绿，commit。
 
 ### Task 7: P2-13/16 清理批 + 回归
 
-- [ ] **Step 1**: 死代码/死配置清理、`get_messages` 改 id 序。
-- [ ] **Step 2**: 全量 `pytest -q` + `python -c "import app.main"` + 前端 build，commit。
+- [x] **Step 1**: 死代码/死配置清理、`get_messages` 改 id 序。
+- [x] **Step 2**: 全量 `pytest -q` + `python -c "import app.main"` + 前端 build，commit。
 
 ### Task 8: 收尾
 
-- [ ] **Step 1**: plan 状态转已完成，README 索引更新，commit。
+- [x] **Step 1**: plan 状态转已完成，README 索引更新，commit。
 
 ## Verification
 
-| 验证项 | 命令 | 期望 |
-|---|---|---|
-| 全量套件 | `D:/miniConda/envs/rag/python.exe -m pytest -q` | ≥112 passed + 新增用例全绿（live 仍 skip） |
-| 离线单测 | `... -m pytest tests/unit -q` | 全绿（新增 ~25 例） |
-| import 链 | `D:/miniConda/envs/rag/python.exe -c "import app.main"` | 无异常 |
-| 前端 | `cd frontend && npm run build` | vue-tsc + vite 通过 |
+| 验证项 | 命令 | 期望 | 实测 |
+|---|---|---|---|
+| 全量套件 | `D:/miniConda/envs/rag/python.exe -m pytest -q` | ≥112 passed + 新增用例全绿（live 仍 skip） | ✅ 152 passed, 13 skipped（基线 112） |
+| 离线单测 | `... -m pytest tests/unit -q` | 全绿 | ✅ +31 例新单测全绿 |
+| import 链 | `D:/miniConda/envs/rag/python.exe -c "import app.main"` | 无异常 | ✅ |
+| 前端 | `cd frontend && npm run build` | vue-tsc + vite 通过 | ✅ |
 
 ## Explicitly NOT doing
 

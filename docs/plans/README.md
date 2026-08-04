@@ -6,9 +6,11 @@
 
 ## 进行中
 
-- [2026-08-04-audit-followups](2026-08-04-audit-followups.md) — 全栈审查遗留修复：增量更新丢复用 chunk 问题向量、邻居扩展对 hash chunk id 失效、前端 XSS（P0）；意图路由归一、diag 路径穿越、熔断文案流式、工作空间 ACL、SSE 进度过滤（P1）；事件循环阻塞、tsquery 消毒、embedding 分片、chunker 装箱/重叠、死代码（P2）
+（暂无）
 
 ## 已完成
+
+- [2026-08-04-audit-followups](2026-08-04-audit-followups.md) — 全栈审查遗留修复（16 项）：P0 增量更新丢复用 chunk 问题向量（replace_chunks 差量化）/邻居扩展适配 hash chunk id（created_at 全序）/前端 XSS（v-html 前置消毒）；P1 意图路由名称归一 + 畸形守卫、diag id 路径穿越白名单、熔断兜底文案流式、工作空间 restricted 默认 + owner 旁路 ACL、SSE 进度按用户过滤 + 丢旧 + 节流；P2 事件循环解阻、tsquery 消毒、embedding 32 分片、chunker 元素装箱 + 64 字符重叠、死代码清理、消息 id 序（分支 fix/audit-followups，+31 单测 +9 集成用例，152 passed）
 
 - [2026-08-02-test-infrastructure](2026-08-02-test-infrastructure.md) — 测试基建：pytest 离线单测（42 例锁 4 个已知 bug）+ integration 摄入/跨文档/检索全链路（自制 fixture 文档 + 确定性 fake 层），`ragent_test` 测试库隔离（commit: ad3ac46，分支 feat/test-infrastructure）
 - [2026-08-02-security-p0](2026-08-02-security-p0.md) — 安全 P0：诊断遥测 admin 鉴权 + 删静态挂载、会话 IDOR、银联卡漏报 + 重叠掩码去重、白名单永久开洞、登录时序拉平、注册限流（commits: 297f9bf..b8cefbe，分支 fix/security-p0）
