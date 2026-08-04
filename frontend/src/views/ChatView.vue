@@ -96,7 +96,7 @@
 import { ref, nextTick, watch, onUnmounted, onMounted } from 'vue'
 import { useAuthStore } from '../stores/auth'
 import { chatApi, type SourceInfo } from '../api/chat'
-import { marked } from 'marked'
+import { renderMarkdown } from '../util/render'
 
 const auth = useAuthStore()
 
@@ -110,14 +110,8 @@ const emit = defineEmits<{
   'switch-conv': [id: string]
 }>()
 
-function renderMd(text: string): string {
-  if (!text) return ''
-  try {
-    return marked.parse(text, { async: false }) as string
-  } catch {
-    return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-  }
-}
+// v-html 前置消毒：转义原始 HTML + 危险协议过滤（见 util/render.ts）
+const renderMd = renderMarkdown
 
 const input = ref('')
 interface ChatMsg { role: 'user' | 'assistant'; content: string; time?: string; sources?: SourceInfo[]; _sourcesOpen?: boolean; _think?: string }
