@@ -31,6 +31,39 @@ def _content_hash(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
+# ── 摄入进度事件：user 定向 + 节流 ─────────────────────────
+# 旧实现每个 chunk 向所有 SSE 订阅者广播一次（500 块 = 500 条 × 全员），
+# 还会把别人文档的 id/状态/报错推给无关用户。现按 5% 桶节流 + 携带 user_id。
+_progress_buckets: dict[str, int] = {}   # doc_id -> 上次放行的百分比桶
+
+
+def _emit_progress(doc_id: str, user_id: str, embedded: int, total: int,
+                   status: str, error_message: str = "") -> None:
+    """发摄入进度。indexing 中间态按 5% 桶节流，终态必发并清桶。"""
+    if status == "indexing":
+        pct = int(embedded * 100 / total) if total else 0
+        bucket = pct // 5
+        if _progress_buckets.get(doc_id) == bucket:
+            return
+        _progress_buckets[doc_id] = bucket
+    else:
+        _progress_buckets.pop(doc_id, None)
+    try:
+        from app.api.documents import emit_doc_progress
+        payload = {
+            "document_id": doc_id,
+            "embedded_chunk_count": embedded,
+            "chunk_count": total,
+            "status": status,
+            "user_id": user_id,
+        }
+        if error_message:
+            payload["error_message"] = error_message
+        emit_doc_progress(payload)
+    except Exception:
+        pass
+
+
 class DocumentIndexer:
     def index(
         self,
@@ -63,17 +96,7 @@ class DocumentIndexer:
             logger.exception("Parse/clean failed for filename=%s", filename)
             doc_id = document_id or new_id()
             self._save_document(doc_id, user_id, kb_id, filename, 0, "failed", "")
-            try:
-                from app.api.documents import emit_doc_progress
-                emit_doc_progress({
-                    "document_id": doc_id,
-                    "embedded_chunk_count": 0,
-                    "chunk_count": 0,
-                    "status": "failed",
-                    "error_message": "解析/清洗失败",
-                })
-            except Exception:
-                pass
+            _emit_progress(doc_id, user_id, 0, 0, "failed", "解析/清洗失败")
             return {
                 "document_id": doc_id,
                 "filename": filename,
@@ -122,17 +145,7 @@ class DocumentIndexer:
         if not chunks:
             doc_id = document_id or new_id()
             self._save_document(doc_id, user_id, kb_id, filename, 0, "failed", doc_hash)
-            try:
-                from app.api.documents import emit_doc_progress
-                emit_doc_progress({
-                    "document_id": doc_id,
-                    "embedded_chunk_count": 0,
-                    "chunk_count": 0,
-                    "status": "failed",
-                    "error_message": "文档切块后为空",
-                })
-            except Exception:
-                pass
+            _emit_progress(doc_id, user_id, 0, 0, "failed", "文档切块后为空")
             return {"document_id": doc_id, "chunk_count": 0, "status": "failed"}
 
         doc_id = document_id or new_id()
@@ -242,16 +255,7 @@ class DocumentIndexer:
             if not is_reused:
                 question_source.append((chunk_id, list(c.questions or [])))
 
-            try:
-                from app.api.documents import emit_doc_progress
-                emit_doc_progress({
-                    "document_id": doc_id,
-                    "embedded_chunk_count": embedded_count,
-                    "chunk_count": len(chunk_index),
-                    "status": "indexing",
-                })
-            except Exception:
-                pass
+            _emit_progress(doc_id, user_id, embedded_count, len(chunk_index), "indexing")
 
             if not is_reused and i % 10 == 0 and i > 0:
                 self._save_document(doc_id, user_id, kb_id, filename, len(chunks), "indexing", doc_hash,
@@ -264,17 +268,8 @@ class DocumentIndexer:
         if embedded_count == 0 and not old_chunks_map:
             self._save_document(doc_id, user_id, kb_id, filename, 0, "failed", doc_hash,
                                 embedded_chunk_count=0, error_message=final_error or "所有分块向量化均失败")
-            try:
-                from app.api.documents import emit_doc_progress
-                emit_doc_progress({
-                    "document_id": doc_id,
-                    "embedded_chunk_count": 0,
-                    "chunk_count": len(chunks),
-                    "status": "failed",
-                    "error_message": final_error or "所有分块向量化均失败",
-                })
-            except Exception:
-                pass
+            _emit_progress(doc_id, user_id, 0, len(chunks), "failed",
+                           final_error or "所有分块向量化均失败")
             return {
                 "document_id": doc_id,
                 "filename": filename,
@@ -344,30 +339,11 @@ class DocumentIndexer:
 
             self._save_document(doc_id, user_id, kb_id, filename, len(chunks), status, doc_hash,
                                 embedded_chunk_count=embedded_count, error_message=final_error)
-            try:
-                from app.api.documents import emit_doc_progress
-                emit_doc_progress({
-                    "document_id": doc_id,
-                    "embedded_chunk_count": embedded_count,
-                    "chunk_count": len(chunks),
-                    "status": status,
-                    "error_message": final_error,
-                })
-            except Exception:
-                pass
+            _emit_progress(doc_id, user_id, embedded_count, len(chunks), status, final_error)
         except Exception:
             logger.exception("Failed to persist chunks/document for doc_id=%s", doc_id)
-            try:
-                from app.api.documents import emit_doc_progress
-                emit_doc_progress({
-                    "document_id": doc_id,
-                    "embedded_chunk_count": embedded_count,
-                    "chunk_count": len(chunks),
-                    "status": "failed",
-                    "error_message": "持久化失败(详见日志)",
-                })
-            except Exception:
-                pass
+            _emit_progress(doc_id, user_id, embedded_count, len(chunks), "failed",
+                           "持久化失败(详见日志)")
             return {
                 "document_id": doc_id,
                 "filename": filename,

@@ -339,6 +339,7 @@ class RAGPipeline:
         stream_start = time.monotonic()
         first_token = True
         chat_degraded = False
+        degraded_reply = ""   # 熔断兜底文案：既要流式给用户，也要持久化
 
         parser = TagStreamParser()
 
@@ -365,8 +366,10 @@ class RAGPipeline:
 
         except CircuitOpenError:
             chat_degraded = True
-            import logging as _log
-            _log.getLogger(__name__).warning("Chat circuit breaker open, returning degraded response")
+            degraded_reply = "抱歉，AI 服务暂时不可用，请稍后重试。您仍可浏览已上传的文档信息。"
+            logging.getLogger(__name__).warning("Chat circuit breaker open, returning degraded response")
+            # 旧实现只把兜底文案写库不流式——用户当轮看到空白。现在同步推给前端
+            yield "event: token" + _EOL + "data: " + _sse_safe(degraded_reply) + _EOL2
 
         except GeneratorExit:
             # User interrupted or connection lost
@@ -385,7 +388,6 @@ class RAGPipeline:
             return
 
         except Exception:
-            import logging
             logging.getLogger(__name__).exception("Chat stream failed")
             chat_degraded = True
             if parser.answer_text or parser.thinking_text:
@@ -416,6 +418,8 @@ class RAGPipeline:
                 yield "event: token" + _EOL + "data: " + _sse_safe(_norm(evt_text)) + _EOL2
         answer_text = _norm(parser.answer_text)
         thinking_text = _norm(parser.thinking_text)
+        if not answer_text and degraded_reply:
+            answer_text = degraded_reply   # 熔断兜底文案随正常路径持久化
         if answer_text or (thinking_text and not answer_text):
             if not answer_text and thinking_text:
                 answer_text = thinking_text
@@ -424,13 +428,6 @@ class RAGPipeline:
                 conv_id, "assistant",
                 _pii_safe(answer_text),
                 thinking_content=_pii_safe(thinking_text) if thinking_text else None,
-                status="completed",
-                user_id=user_id,
-            )
-        elif chat_degraded:
-            await conversation_memory.add_message(
-                conv_id, "assistant",
-                "抱歉，AI 服务暂时不可用，请稍后重试。您仍可浏览已上传的文档信息。",
                 status="completed",
                 user_id=user_id,
             )

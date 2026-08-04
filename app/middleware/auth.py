@@ -1,4 +1,5 @@
 """JWT authentication middleware."""
+import asyncio
 from datetime import datetime, timedelta, timezone
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
@@ -74,15 +75,18 @@ async def get_current_user(
     """FastAPI dependency: returns {id, username, display_name, role_ids, permissions, is_admin}.
 
     Raises 401 if token missing or invalid.
+
+    _resolve_token 是同步 DB 查询（user + roles + permissions 三连）——
+    每个鉴权请求都会发生，必须 to_thread，否则阻塞事件循环。
     """
-    result = _resolve_token(credentials)
+    result = await asyncio.to_thread(_resolve_token, credentials)
     if result is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
     return result
 
 
-def get_optional_user(
+async def get_optional_user(
     credentials: HTTPAuthorizationCredentials | None = Depends(bearer_optional),
 ) -> dict | None:
     """Like get_current_user but returns None instead of 401."""
-    return _resolve_token(credentials)
+    return await asyncio.to_thread(_resolve_token, credentials)

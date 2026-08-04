@@ -20,9 +20,9 @@ router = APIRouter(prefix="/api/v1/documents", tags=["Documents"])
 
 
 # ── SSE 文档进度事件总线(进程内 pub/sub) ───────────────────────
-# 内存 list 存所有订阅者,每个订阅者持有一个 asyncio.Queue
+# 内存 list 存所有订阅者,每项 {"queue": asyncio.Queue, "user_id": str}
 # uvicorn 单 worker 够用,多 worker 需要 Redis 之类共享
-_doc_event_subscribers: list[asyncio.Queue] = []
+_doc_event_subscribers: list[dict] = []
 _subscribers_lock = asyncio.Lock()
 _main_loop: Optional[asyncio.AbstractEventLoop] = None
 _main_loop_lock = threading.Lock()
@@ -78,34 +78,62 @@ def set_main_loop(loop: asyncio.AbstractEventLoop) -> None:
     set_llm_main_loop(loop)
 
 
-async def subscribe_doc_events() -> asyncio.Queue:
-    """新建一个订阅者,返回它的 Queue。"""
+async def subscribe_doc_events(user_id: str = "") -> asyncio.Queue:
+    """新建一个订阅者,返回它的 Queue。user_id 用于按用户过滤进度事件。"""
     q: asyncio.Queue = asyncio.Queue(maxsize=256)
     async with _subscribers_lock:
-        _doc_event_subscribers.append(q)
+        _doc_event_subscribers.append({"queue": q, "user_id": user_id or ""})
     return q
 
 
 async def unsubscribe_doc_events(q: asyncio.Queue) -> None:
     async with _subscribers_lock:
-        if q in _doc_event_subscribers:
-            _doc_event_subscribers.remove(q)
+        _doc_event_subscribers[:] = [
+            sub for sub in _doc_event_subscribers if sub["queue"] is not q
+        ]
+
+
+def _should_deliver(event_uid: str, sub_uid: str) -> bool:
+    """按用户过滤:无 user_id 的事件广播;有 user_id 的只投给本人
+    （订阅方 user_id 为空视为管理通道,全部接收）。"""
+    return not event_uid or not sub_uid or event_uid == sub_uid
+
+
+def _put_or_drop_oldest(q: asyncio.Queue, event: dict) -> None:
+    """投递事件;队列满时丢弃最旧的一条再投——旧实现静默吞掉 put 失败,
+    慢客户端可能恰好丢终态事件,UI 永远卡在 indexing。"""
+    try:
+        q.put_nowait(event)
+    except asyncio.QueueFull:
+        try:
+            q.get_nowait()
+        except Exception:
+            pass
+        try:
+            q.put_nowait(event)
+        except Exception:
+            pass
 
 
 def emit_doc_progress(event: dict) -> None:
     """同步 emit 一个事件(从后台 ingestion 线程调用)。
 
     由于后台任务在 `asyncio.to_thread` 里跑(同步),而订阅者在 async SSE handler 里,
-    用 `loop.call_soon_threadsafe` 把 put_nowait 排到事件循环。
+    用 `loop.call_soon_threadsafe` 把投递排到事件循环。
     如果主 loop 未设置或已关闭,静默 return(不影响 ingestion 主流程)。
+    事件带 user_id 时只投给属主订阅者——旧实现全员广播,任何登录用户都能
+    看到别人文档的 document_id/状态/报错。
     """
     with _main_loop_lock:
         loop = _main_loop
     if loop is None or loop.is_closed():
         return
-    for q in list(_doc_event_subscribers):
+    event_uid = event.get("user_id") or ""
+    for sub in list(_doc_event_subscribers):
+        if not _should_deliver(event_uid, sub["user_id"]):
+            continue
         try:
-            loop.call_soon_threadsafe(q.put_nowait, event)
+            loop.call_soon_threadsafe(_put_or_drop_oldest, sub["queue"], event)
         except Exception:
             pass
 
@@ -321,10 +349,11 @@ async def document_events(request: Request):
     认证: Bearer header 优先,回退到 `?token=` query param(适配 EventSource)。
     客户端用 EventSource 订阅即可。每完成一个 chunk 或最终状态变化时触发。
     """
-    user = _resolve_sse_user(request)
+    # 同步 DB 解析包 to_thread,避免 SSE 建连阻塞事件循环
+    user = await asyncio.to_thread(_resolve_sse_user, request)
     if not user:
         raise HTTPException(status_code=401, detail="Authentication required")
-    queue = await subscribe_doc_events()
+    queue = await subscribe_doc_events(user["id"])
 
     async def event_stream() -> AsyncIterator[str]:
         try:
