@@ -55,6 +55,129 @@ def test_incremental_update_reuses_unchanged_chunks(ingest_docs, fake_llm_stack)
     assert 0 < embedded_texts < res["chunk_count"] + 2   # +2: questions 批次
 
 
+def test_incremental_update_preserves_reused_questions(ingest_docs, fake_llm_stack):
+    """增量更新不得丢失复用 chunk 的问题向量。
+
+    旧实现 replace_chunks 全删全插，chunk_questions 外键 CASCADE 把复用 chunk
+    的问题行删光，而重建只覆盖新 chunk → question 通道每次增量上传都在损耗。
+    """
+    from app.ingestion.indexer import document_indexer
+    from app.store import pgvector_store
+    from app.store.db import ChunkQuestion, get_db_ctx
+
+    name = "rag_chunking.md"
+    doc_id = ingest_docs[name]
+    original = (FIXTURE_DIR / name).read_bytes()
+
+    def _question_counts() -> dict:
+        with get_db_ctx() as session:
+            rows = session.query(ChunkQuestion.chunk_id).filter(
+                ChunkQuestion.chunk_id.like(doc_id + r"\_%", escape="\\")
+            ).all()
+        counts: dict = {}
+        for (cid,) in rows:
+            counts[cid] = counts.get(cid, 0) + 1
+        return counts
+
+    counts_before = _question_counts()
+    assert counts_before, "首次摄入应已写入问题行"
+
+    modified = original + "\n\n### 追加小节\n\n这是追加的内容，用于触发增量更新路径。\n".encode("utf-8")
+    res = document_indexer.index(
+        name, modified, kb_id="test-kb", user_id="test-user",
+        document_id=doc_id,
+    )
+    assert res["status"] in ("indexed", "partial")
+
+    counts_after = _question_counts()
+    chunks_after = {c["chunk_id"] for c in pgvector_store.get_chunks_by_document(doc_id)}
+    # 存活下来的复用 chunk：问题行原样保留
+    for cid, n in counts_before.items():
+        if cid in chunks_after:
+            assert counts_after.get(cid, 0) == n, (
+                "增量更新丢失复用 chunk %s 的问题向量" % cid[:12]
+            )
+    # 新增 chunk：问题行必须挂上
+    new_ids = chunks_after - set(counts_before)
+    assert new_ids, "追加小节应产生新 chunk"
+    for cid in new_ids:
+        assert counts_after.get(cid, 0) > 0, "新 chunk %s 没有问题行" % cid[:12]
+
+
+def test_neighbor_expansion_returns_context(ingest_docs):
+    """上下文扩展：hash chunk id 下 ±N 邻居仍要取到（旧实现按尾部序号解析，已失效）。"""
+    from app.store import pgvector_store
+    from app.store.db import Chunk, get_db_ctx
+
+    doc_id = ingest_docs["transformer_basics.md"]
+    with get_db_ctx() as session:
+        rows = (
+            session.query(Chunk.chunk_id)
+            .filter(Chunk.document_id == doc_id)
+            .order_by(Chunk.created_at, Chunk.id)
+            .all()
+        )
+    chunk_ids = [r[0] for r in rows]
+    assert len(chunk_ids) >= 3
+
+    mid = len(chunk_ids) // 2
+    neighbors = pgvector_store.get_neighbor_chunks([(doc_id, chunk_ids[mid])], expand_n=1)
+    assert chunk_ids[mid] in neighbors
+    assert neighbors[chunk_ids[mid]]["before"], "锚点前邻居文本为空"
+    assert neighbors[chunk_ids[mid]]["after"], "锚点后邻居文本为空"
+
+    # 首块只有 after，末块只有 before
+    first = pgvector_store.get_neighbor_chunks([(doc_id, chunk_ids[0])], expand_n=1)
+    assert first[chunk_ids[0]]["before"] == ""
+    assert first[chunk_ids[0]]["after"]
+    last = pgvector_store.get_neighbor_chunks([(doc_id, chunk_ids[-1])], expand_n=1)
+    assert last[chunk_ids[-1]]["after"] == ""
+    assert last[chunk_ids[-1]]["before"]
+
+
+def test_neighbor_expansion_survives_incremental_update(ingest_docs, fake_llm_stack):
+    """增量更新后 created_at 仍编码逻辑顺序：新块插在中间时邻居关系保持正确。"""
+    from app.ingestion.indexer import document_indexer
+    from app.store import pgvector_store
+    from app.store.db import Chunk, get_db_ctx
+
+    name = "rag_chunking.md"
+    doc_id = ingest_docs[name]
+    # fixture 是 CRLF 行尾，归一化后再按小节切分（cleaner 摄入时同样会归一化）
+    original = (FIXTURE_DIR / name).read_bytes().replace(b"\r\n", b"\n")
+
+    # 在文档中间插入新小节
+    marker = "\n\n### ".encode("utf-8")
+    parts = original.split(marker)
+    assert len(parts) >= 3, "fixture 应含多个 H3 小节"
+    middle = "\n\n### 中间插入小节\n\n这是插在文档中间的邻居扩展验证内容。\n".encode("utf-8")
+    inserted = parts[0] + marker + parts[1] + middle + marker + marker.join(parts[2:])
+
+    res = document_indexer.index(
+        name, inserted, kb_id="test-kb", user_id="test-user",
+        document_id=doc_id,
+    )
+    assert res["status"] in ("indexed", "partial")
+
+    with get_db_ctx() as session:
+        rows = (
+            session.query(Chunk.chunk_id, Chunk.text)
+            .filter(Chunk.document_id == doc_id)
+            .order_by(Chunk.created_at, Chunk.id)
+            .all()
+        )
+    order = [r.chunk_id for r in rows]
+    texts = {r.chunk_id: r.text for r in rows}
+    anchor = next(cid for cid in order if "邻居扩展验证内容" in texts[cid])
+    idx = order.index(anchor)
+    assert 0 < idx < len(order) - 1, "插入的小节应位于文档中间"
+
+    neighbors = pgvector_store.get_neighbor_chunks([(doc_id, anchor)], expand_n=1)
+    nb = neighbors[anchor]
+    assert nb["before"] == texts[order[idx - 1]]
+    assert nb["after"] == texts[order[idx + 1]]
+
+
 def _precreate_document_row(filename: str) -> str:
     """模拟 api/documents.py 的上传契约：先建 Document 行，返回 doc_id。"""
     from app.store.db import get_db_ctx, Document, new_id, utc_now

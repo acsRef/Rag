@@ -246,10 +246,11 @@ class RAGPipeline:
         # Context expansion: for each selected chunk, fetch ±N neighbor chunks
         # to provide surrounding context before feeding to LLM.
         _EXPAND_N = 2  # number of neighbors on each side
-        cids = [c.chunk_id for c in unique_chunks]
-        if cids:
+        anchors = [(c.document_id, c.chunk_id) for c in unique_chunks if c.document_id]
+        if anchors:
             from app.store.pgvector_store import get_neighbor_chunks
-            neighbors = get_neighbor_chunks(cids, expand_n=_EXPAND_N)
+            # 同步 DB 调用，必须 to_thread，否则阻塞事件循环
+            neighbors = await asyncio.to_thread(get_neighbor_chunks, anchors, _EXPAND_N)
             for c in unique_chunks:
                 nb = neighbors.get(c.chunk_id)
                 if nb:
@@ -263,7 +264,7 @@ class RAGPipeline:
 
         # 先解析文件名；sources 事件延迟到跨文档合并去重之后发出，
         # 否则按文档合并会使 [Source N] 编号整体位移，与 UI 来源卡片对不上
-        doc_map = _resolve_doc_map(unique_chunks)
+        doc_map = await asyncio.to_thread(_resolve_doc_map, unique_chunks)
 
         # Cross-doc synthesis: group chunks by document, annotate texts with source
         doc_ids_in_result = list({c.document_id for c in unique_chunks if c.document_id})

@@ -423,15 +423,34 @@ def hybrid_search(
 
 
 def replace_chunks(document_id: str, chunks_data: list[dict]):
-    """Delete old chunks (CASCADE auto-removes ChunkQuestions) and insert new ones."""
+    """差量 upsert：只删消失的 chunk，复用行 UPDATE 保留，新行 INSERT。
+
+    旧实现全删全插：chunk_questions 外键 ON DELETE CASCADE 会把复用 chunk 的
+    问题向量一并删光，而索引侧重建只覆盖新 chunk → 每次增量更新都在静默损耗
+    question 通道。差量化后复用 chunk 的行不删，其问题行随外键存活。
+
+    created_at 统一刷新为 base_ts + i 微秒：始终编码当前逻辑顺序——
+    get_neighbor_chunks 依此定位邻居（Chunk.id 不行：后插入的 chunk id 更大，
+    逻辑位置却可能在中间）。
+    """
     session = get_session()
     try:
-        session.query(Chunk).filter(Chunk.document_id == document_id).delete()
+        existing_ids = {
+            r[0] for r in session.query(Chunk.chunk_id)
+            .filter(Chunk.document_id == document_id).all()
+        }
+        new_ids = {c["chunk_id"] for c in chunks_data}
+        gone_ids = existing_ids - new_ids
+        if gone_ids:
+            session.query(Chunk).filter(
+                Chunk.document_id == document_id,
+                Chunk.chunk_id.in_(list(gone_ids)),
+            ).delete(synchronize_session=False)
+
         base_ts = utc_now()
         for i, c in enumerate(chunks_data):
-            session.add(Chunk(
-                chunk_id=c["chunk_id"],
-                document_id=c["document_id"],
+            ts = base_ts + timedelta(microseconds=i)  # timedelta 自动进位，不再微秒溢出
+            values = dict(
                 kb_id=c["kb_id"],
                 text=c["text"],
                 embedding=c["embedding"],
@@ -443,8 +462,17 @@ def replace_chunks(document_id: str, chunks_data: list[dict]):
                 content_hash=c.get("content_hash", ""),
                 visibility=c.get("visibility", "public"),
                 allowed_roles=c.get("allowed_roles", []),
-                created_at=base_ts + timedelta(microseconds=i),  # timedelta 自动进位，不再微秒溢出
-            ))
+                created_at=ts,
+            )
+            if c["chunk_id"] in existing_ids:
+                session.query(Chunk).filter(Chunk.chunk_id == c["chunk_id"]).update(
+                    values, synchronize_session=False)
+            else:
+                session.add(Chunk(
+                    chunk_id=c["chunk_id"],
+                    document_id=c["document_id"],
+                    **values,
+                ))
         session.commit()
     finally:
         session.close()
@@ -461,73 +489,51 @@ def list_kb_ids() -> list[str]:
 
 
 def get_neighbor_chunks(
-    chunk_ids: list[str],
+    anchors: list[tuple[str, str]],
     expand_n: int = 2,
 ) -> dict[str, dict[str, str]]:
-    """Fetch neighboring chunks for a list of anchor chunk_ids.
+    """Fetch neighboring chunks for anchor (document_id, chunk_id) pairs.
 
-    Uses a single SQL range query per document, avoiding full-document load.
-    Returns dict keyed by anchor chunk_id.
+    稳定 hash chunk id 不再携带序号（旧实现按 `_(\\d+)$` 解析尾部序号，
+    id 改造后静默失效）。改按 created_at 全序定位：replace_chunks 差量
+    upsert 每次增量写入都整体刷新 created_at，始终编码当前逻辑顺序
+    （Chunk.id 不可用——后插入的 chunk id 更大，逻辑位置却可能在中间）。
+
+    Returns dict keyed by anchor chunk_id: {"before": str, "after": str}.
     """
-    import re
-
-    if not chunk_ids:
-        return {}
-
-    anchors: list[tuple[str, int, str]] = []
-    for cid in chunk_ids:
-        m = re.match(r"^(.+)_(\d+)$", cid)
-        if m:
-            anchors.append((m.group(1), int(m.group(2)), cid))
-
     if not anchors:
         return {}
 
     from collections import defaultdict
-    doc_ranges: dict[str, list[tuple[int, int]]] = defaultdict(list)
-    for doc_id, seq, cid in anchors:
-        doc_ranges[doc_id].append((seq, cid))
+    doc_anchors: dict[str, list[str]] = defaultdict(list)
+    for doc_id, cid in anchors:
+        if doc_id and cid:
+            doc_anchors[doc_id].append(cid)
+    if not doc_anchors:
+        return {}
 
     session = get_session()
     try:
         result: dict[str, dict[str, str]] = {}
-        for doc_id, seqs in doc_ranges.items():
-            min_seq = min(s for s, _ in seqs)
-            max_seq = max(s for s, _ in seqs)
-            query_min = max(0, min_seq - expand_n)
-            query_max = max_seq + expand_n
-
-            from sqlalchemy import text, bindparam
-            seq_filter = text(
-                "CAST(SUBSTRING(chunk_id FROM '_(\\d+)$') AS INTEGER) BETWEEN :qmin AND :qmax"
-            ).bindparams(qmin=query_min, qmax=query_max)
+        for doc_id, cids in doc_anchors.items():
             rows = (
                 session.query(Chunk.chunk_id, Chunk.text)
-                .filter(Chunk.document_id == doc_id, seq_filter)
-                .order_by(Chunk.id)
+                .filter(Chunk.document_id == doc_id)
+                .order_by(Chunk.created_at, Chunk.id)
                 .all()
             )
-
-            seq_map: dict[int, str] = {}
-            for row in rows:
-                m2 = re.match(r"^.+_(\d+)$", row.chunk_id)
-                if m2:
-                    seq = int(m2.group(1))
-                    if query_min <= seq <= query_max:
-                        seq_map[seq] = row.text
-
-            for seq, cid in seqs:
-                before_parts = []
-                for i in range(seq - expand_n, seq):
-                    if i >= 0 and i in seq_map:
-                        before_parts.append(seq_map[i])
-                after_parts = []
-                for i in range(seq + 1, seq + expand_n + 1):
-                    if i in seq_map:
-                        after_parts.append(seq_map[i])
+            order = [r.chunk_id for r in rows]
+            text_map = {r.chunk_id: r.text for r in rows}
+            pos = {cid: i for i, cid in enumerate(order)}
+            for cid in cids:
+                idx = pos.get(cid)
+                if idx is None:
+                    continue
+                before = [text_map[order[j]] for j in range(max(0, idx - expand_n), idx)]
+                after = [text_map[order[j]] for j in range(idx + 1, min(len(order), idx + 1 + expand_n))]
                 result[cid] = {
-                    "before": "\n".join(before_parts),
-                    "after": "\n".join(after_parts),
+                    "before": "\n".join(before),
+                    "after": "\n".join(after),
                 }
         return result
     finally:
@@ -898,6 +904,13 @@ def get_chunks_by_documents_bulk(
     finally:
         session.close()
 
+def _like_escape_literal(prefix: str) -> str:
+    """转义 LIKE 模式中的通配符（`_`/`%`/`\\`）——chunk_id 前缀是字面量，
+    旧写法 `like(doc_id + "_%")` 中的 `_` 是单字符通配符，只是恰好被
+    16 位定长 id 掩盖；id 格式一变就会误伤其他文档的行。"""
+    return prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
 def delete_orphan_chunk_questions(document_id: str, valid_chunk_ids: list[str]) -> None:
     """删除指定文档下不再存在的 chunk 的问题行（chunk 删除/历史 id 遗留后兜底）。"""
     if not document_id:
@@ -905,7 +918,7 @@ def delete_orphan_chunk_questions(document_id: str, valid_chunk_ids: list[str]) 
     session = get_session()
     try:
         q = session.query(ChunkQuestion).filter(
-            ChunkQuestion.chunk_id.like(document_id + "_%"))
+            ChunkQuestion.chunk_id.like(_like_escape_literal(document_id) + "\\_%", escape="\\"))
         if valid_chunk_ids:
             q = q.filter(~ChunkQuestion.chunk_id.in_(valid_chunk_ids))
         q.delete(synchronize_session=False)
