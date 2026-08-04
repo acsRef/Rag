@@ -211,6 +211,7 @@ class RAGPipeline:
                     user_role_ids=user_role_ids,
                     can_read_all=can_read_all,
                     ctx=ctx,
+                    user_id=user_id,
                 )
             except Exception:
                 logging.getLogger(__name__).exception("retrieve.sub_query_failed q=%s", sub_q[:40])
@@ -234,6 +235,7 @@ class RAGPipeline:
                     user_role_ids=user_role_ids,
                     can_read_all=can_read_all,
                     ctx=ctx,
+                    user_id=user_id,
                 )
             except Exception:
                 chunks = []

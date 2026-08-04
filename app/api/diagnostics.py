@@ -4,6 +4,7 @@
 查看器（tools/diagnostics.html）从磁盘打开并携带 admin token 调用本 API。
 """
 import json
+import re
 from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException
 from app.config import settings
@@ -13,6 +14,14 @@ from app.api.admin import require_admin
 
 router = APIRouter(prefix="/api/v1/diag", tags=["diagnostics"])
 DIAG_DIR = Path(settings.diagnostics_dir)
+
+# 诊断 id / document_id 白名单：HHMMSS-hex 与 16 位 hex 均落在此字符集内。
+# diag_detail 的 {id:path} 转换器允许斜杠，不校验可拼出 ../ 读目录外文件。
+_SAFE_ID_RE = re.compile(r"^[0-9A-Za-z][0-9A-Za-z-]{0,63}$")
+
+
+def _is_safe_id(value: str) -> bool:
+    return bool(_SAFE_ID_RE.match(value))
 
 
 @router.get("/index")
@@ -60,6 +69,8 @@ def diag_chunks(ids: str, current_user: dict = Depends(get_current_user)):
 @router.get("/detail/{diag_id:path}")
 def diag_detail(diag_id: str, current_user: dict = Depends(get_current_user)):
     require_admin(current_user)
+    if not _is_safe_id(diag_id):
+        raise HTTPException(status_code=404, detail="Diagnostic not found")
     today = sorted(
         (d for d in DIAG_DIR.iterdir() if d.is_dir()),
         reverse=True,
@@ -101,6 +112,8 @@ def diag_chunk_docs(current_user: dict = Depends(get_current_user)):
 @router.get("/chunk-doc/{document_id}")
 def diag_chunk_doc(document_id: str, current_user: dict = Depends(get_current_user)):
     require_admin(current_user)
+    if not _is_safe_id(document_id):
+        raise HTTPException(status_code=404, detail="Chunk diagnostic not found")
     path = DIAG_DIR / "chunks" / f"{document_id}.json"
     if not path.exists():
         raise HTTPException(status_code=404, detail="Chunk diagnostic not found")

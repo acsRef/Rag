@@ -72,9 +72,11 @@ def register(body: RegisterRequest, request: Request):
         raise HTTPException(status_code=409, detail="Username already exists")
 
     with get_db_ctx() as session:
+        # 个人工作空间默认 restricted：chunk 检索走属主旁路 ACL，
+        # 本人可查、他人不可见（旧默认 public = 全员可检索个人文档）
         kb = KnowledgeBase(
             name=f"{user.display_name or user.username}的工作空间",
-            visibility="public",
+            visibility="restricted",
             owner_id=user.id,
         )
         session.add(kb)

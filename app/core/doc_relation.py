@@ -366,10 +366,12 @@ class CrossDocRetriever:
         initial_chunks: list[dict],
         user_role_ids: list[int] | None = None,
         can_read_all: bool = False,
+        user_id: str = "",
     ) -> list[dict]:
         """兼容入口：内部全同步，事件循环中应改用 retrieve_sync + to_thread。"""
         return self.retrieve_sync(
             query, query_emb, kb_ids, initial_chunks, user_role_ids, can_read_all,
+            user_id,
         )
 
     def retrieve_sync(
@@ -380,6 +382,7 @@ class CrossDocRetriever:
         initial_chunks: list[dict],
         user_role_ids: list[int] | None = None,
         can_read_all: bool = False,
+        user_id: str = "",
     ) -> list[dict]:
         """Return extra chunks from related documents to amplify initial retrieval."""
         if not initial_chunks:
@@ -463,6 +466,7 @@ class CrossDocRetriever:
             top_neighbors,
             user_role_ids=user_role_ids,
             can_read_all=can_read_all,
+            user_id=user_id,
         )
         extra_chunks: list[dict] = []
         for ndoc_id, chunks in bulk_chunks.items():

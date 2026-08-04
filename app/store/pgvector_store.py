@@ -105,13 +105,16 @@ def search(
     user_role_ids: list[int] | None = None,
     can_read_all: bool = False,
     top_k: int = 10,
+    user_id: str = "",
 ) -> list[dict]:
     """Vector cosine similarity search with role-based access control.
 
     If can_read_all is True (admin with doc.read_all permission), no ACL filter.
     Otherwise filters to chunks where:
       - visibility = 'public', OR
-      - allowed_roles overlaps with user_role_ids (PostgreSQL && operator)
+      - allowed_roles overlaps with user_role_ids (PostgreSQL && operator), OR
+      - 属主旁路：chunk 所属文档的 owner 是当前用户（个人工作空间
+        restricted 文档对属主本人必须可检索，对他人不可见）
     """
     rows = []  # finally 的 debug 日志引用 rows；execute 抛错时不得再抛 UnboundLocalError 掩盖原始异常
     session = get_session()
@@ -126,7 +129,11 @@ def search(
               AND (:can_read_all = TRUE
                    OR visibility = 'public'
                    OR (visibility IN ('internal', 'restricted')
-                       AND allowed_roles && :user_roles))
+                       AND allowed_roles && :user_roles)
+                   OR (:user_id <> '' AND EXISTS (
+                         SELECT 1 FROM documents d
+                         WHERE d.document_id = chunks.document_id
+                           AND d.owner_id = :user_id)))
             ORDER BY embedding <=> (:query)::vector
             LIMIT :top_k
         """
@@ -136,6 +143,7 @@ def search(
             "can_read_all": can_read_all,
             "user_roles": user_role_ids or [],
             "top_k": top_k,
+            "user_id": user_id or "",
         }).fetchall()
 
         return [
@@ -179,6 +187,7 @@ def bm25_search(
     can_read_all: bool = False,
     top_k: int = 10,
     stopwords: bool = True,
+    user_id: str = "",
 ) -> list[dict]:
     """BM25-style lexical search using PostgreSQL ts_rank + jieba tokenization.
 
@@ -212,7 +221,11 @@ def bm25_search(
               AND (:can_read_all = TRUE
                    OR visibility = 'public'
                    OR (visibility IN ('internal', 'restricted')
-                       AND allowed_roles && :user_roles))
+                       AND allowed_roles && :user_roles)
+                   OR (:user_id <> '' AND EXISTS (
+                         SELECT 1 FROM documents d
+                         WHERE d.document_id = chunks.document_id
+                           AND d.owner_id = :user_id)))
               AND to_tsvector('simple', search_text) @@ to_tsquery('simple', :or_query)
             ORDER BY score DESC
             LIMIT :top_k
@@ -223,6 +236,7 @@ def bm25_search(
             "can_read_all": can_read_all,
             "user_roles": user_role_ids or [],
             "top_k": top_k,
+            "user_id": user_id or "",
         }).fetchall()
 
         return [
@@ -283,6 +297,7 @@ def question_vector_search(
     user_role_ids: list[int] | None = None,
     can_read_all: bool = False,
     top_k: int = 20,
+    user_id: str = "",
 ) -> list[dict]:
     """Retrieve chunks by question-vector similarity (cosine).
 
@@ -304,7 +319,11 @@ def question_vector_search(
               AND (:can_read_all = TRUE
                    OR c.visibility = 'public'
                    OR (c.visibility IN ('internal', 'restricted')
-                       AND c.allowed_roles && :user_roles))
+                       AND c.allowed_roles && :user_roles)
+                   OR (:user_id <> '' AND EXISTS (
+                         SELECT 1 FROM documents d
+                         WHERE d.document_id = c.document_id
+                           AND d.owner_id = :user_id)))
             GROUP BY c.chunk_id, c.document_id, c.text, c.embedding, c.title,
                      c.summary, c.section_path
             ORDER BY MIN(q.embedding <=> (:query)::vector)
@@ -316,6 +335,7 @@ def question_vector_search(
             "can_read_all": can_read_all,
             "user_roles": user_role_ids or [],
             "top_k": top_k,
+            "user_id": user_id or "",
         }).fetchall()
 
         return [
@@ -347,6 +367,7 @@ def hybrid_search(
     fetch_k: int = 20,
     rrf_k: int = 60,
     enable_question_channel: bool = False,
+    user_id: str = "",
 ) -> list[dict]:
     """Hybrid vector + BM25 + optional question-vector search with RRF merge.
 
@@ -356,9 +377,11 @@ def hybrid_search(
     t0 = time.monotonic()
     vector_results = search(
         kb_ids, embedding, user_role_ids, can_read_all, top_k=fetch_k,
+        user_id=user_id,
     )
     bm25_results = bm25_search(
         kb_ids, query, user_role_ids, can_read_all, top_k=fetch_k,
+        user_id=user_id,
     )
 
     channel_weights: dict[str, float] = {}
@@ -377,6 +400,7 @@ def hybrid_search(
         question_results = question_vector_search(
             kb_ids, embedding, user_role_ids, can_read_all,
             top_k=settings.question_channel_top_k,
+            user_id=user_id,
         )
         _accumulate(question_results, "question",
                     weight=settings.question_channel_rrf_weight)
@@ -395,7 +419,7 @@ def hybrid_search(
     if len(ranked) < top_k:
         relaxed_bm25 = bm25_search(
             kb_ids, query, user_role_ids, can_read_all,
-            top_k=fetch_k, stopwords=False,
+            top_k=fetch_k, stopwords=False, user_id=user_id,
         )
         existing_ids = {r["chunk_id"] for r in ranked}
         new_from_bm25 = [r for r in relaxed_bm25 if r["chunk_id"] not in existing_ids]
@@ -854,6 +878,7 @@ def get_chunks_by_documents_bulk(
     doc_ids: list[str],
     user_role_ids: list[int] | None = None,
     can_read_all: bool = False,
+    user_id: str = "",
 ) -> dict[str, list[dict]]:
     """批量取多文档 chunk。
 
@@ -873,13 +898,18 @@ def get_chunks_by_documents_bulk(
               AND (:can_read_all = TRUE
                    OR visibility = 'public'
                    OR (visibility IN ('internal', 'restricted')
-                       AND allowed_roles && :user_roles))
+                       AND allowed_roles && :user_roles)
+                   OR (:user_id <> '' AND EXISTS (
+                         SELECT 1 FROM documents d2
+                         WHERE d2.document_id = chunks.document_id
+                           AND d2.owner_id = :user_id)))
             ORDER BY document_id, id
         """
         rows = session.execute(text(sql), {
             "doc_ids": doc_ids,
             "can_read_all": can_read_all,
             "user_roles": user_role_ids or [],
+            "user_id": user_id or "",
         }).fetchall()
         result: dict[str, list[dict]] = defaultdict(list)
         per_doc_count: dict[str, int] = {}

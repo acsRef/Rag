@@ -29,6 +29,7 @@ def _search_kb(
     user_role_ids: list[int] | None,
     can_read_all: bool,
     top_k: int,
+    user_id: str = "",
 ) -> list[dict]:
     fn = pgvector_store.hybrid_search if settings.hybrid_search_enabled else pgvector_store.search
     kwargs: dict = dict(
@@ -37,6 +38,7 @@ def _search_kb(
         user_role_ids=user_role_ids,
         can_read_all=can_read_all,
         top_k=top_k,
+        user_id=user_id,
     )
     if settings.hybrid_search_enabled:
         kwargs.update(query=query, fetch_k=settings.hybrid_search_top_k, rrf_k=settings.hybrid_rrf_k,
@@ -57,9 +59,11 @@ def _collect_results(
     top_k: int,
     seen_ids: set[str],
     results: list[dict],
+    user_id: str = "",
 ):
     for kb_id in kb_ids:
-        chunks = _search_kb(kb_id, query_emb, query, user_role_ids, can_read_all, top_k)
+        chunks = _search_kb(kb_id, query_emb, query, user_role_ids, can_read_all, top_k,
+                            user_id=user_id)
         for c in chunks:
             if c["chunk_id"] not in seen_ids:
                 seen_ids.add(c["chunk_id"])
@@ -75,6 +79,7 @@ class RetrievalEngine:
         user_role_ids: list[int] | None = None,
         can_read_all: bool = False,
         ctx=None,  # DiagContext, injected from pipeline.py
+        user_id: str = "",
     ) -> list[RetrievedChunk]:
         top_k = settings.vector_search_top_k
         round_data: dict | None = None
@@ -138,6 +143,7 @@ class RetrievalEngine:
         await asyncio.to_thread(
             _collect_results, target_kb_ids, query_emb, query,
             user_role_ids, can_read_all, top_k, seen_ids, results,
+            user_id,
         )
 
         if intent and intent.matches:
@@ -148,6 +154,7 @@ class RetrievalEngine:
                 await asyncio.to_thread(
                     _collect_results, fallback, query_emb, query,
                     user_role_ids, can_read_all, top_k, seen_ids, results,
+                    user_id,
                 )
 
         results.sort(key=lambda x: x["score"], reverse=True)
@@ -175,7 +182,7 @@ class RetrievalEngine:
             extra = await asyncio.to_thread(
                 cross_doc_retriever.retrieve_sync,
                 query, query_emb, target_kb_ids,
-                results, user_role_ids, can_read_all,
+                results, user_role_ids, can_read_all, user_id,
             )
             if extra:
                 cross_doc_extra_count = len(extra)

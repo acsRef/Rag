@@ -74,7 +74,7 @@ async def test_cross_doc_extras_reach_final_results(ingest_docs, monkeypatch):
         c["score"] = 0.02 - i * 0.001   # RRF 量级的直连分
 
     def fake_collect(kb_ids, query_emb, query, user_role_ids, can_read_all,
-                     top_k, seen_ids, results):
+                     top_k, seen_ids, results, user_id=""):
         for c in d1_chunks:
             seen_ids.add(c["chunk_id"])
             results.append(dict(c))
