@@ -20,10 +20,19 @@ class SFRerank:
         self.base_url = settings.siliconflow_base_url
         self.model = settings.rerank_model
         self._client: httpx.AsyncClient | None = None
+        self._client_loop_id: int = -1   # 对齐 embedding/chat 的 loop 重建模式
 
     def _get_client(self) -> httpx.AsyncClient:
-        if self._client is None:
+        # httpx.AsyncClient 绑死在创建它的事件循环上；跨 loop 调用会报
+        # "Event loop is closed"。ingestion 用 asyncio.run 派生工作线程、
+        # 测试场景下 loop 变化时强制重建。
+        try:
+            current_loop_id = id(asyncio.get_running_loop())
+        except RuntimeError:
+            current_loop_id = -1
+        if self._client is None or self._client_loop_id != current_loop_id:
             self._client = httpx.AsyncClient(timeout=30)
+            self._client_loop_id = current_loop_id
         return self._client
 
     def _check_breaker(self) -> None:

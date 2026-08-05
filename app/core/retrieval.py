@@ -91,7 +91,8 @@ class RetrievalEngine:
         if intent and intent.matches:
             target_kb_ids = [m.kb_id for m in intent.matches]
         else:
-            target_kb_ids = pgvector_store.list_kb_ids()
+            # 同步 DB 调用必须 to_thread，否则阻塞事件循环
+            target_kb_ids = await asyncio.to_thread(pgvector_store.list_kb_ids)
         logger.info(
             "retrieve.start query_len=%d kb_target_count=%d",
             len(query), len(target_kb_ids),
@@ -149,7 +150,8 @@ class RetrievalEngine:
         if intent and intent.matches:
             min_confidence = min(m.score for m in intent.matches)
             if len(results) < top_k and min_confidence < 0.6:
-                all_kb_ids = pgvector_store.list_kb_ids()
+                # 同步 DB 调用必须 to_thread
+                all_kb_ids = await asyncio.to_thread(pgvector_store.list_kb_ids)
                 fallback = [k for k in all_kb_ids if k not in target_kb_ids]
                 await asyncio.to_thread(
                     _collect_results, fallback, query_emb, query,
