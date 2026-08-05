@@ -6,7 +6,7 @@
 
 ## 进行中
 
-（暂无）
+- [2026-08-05-resilience-round2](2026-08-05-resilience-round2.md) — 二轮审查韧性修复：429 不打熔断（RateLimitError）、熔断器线程安全、rerank 按 loop 重建、retrieval 同步 DB 解阻、摘要锁前移、标签空白容忍、重索引部分失败保旧索引（B1–B6 + D1/D2/D3/D6/D7）；DB 降级加固：熔断计数/穿透兜底/故障与无内容分流//health 探针（DB-1…DB-4）
 
 ## 已完成
 
