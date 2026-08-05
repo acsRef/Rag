@@ -18,6 +18,7 @@ from app.models.schemas import IntentResult, RetrievedChunk
 from app.config import settings
 from app.core.mmr import mmr_select
 from app.core.doc_relation import cross_doc_retriever
+from app.llm.base import provider_health
 
 logger = logging.getLogger(__name__)
 
@@ -43,10 +44,14 @@ def _search_kb(
     if settings.hybrid_search_enabled:
         kwargs.update(query=query, fetch_k=settings.hybrid_search_top_k, rrf_k=settings.hybrid_rrf_k,
                        enable_question_channel=settings.question_channel_enabled)
+    # DB 熔断入口闸门：postgres OPEN 时直接返回 []（不再撞库导致 SSE 挂起）
+    if not provider_health.get("postgres").allow_request():
+        return []
     try:
         return fn(**kwargs)
     except Exception:
         logger.exception("Search failed for kb_id=%s", kb_id)
+        provider_health.get("postgres").on_failure()   # DB-1：计入熔断，pipeline 末尾 degraded 事件自动暴露
         return []
 
 

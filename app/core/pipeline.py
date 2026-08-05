@@ -159,12 +159,27 @@ class RAGPipeline:
                 yield "event: done\ndata: {}\n\n"
                 return
 
-        history = await asyncio.to_thread(conversation_memory.get_history, conv_id)
-        summary = await asyncio.to_thread(conversation_memory.get_summary, conv_id)
+        try:
+            history = await asyncio.to_thread(conversation_memory.get_history, conv_id)
+        except Exception:
+            logging.getLogger(__name__).exception(
+                "DB 历史拉取失败（DB-2 穿透兜底）：按空上下文继续")
+            history = []
+        try:
+            summary = await asyncio.to_thread(conversation_memory.get_summary, conv_id)
+        except Exception:
+            logging.getLogger(__name__).exception(
+                "DB 摘要拉取失败（DB-2 穿透兜底）：按空摘要继续")
+            summary = ""
         all_kb_ids = req.knowledge_base_ids
         if not all_kb_ids:
             # 默认全库路由：旧实现传 None 会让意图分类器短路，路由从未真正工作
-            all_kb_ids = await asyncio.to_thread(pgvector_store.list_kb_ids)
+            try:
+                all_kb_ids = await asyncio.to_thread(pgvector_store.list_kb_ids)
+            except Exception:
+                logging.getLogger(__name__).exception(
+                    "DB 知识库列表拉取失败（DB-2 穿透兜底）：意图分类短路到无 KB")
+                all_kb_ids = []
 
         needs_decomp = _needs_decomposition(req.query)
         if not needs_decomp:
@@ -305,6 +320,12 @@ class RAGPipeline:
             # 并在诊断中留痕；LLM 端已由 SYSTEM_ANSWER_TEMPLATE 约束如实告知
             if ctx:
                 ctx.record("retrieval_empty", query=req.query)
+            # DB-3：检索空结果若叠加 postgres 降级，区分「真无内容」与「故障」——
+            # 发 error 事件告知用户服务不可用并终止，不走 LLM 幻觉路径。
+            if "postgres" in provider_health.is_degraded():
+                yield "event: error\ndata: {\"error\":\"知识库服务暂时不可用，请稍后重试\"}\n\n"
+                yield "event: done\ndata: {}\n\n"
+                return
             yield "event: no_context\ndata: {}\n\n"
 
         messages = prompt_builder.build_messages(
@@ -331,10 +352,16 @@ class RAGPipeline:
             )
 
         # --- Stream LLM ---
-        await conversation_memory.add_message(
-            conv_id, "user", _pii_safe(req.query),
-            status="completed", user_id=user_id,
-        )
+        try:
+            await conversation_memory.add_message(
+                conv_id, "user", _pii_safe(req.query),
+                status="completed", user_id=user_id,
+            )
+        except Exception:
+            # DB-2：用户消息入库失败仅告警——不能因此切流（用户已发起请求，
+            # 切流会导致已发出的 sources/cross_doc 事件被丢）
+            logging.getLogger(__name__).exception(
+                "用户消息入库失败（DB-2 穿透兜底）：流继续")
 
         yield "event: status\ndata: {\"phase\":\"thinking\",\"message\":\"AI 正在思考...\"}\n\n"
 
@@ -377,13 +404,17 @@ class RAGPipeline:
         except GeneratorExit:
             # User interrupted or connection lost
             if parser.answer_text or parser.thinking_text:
-                await conversation_memory.add_message(
-                    conv_id, "assistant",
-                    _pii_safe(_norm(parser.answer_text)),
-                    thinking_content=_pii_safe(_norm(parser.thinking_text)) if parser.thinking_text else None,
-                    status="interrupted",
-                    user_id=user_id,
-                )
+                try:
+                    await conversation_memory.add_message(
+                        conv_id, "assistant",
+                        _pii_safe(_norm(parser.answer_text)),
+                        thinking_content=_pii_safe(_norm(parser.thinking_text)) if parser.thinking_text else None,
+                        status="interrupted",
+                        user_id=user_id,
+                    )
+                except Exception:
+                    logging.getLogger(__name__).exception(
+                        "中断消息入库失败（DB-2 穿透兜底）")
             if ctx:
                 ctx.update("stream", total_tokens=len(full_buffer),
                            total_ms=round((time.monotonic() - stream_start) * 1000, 1))
@@ -394,13 +425,17 @@ class RAGPipeline:
             logging.getLogger(__name__).exception("Chat stream failed")
             chat_degraded = True
             if parser.answer_text or parser.thinking_text:
-                await conversation_memory.add_message(
-                    conv_id, "assistant",
-                    _pii_safe(_norm(parser.answer_text)),
-                    thinking_content=_pii_safe(_norm(parser.thinking_text)) if parser.thinking_text else None,
-                    status="interrupted",
-                    user_id=user_id,
-                )
+                try:
+                    await conversation_memory.add_message(
+                        conv_id, "assistant",
+                        _pii_safe(_norm(parser.answer_text)),
+                        thinking_content=_pii_safe(_norm(parser.thinking_text)) if parser.thinking_text else None,
+                        status="interrupted",
+                        user_id=user_id,
+                    )
+                except Exception:
+                    logging.getLogger(__name__).exception(
+                        "中断消息入库失败（DB-2 穿透兜底）")
             if ctx:
                 ctx.update("stream", error="Chat stream failed",
                            total_tokens=len(full_buffer),
@@ -427,13 +462,18 @@ class RAGPipeline:
             if not answer_text and thinking_text:
                 answer_text = thinking_text
                 thinking_text = ""
-            await conversation_memory.add_message(
-                conv_id, "assistant",
-                _pii_safe(answer_text),
-                thinking_content=_pii_safe(thinking_text) if thinking_text else None,
-                status="completed",
-                user_id=user_id,
-            )
+            try:
+                await conversation_memory.add_message(
+                    conv_id, "assistant",
+                    _pii_safe(answer_text),
+                    thinking_content=_pii_safe(thinking_text) if thinking_text else None,
+                    status="completed",
+                    user_id=user_id,
+                )
+            except Exception:
+                # DB-2：助手回复入库失败仅告警——不切流，degraded 事件仍会发
+                logging.getLogger(__name__).exception(
+                    "助手消息入库失败（DB-2 穿透兜底）")
 
 
         degraded_providers = provider_health.is_degraded()

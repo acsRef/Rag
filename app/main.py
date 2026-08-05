@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.chat import router as chat_router
 from app.api.documents import router as documents_router
 from app.api.auth import router as auth_router
+from app.store.db import engine
 from app.api.admin import router as admin_router
 from app.api.kb import router as kb_router
 from app.api.diagnostics import router as diag_router
@@ -77,7 +78,24 @@ def startup():
 
 @app.get("/health")
 def health():
-    return {"status": "ok"}
+    """健康探针：DB 可达返回 ok；DB 故障返回 degraded 让 docker healthcheck / 监控
+    能识别，不被「应用进程存活」误判为健康。
+
+    DB-4：补一个轻量 SELECT 1 探针。失败时 status=degraded 但接口 200
+    —— 不把 health 探针搞成纯连通信号，避免上游负载均衡把 DB 故障节点直接
+    摘掉（DB 故障下应用其它降级路径仍可服务）。
+    """
+    db_ok = True
+    try:
+        from sqlalchemy import text
+        with engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+    except Exception:
+        db_ok = False
+    return {
+        "status": "ok" if db_ok else "degraded",
+        "db": db_ok,
+    }
 
 
 if __name__ == "__main__":
