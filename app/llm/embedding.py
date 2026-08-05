@@ -9,7 +9,7 @@ import time
 from openai import AsyncOpenAI, RateLimitError, APIStatusError
 
 from app.config import settings
-from app.llm.base import CircuitOpenError, PermanentError, classify_llm_error, jittered_backoff, provider_health
+from app.llm.base import CircuitOpenError, PermanentError, RateLimitError, classify_llm_error, jittered_backoff, provider_health
 
 logger = logging.getLogger(__name__)
 
@@ -114,7 +114,8 @@ class SFEmbedding:
                 raise
             except Exception as e:
                 typed, should_retry = classify_llm_error(e)
-                if not isinstance(typed, PermanentError):
+                # 429/4xx/永久错误均不计熔断失败（AGENTS §8）——只有临时错误计数
+                if not isinstance(typed, (PermanentError, RateLimitError)):
                     self._on_failure()
                 if should_retry and attempt < max_retries:
                     await asyncio.sleep(jittered_backoff(attempt))
@@ -132,18 +133,21 @@ class SFEmbedding:
         except CircuitOpenError:
             raise
         except RateLimitError as e:
+            # 429 可重试但不计数——AGENTS §8
             retry_after = _parse_retry_after(e) or (settings.embedding_backoff_base * (2 ** attempt))
             if attempt < settings.embedding_max_retries:
                 await _jittered_sleep(retry_after)
                 return await self.embed_single_chunk(text, attempt + 1)
-            self._on_failure()
             return (None, f"请求限流（429），已重试{settings.embedding_max_retries}次")
         except APIStatusError as e:
+            # 仅 5xx 是临时错误可重试 + 计数；4xx 是永久错误（已由 PermanentError
+            # 路径处理，此处 status_code 在 400–499 范围内的最终态计数会穿透——
+            # 修正为仅 >=500 才计失败）
             if e.status_code >= 500 and attempt < settings.embedding_max_retries:
                 backoff = settings.embedding_backoff_base * (2 ** attempt)
                 await _jittered_sleep(backoff)
                 return await self.embed_single_chunk(text, attempt + 1)
-            self._on_failure()
+            self._on_failure() if e.status_code >= 500 else None
             return (None, f"API 错误 ({e.status_code}): {e.message}")
         except Exception as e:
             self._on_failure()
@@ -203,18 +207,20 @@ async def _try_batch_with_retry(sf: SFEmbedding, texts: list[str], attempt: int 
     except CircuitOpenError:
         raise
     except RateLimitError as e:
+        # 429 可重试但不计熔断（AGENTS §8）
         retry_after = _parse_retry_after(e) or (settings.embedding_backoff_base * (2 ** attempt))
         if attempt < settings.embedding_max_retries:
             await _jittered_sleep(retry_after)
             return await _try_batch_with_retry(sf, texts, attempt + 1)
-        sf._on_failure()
         return None
     except APIStatusError as e:
+        # 仅 5xx 计熔断失败；4xx 是永久错误（OpenAI SDK 默认抛 APIStatusError
+        # 时不分类，需要显式不计数）
         if e.status_code >= 500 and attempt < settings.embedding_max_retries:
             backoff = settings.embedding_backoff_base * (2 ** attempt)
             await _jittered_sleep(backoff)
             return await _try_batch_with_retry(sf, texts, attempt + 1)
-        sf._on_failure()
+        sf._on_failure() if e.status_code >= 500 else None
         return None
     except Exception as e:
         logger.debug("embed.batch.exception attempt=%d type=%s msg=%s", attempt, type(e).__name__, str(e)[:200])

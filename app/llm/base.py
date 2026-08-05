@@ -14,8 +14,9 @@ import json
 import logging
 import random
 import re
+import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Callable, TypeVar
 
@@ -30,100 +31,6 @@ class CircuitState(Enum):
     CLOSED = "closed"           # normal operation
     OPEN = "open"               # fast-fail, no requests allowed
     HALF_OPEN = "half_open"     # probing after cooldown
-
-
-@dataclass
-class CircuitBreaker:
-    """Per-provider circuit breaker state machine."""
-
-    failure_threshold: int = 10
-    cooldown_seconds: float = 30.0
-
-    state: CircuitState = CircuitState.CLOSED
-    failure_count: int = 0
-    last_failure_time: float = 0.0
-    last_success_time: float = 0.0
-    _total_failures: int = 0   # lifetime counter for diagnostics
-    _total_successes: int = 0  # lifetime counter for diagnostics
-    _probe_in_flight: bool = False  # guard: only one HALF_OPEN probe at a time
-
-    # ------------------------------------------------------------------
-    # Public API
-    # ------------------------------------------------------------------
-
-    def allow_request(self) -> bool:
-        """Check whether a new request should be attempted."""
-        if self.state == CircuitState.CLOSED:
-            return True
-        if self.state == CircuitState.OPEN:
-            elapsed = time.monotonic() - self.last_failure_time
-            if elapsed >= self.cooldown_seconds:
-                self.state = CircuitState.HALF_OPEN
-                # 转换调用本身占用 probe 名额——保证"恰好一个 probe"，
-                # 旧实现置 False 会让紧随的第二个并发请求也被放行
-                self._probe_in_flight = True
-                logger.info(
-                    "Circuit breaker HALF_OPEN (probing after %.1fs cooldown)",
-                    elapsed,
-                )
-                return True
-            return False
-        # HALF_OPEN — allow exactly one probe
-        if self._probe_in_flight:
-            return False
-        self._probe_in_flight = True
-        return True
-
-    def on_success(self) -> None:
-        """Record a successful request."""
-        self._total_successes += 1
-        self._probe_in_flight = False
-        if self.state != CircuitState.CLOSED:
-            logger.info("Circuit breaker CLOSED (recovered)")
-        self.state = CircuitState.CLOSED
-        self.failure_count = 0
-        self.last_success_time = time.monotonic()
-
-    def on_failure(self) -> None:
-        """Record a failed request."""
-        self._total_failures += 1
-        self._probe_in_flight = False
-        self.failure_count += 1
-        self.last_failure_time = time.monotonic()
-
-        if self.state == CircuitState.HALF_OPEN:
-            # Probe failed — go back to OPEN
-            self.state = CircuitState.OPEN
-            logger.warning(
-                "Circuit breaker OPEN (probe failed, total_failures=%d)",
-                self._total_failures,
-            )
-        elif self.failure_count >= self.failure_threshold and self.state == CircuitState.CLOSED:
-            self.state = CircuitState.OPEN
-            logger.warning(
-                "Circuit breaker OPEN (threshold=%d reached, total_failures=%d)",
-                self.failure_threshold, self._total_failures,
-            )
-
-    # ------------------------------------------------------------------
-    # Diagnostics
-    # ------------------------------------------------------------------
-
-    def snapshot(self) -> dict[str, Any]:
-        """Return a dict suitable for diagnostics JSON."""
-        return {
-            "state": self.state.value,
-            "failure_count": self.failure_count,
-            "total_failures": self._total_failures,
-            "total_successes": self._total_successes,
-            "last_failure_time": self.last_failure_time,
-            "last_success_time": self.last_success_time,
-        }
-
-
-class CircuitOpenError(Exception):
-    """Raised when a request is blocked by an open circuit breaker."""
-    pass
 
 
 class PermanentError(Exception):
@@ -142,15 +49,136 @@ class TemporaryError(Exception):
     pass
 
 
+class RateLimitError(TemporaryError):
+    """429 / 配额限流：可重试（继承 TemporaryError，复用既有 retry 链路），
+
+    但**不得计为熔断失败**（AGENTS §8：4xx 不得触发熔断）。
+    调用方用 `if not isinstance(typed, (PermanentError, RateLimitError)): _on_failure()`
+    即可区分——作为 TemporaryError 仍被 retry 框架捕获重试，作为 RateLimitError
+    在熔断计数处被显式豁免。
+    """
+
+
+@dataclass
+class CircuitBreaker:
+    """Per-provider circuit breaker state machine.
+
+    线程安全：所有状态迁移都在 _lock 内执行。
+    主事件循环（asyncio 单线程）天然安全，但 ingestion 用 asyncio.run 派生
+    工作线程会与主循环并发改本单例——锁保证 HALF_OPEN「恰一个 probe」在多线程下成立。
+    """
+
+    failure_threshold: int = 10
+    cooldown_seconds: float = 30.0
+
+    state: CircuitState = CircuitState.CLOSED
+    failure_count: int = 0
+    last_failure_time: float = 0.0
+    last_success_time: float = 0.0
+    _total_failures: int = 0   # lifetime counter for diagnostics
+    _total_successes: int = 0  # lifetime counter for diagnostics
+    _probe_in_flight: bool = False  # guard: only one HALF_OPEN probe at a time
+    _lock: threading.Lock = field(default_factory=threading.Lock)
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+
+    def allow_request(self) -> bool:
+        """Check whether a new request should be attempted."""
+        with self._lock:
+            if self.state == CircuitState.CLOSED:
+                return True
+            if self.state == CircuitState.OPEN:
+                elapsed = time.monotonic() - self.last_failure_time
+                if elapsed >= self.cooldown_seconds:
+                    self.state = CircuitState.HALF_OPEN
+                    # 转换调用本身占用 probe 名额——保证"恰好一个 probe"，
+                    # 旧实现置 False 会让紧随的第二个并发请求也被放行
+                    self._probe_in_flight = True
+                    logger.info(
+                        "Circuit breaker HALF_OPEN (probing after %.1fs cooldown)",
+                        elapsed,
+                    )
+                    return True
+                return False
+            # HALF_OPEN — allow exactly one probe
+            if self._probe_in_flight:
+                return False
+            self._probe_in_flight = True
+            return True
+
+    def on_success(self) -> None:
+        """Record a successful request."""
+        with self._lock:
+            self._total_successes += 1
+            self._probe_in_flight = False
+            if self.state != CircuitState.CLOSED:
+                logger.info("Circuit breaker CLOSED (recovered)")
+            self.state = CircuitState.CLOSED
+            self.failure_count = 0
+            self.last_success_time = time.monotonic()
+
+    def on_failure(self) -> None:
+        """Record a failed request."""
+        with self._lock:
+            self._total_failures += 1
+            self._probe_in_flight = False
+            self.failure_count += 1
+            self.last_failure_time = time.monotonic()
+
+            if self.state == CircuitState.HALF_OPEN:
+                # Probe failed — go back to OPEN
+                self.state = CircuitState.OPEN
+                logger.warning(
+                    "Circuit breaker OPEN (probe failed, total_failures=%d)",
+                    self._total_failures,
+                )
+            elif self.failure_count >= self.failure_threshold and self.state == CircuitState.CLOSED:
+                self.state = CircuitState.OPEN
+                logger.warning(
+                    "Circuit breaker OPEN (threshold=%d reached, total_failures=%d)",
+                    self.failure_threshold, self._total_failures,
+                )
+
+    # ------------------------------------------------------------------
+    # Diagnostics
+    # ------------------------------------------------------------------
+
+    def snapshot(self) -> dict[str, Any]:
+        """Return a dict suitable for diagnostics JSON."""
+        with self._lock:
+            return {
+                "state": self.state.value,
+                "failure_count": self.failure_count,
+                "total_failures": self._total_failures,
+                "total_successes": self._total_successes,
+                "last_failure_time": self.last_failure_time,
+                "last_success_time": self.last_success_time,
+            }
+
+
+class CircuitOpenError(Exception):
+    """Raised when a request is blocked by an open circuit breaker."""
+    pass
+
+
 def classify_llm_error(exc: Exception) -> tuple[Exception, bool]:
     """Map a raw LLM / HTTP exception to the right error type + retry decision.
 
     Returns (typed_exception, should_retry).
     Uses duck-typing on status_code / response attributes so works with both
     OpenAI SDK errors and raw httpx errors.
+
+    Rate-limit semantics: 429 → RateLimitError（不在 TemporaryError 子树），
+    调用方 `except TemporaryError` 不会重试，`except (PermanentError, RateLimitError)`
+    不计熔断失败——既符合 AGENTS §8「4xx 不得触发熔断」，又允许调用方自行
+    实现 429 退避重试（embed_single_chunk 等）。
     """
-    if isinstance(exc, (CircuitOpenError, PermanentError, TemporaryError)):
-        return (exc, not isinstance(exc, (CircuitOpenError, PermanentError)))
+    if isinstance(exc, (CircuitOpenError, PermanentError, TemporaryError, RateLimitError)):
+        # RateLimitError ⊂ TemporaryError → 既可重试，又被外层 `isinstance(typed, RateLimitError)`
+        # 守卫排除（不计熔断失败）
+        return (exc, isinstance(exc, (TemporaryError, RateLimitError)))
 
     # Extract status_code from common exception shapes
     status: int | None = getattr(exc, "status_code", None)
@@ -160,8 +188,8 @@ def classify_llm_error(exc: Exception) -> tuple[Exception, bool]:
             status = getattr(resp, "status_code", None)
 
     if status is not None:
-        if status == 429:  # rate limit
-            return (TemporaryError(str(exc)), True)
+        if status == 429:  # rate limit — must not trip breaker
+            return (RateLimitError(f"429 rate limit: {exc}"), True)
         if 400 <= status < 500:
             return (PermanentError(f"4xx permanent error: {exc}"), False)
         if status >= 500:
@@ -187,14 +215,16 @@ class ProviderHealth:
 
     def __init__(self) -> None:
         self._breakers: dict[str, CircuitBreaker] = {}
+        self._lock = threading.Lock()   # 多线程并发 get 也要建锁
 
     def get(self, provider: str) -> CircuitBreaker:
-        if provider not in self._breakers:
-            self._breakers[provider] = CircuitBreaker(
-                failure_threshold=settings.circuit_breaker_threshold,
-                cooldown_seconds=settings.circuit_breaker_cooldown,
-            )
-        return self._breakers[provider]
+        with self._lock:
+            if provider not in self._breakers:
+                self._breakers[provider] = CircuitBreaker(
+                    failure_threshold=settings.circuit_breaker_threshold,
+                    cooldown_seconds=settings.circuit_breaker_cooldown,
+                )
+            return self._breakers[provider]
 
     def is_degraded(self) -> list[str]:
         """Return list of provider names currently degraded."""

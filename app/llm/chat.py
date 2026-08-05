@@ -7,7 +7,7 @@ from typing import AsyncGenerator
 from openai import AsyncOpenAI
 
 from app.config import settings
-from app.llm.base import CircuitOpenError, PermanentError, classify_llm_error, provider_health
+from app.llm.base import CircuitOpenError, PermanentError, RateLimitError, classify_llm_error, provider_health
 
 logger = logging.getLogger(__name__)
 
@@ -91,7 +91,8 @@ class MiniMaxClient:
             raise
         except Exception as e:
             typed, _ = classify_llm_error(e)
-            if not isinstance(typed, PermanentError):
+            # 429/4xx 永久错误均不计熔断失败（AGENTS §8）
+            if not isinstance(typed, (PermanentError, RateLimitError)):
                 self._on_failure()
             raise typed
 
@@ -128,7 +129,8 @@ class MiniMaxClient:
             raise
         except Exception as e:
             typed, _ = classify_llm_error(e)
-            if not isinstance(typed, PermanentError):
+            # 429/4xx 永久错误均不计熔断失败
+            if not isinstance(typed, (PermanentError, RateLimitError)):
                 self._on_failure()
             raise typed
 
