@@ -1,4 +1,4 @@
-> 状态: 进行中（分支 fix/resilience-round2）
+> 状态: 已完成（分支 fix/resilience-round2；commits: 05e1594 / a2bb834 / 5268c7d / 9069034 / 9acdf81；全量 193 passed + 13 skipped）
 
 # 二轮审查韧性修复（resilience-round2）实施计划
 

@@ -6,9 +6,11 @@
 
 ## 进行中
 
-- [2026-08-05-resilience-round2](2026-08-05-resilience-round2.md) — 二轮审查韧性修复：429 不打熔断（RateLimitError）、熔断器线程安全、rerank 按 loop 重建、retrieval 同步 DB 解阻、摘要锁前移、标签空白容忍、重索引部分失败保旧索引（B1–B6 + D1/D2/D3/D6/D7）；DB 降级加固：熔断计数/穿透兜底/故障与无内容分流//health 探针（DB-1…DB-4）
+（暂无）
 
 ## 已完成
+
+- [2026-08-05-resilience-round2](2026-08-05-resilience-round2.md) — 二轮审查韧性修复（完成，193 passed）：429 不打熔断（RateLimitError）、熔断器线程安全、rerank 按 loop 重建、retrieval 同步 DB 解阻、摘要锁前移、标签空白容忍、重索引部分失败保旧索引（B1–B6 + D1/D2/D3/D6/D7）；DB 降级加固：熔断计数/穿透兜底/故障与无内容分流//health 探针（DB-1…DB-4）
 
 - [2026-08-04-audit-followups](2026-08-04-audit-followups.md) — 全栈审查遗留修复（16 项）：P0 增量更新丢复用 chunk 问题向量（replace_chunks 差量化）/邻居扩展适配 hash chunk id（created_at 全序）/前端 XSS（v-html 前置消毒）；P1 意图路由名称归一 + 畸形守卫、diag id 路径穿越白名单、熔断兜底文案流式、工作空间 restricted 默认 + owner 旁路 ACL、SSE 进度按用户过滤 + 丢旧 + 节流；P2 事件循环解阻、tsquery 消毒、embedding 32 分片、chunker 元素装箱 + 64 字符重叠、死代码清理、消息 id 序（分支 fix/audit-followups，+31 单测 +9 集成用例，152 passed）
 
