@@ -19,11 +19,31 @@ THINK_CLOSE = " " + _LF + "<" + "/think>"
 ANSWER_OPEN = "<" + "answer>"
 ANSWER_CLOSE = "<" + "/answer>"
 
-# 各状态下需要识别的完整标记
+# 标签核心（去掉强制前缀，仅用于变体生成）
+THINK_OPEN_CORE = "<" + "think>"
+THINK_CLOSE_CORE = "<" + "/think>"
+
+# 模型漂移容错：`<think>`/`</think>` 前允许 0–2 个空白字符（[ \t\r\n]）。
+# 变体集保证「未闭合片段不泄漏」契约（最坏情况：缓冲持 ≤ 2 空白 + 标签前缀）。
+_WS = ("", " ", "\n", "  ", "\t", " \n", "\n ", "\n\n")
+
+
+def _mark_variants(core: str) -> list[str]:
+    """生成带可选空白前缀的标签变体集（去重 + 顺序稳定）。"""
+    seen: dict[str, None] = {}
+    for ws in _WS:
+        m = ws + core
+        seen.setdefault(m, None)
+    return list(seen.keys())
+
+
+# 各状态下需要识别的完整标记（含空白前缀变体）。ANSWER_* 无前缀漂移。
+# THINK_OPEN/CLOSE 同时承认「带空白的标准形式」（向后兼容原有 API）
 _MARKS = {
-    _NORMAL: (THINK_OPEN, THINK_CLOSE, ANSWER_OPEN),
-    _IN_THINK: (THINK_CLOSE,),
-    _AFTER_THINK: (THINK_CLOSE, ANSWER_OPEN, ANSWER_CLOSE),
+    _NORMAL: (THINK_OPEN,) + tuple(_mark_variants(THINK_OPEN_CORE)) + (THINK_CLOSE,)
+            + tuple(_mark_variants(THINK_CLOSE_CORE)) + (ANSWER_OPEN,),
+    _IN_THINK: (THINK_CLOSE,) + tuple(_mark_variants(THINK_CLOSE_CORE)),
+    _AFTER_THINK: (THINK_CLOSE,) + tuple(_mark_variants(THINK_CLOSE_CORE)) + (ANSWER_OPEN, ANSWER_CLOSE),
 }
 _ALL_MARKS = frozenset(m for ms in _MARKS.values() for m in ms)
 _MAX_MARK_LEN = max(len(m) for m in _ALL_MARKS)
@@ -106,10 +126,15 @@ class TagStreamParser:
         return best
 
     def _apply(self, mark: str) -> None:
-        if mark == THINK_OPEN:
+        # THINK_* 变体全部以核心 "<think>" / "</think>" 结尾；
+        # 匹配后缀即可在不破坏 API 兼容性的前提下归类状态。
+        if mark.endswith(THINK_OPEN_CORE):
             self._state = _IN_THINK
-        elif mark == THINK_CLOSE:
+        elif mark.endswith(THINK_CLOSE_CORE):
             self._state = _AFTER_THINK
+            # think-close 变体的可选空白前缀会在缓冲里残留："  答案"
+            # 消费掉这部分作为 think 块与 answer 块的分隔符。
+            self._buf = self._buf.lstrip()
         elif mark == ANSWER_OPEN:
             self._state = _AFTER_THINK
         # ANSWER_CLOSE：仅消费，不改变状态

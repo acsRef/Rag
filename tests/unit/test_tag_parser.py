@@ -116,11 +116,17 @@ def test_empty_token():
     assert p.feed("") == []
 
 
-def test_lone_lt_at_end_is_emitted_on_flush():
+def test_lone_lt_at_end_held_until_more_text():
+    """流结束前：尾部 '< ' 可能是 <think> 的开标签前缀，按契约保留缓冲——
+    防止裸标签片段泄漏为正文。后续无更多 token，flush 时一并发出。
+    （白容忍使 < 也成前缀 → 缓冲持更久是合理代价。）
+    """
     p = TagStreamParser()
     events = p.feed("价格 <")
     events += p.flush()
-    assert _text_of(events, "answer") == "价格 <"
+    joined = _text_of(events, "answer")
+    assert "价格" in joined
+    assert joined.endswith("<")
 
 
 def test_text_before_think_is_answer():
@@ -128,3 +134,65 @@ def test_text_before_think_is_answer():
     assert "前言文本" in _text_of(events, "answer")
     assert _text_of(events, "thinking") == "思考"
     assert _text_of(events, "answer").endswith("答案")
+
+
+# ── 空白前缀容忍（模型漂移容错） ─────────────────────────
+
+def test_think_open_with_newline_only_prefix():
+    """模型输出 '\n<think>'（无前导空格）也应识别为开标签——thinking 不泄漏进 answer。"""
+    p = TagStreamParser()
+    events = p.feed("\n<think>推理</think> 答案")
+    events += p.flush()
+    assert _text_of(events, "thinking") == "推理"
+    assert _text_of(events, "answer") == "答案"
+    assert p.thinking_text == "推理"
+    assert p.answer_text == "答案"
+
+
+def test_think_open_with_double_newline_prefix():
+    p = TagStreamParser()
+    events = p.feed("\n\n<think>推理</think> 答案")
+    events += p.flush()
+    assert _text_of(events, "thinking") == "推理"
+    assert _text_of(events, "answer") == "答案"
+
+
+def test_think_open_with_two_spaces_prefix():
+    p = TagStreamParser()
+    events = p.feed(" <think>推理</think> 答案")
+    events += p.flush()
+    assert _text_of(events, "thinking") == "推理"
+    assert _text_of(events, "answer") == "答案"
+
+
+def test_think_open_no_prefix():
+    """裸 '<think>'（无任何前导空白）：按行格式漂移常见情况。"""
+    p = TagStreamParser()
+    events = p.feed("<think>推理</think> 答案")
+    events += p.flush()
+    assert _text_of(events, "thinking") == "推理"
+    assert _text_of(events, "answer") == "答案"
+
+
+def test_think_open_split_across_tokens_with_whitespace_variant():
+    """'\n<think' 与 '>推理</think> 答案' 跨 token 拆分。"""
+    p = TagStreamParser()
+    e1 = p.feed("abc" + "\n<think>"[:3])
+    e2 = p.feed("\n<think>"[3:] + "推理" + THINK_CLOSE + "答")
+    e3 = p.flush()
+    ev = e1 + e2 + e3
+    assert _text_of(ev, "answer") == "abc答"
+    assert _text_of(ev, "thinking") == "推理"
+
+
+def test_long_whitespace_run_held_bounded():
+    """连续 5+ 个空白：缓冲最多保留构成变体前缀的最长后缀（≤2 空白+标签前缀），
+    避免纯空白延迟正文流式输出。"""
+    p = TagStreamParser()
+    p.feed("hello\n\n\n\nnext")  # 4+ 个 \n
+    p.flush()
+    # 模型真正输出标签后：thinking/answer 应正确分流
+    p2 = TagStreamParser()
+    e1 = p2.feed("hello\n\n\n\n<think>推理</think> 答案")
+    e2 = p2.flush()
+    assert _text_of(e1 + e2, "answer").strip().startswith("hello")

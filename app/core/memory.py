@@ -199,7 +199,14 @@ class ConversationMemory:
             pass
 
     async def _summarize_once(self, conversation_id: str) -> bool:
-        """单次摘要尝试：完成一次摘要返回 True（调用方继续排水），否则 False。"""
+        """单次摘要尝试：完成一次摘要返回 True（调用方继续排水），否则 False。
+
+        锁前移到读取之前：旧实现先读 summary/watermark 再拼 prompt，最后才
+        拿每会话锁——连续 add_message 触发的两个 fire-and-forget 任务会基于
+        同一份旧快照分别建 prompt，再串行拿锁写入，对同一区间做重复摘要。
+        锁内一次性「读 → LLM → 写」原子化后，并发任务只能二选一：持锁者
+        完整处理完一次、另一者拿锁失败直接跳过（其覆盖区间由持锁者排水兜底）。
+        """
         try:
             # 失败退避：60s → 120s → … 上限 15 分钟
             fail = _summary_failures.get(conversation_id)
@@ -207,82 +214,84 @@ class ConversationMemory:
                 n, ts = fail
                 if time.time() - ts < min(900.0, 60.0 * (2 ** (n - 1))):
                     return False
-            with get_db_ctx() as session:
-                conv = session.query(Conversation).filter_by(
-                    conversation_id=conversation_id
-                ).first()
-                if not conv:
-                    return False
-                recent = (
-                    session.query(Message)
-                    .filter_by(conversation_id=conversation_id)
-                    .order_by(Message.id.desc())
-                    .limit(_HISTORY_SCAN_LIMIT)
-                    .all()
-                )
-                if not recent:
-                    return False
-                # 窗口边界：最新入窗消息的 id（全部入窗则为最旧那条）
-                acc = 0
-                boundary_id = recent[-1].id
-                for m in recent:
-                    t = _estimate_tokens(m.content or "")
-                    if acc + t > settings.history_max_tokens:
-                        break
-                    acc += t
-                    boundary_id = m.id
 
-                watermark = conv.last_summarized_msg_id or 0
-                # 触发判断走 SQL 聚合，不拉数据：字符数 / 1.5 ≈ token 估算
-                chars = session.query(
-                    func.coalesce(func.sum(func.length(Message.content)), 0)
-                ).filter(
-                    Message.conversation_id == conversation_id,
-                    Message.id < boundary_id,
-                    Message.id > watermark,
-                ).scalar() or 0
-                if chars / 1.5 < settings.summary_trigger_tokens:
-                    return False
-                outside = (
-                    session.query(Message)
-                    .filter(
-                        Message.conversation_id == conversation_id,
-                        Message.id < boundary_id,
-                        Message.id > watermark,
-                    )
-                    .order_by(Message.id.asc())
-                    .all()
-                )
-                outside_items = [(m.id, m.role, m.content or "") for m in outside]
-                has_summary = bool(conv.summary)
-                existing_summary = conv.summary or ""
-
-            if not outside_items:
-                return False
-
-            if has_summary:
-                new_turns = "\n".join(
-                    f"{role}: {content}" for _, role, content in outside_items
-                )
-                prompt = _SUMMARY_UPDATE.format(
-                    sections=_SUMMARY_SECTIONS,
-                    existing=existing_summary,
-                    new_turns=new_turns,
-                    max_tokens=settings.summary_max_tokens,
-                )
-            else:
-                prompt = _SUMMARY_FRESH.format(
-                    sections=_SUMMARY_SECTIONS,
-                    text=_capped_conversation_text(outside_items),
-                    max_tokens=settings.summary_max_tokens,
-                )
-
-            # Per-conversation lock — at most one summarization at a time
+            # Per-conversation lock — 先拿锁再读快照。
+            # 非阻塞拿锁失败直接跳过，未抢到的任务不污染下游。
             lock = _acquire_lock(conversation_id)
             if lock is None:
                 return False
 
             try:
+                with get_db_ctx() as session:
+                    conv = session.query(Conversation).filter_by(
+                        conversation_id=conversation_id
+                    ).first()
+                    if not conv:
+                        return False
+                    recent = (
+                        session.query(Message)
+                        .filter_by(conversation_id=conversation_id)
+                        .order_by(Message.id.desc())
+                        .limit(_HISTORY_SCAN_LIMIT)
+                        .all()
+                    )
+                    if not recent:
+                        return False
+                    # 窗口边界：最新入窗消息的 id（全部入窗则为最旧那条）
+                    acc = 0
+                    boundary_id = recent[-1].id
+                    for m in recent:
+                        t = _estimate_tokens(m.content or "")
+                        if acc + t > settings.history_max_tokens:
+                            break
+                        acc += t
+                        boundary_id = m.id
+
+                    watermark = conv.last_summarized_msg_id or 0
+                    # 触发判断走 SQL 聚合，不拉数据：字符数 / 1.5 ≈ token 估算
+                    chars = session.query(
+                        func.coalesce(func.sum(func.length(Message.content)), 0)
+                    ).filter(
+                        Message.conversation_id == conversation_id,
+                        Message.id < boundary_id,
+                        Message.id > watermark,
+                    ).scalar() or 0
+                    if chars / 1.5 < settings.summary_trigger_tokens:
+                        return False
+                    outside = (
+                        session.query(Message)
+                        .filter(
+                            Message.conversation_id == conversation_id,
+                            Message.id < boundary_id,
+                            Message.id > watermark,
+                        )
+                        .order_by(Message.id.asc())
+                        .all()
+                    )
+                    outside_items = [(m.id, m.role, m.content or "") for m in outside]
+                    has_summary = bool(conv.summary)
+                    existing_summary = conv.summary or ""
+
+                if not outside_items:
+                    return False
+
+                if has_summary:
+                    new_turns = "\n".join(
+                        f"{role}: {content}" for _, role, content in outside_items
+                    )
+                    prompt = _SUMMARY_UPDATE.format(
+                        sections=_SUMMARY_SECTIONS,
+                        existing=existing_summary,
+                        new_turns=new_turns,
+                        max_tokens=settings.summary_max_tokens,
+                    )
+                else:
+                    prompt = _SUMMARY_FRESH.format(
+                        sections=_SUMMARY_SECTIONS,
+                        text=_capped_conversation_text(outside_items),
+                        max_tokens=settings.summary_max_tokens,
+                    )
+
                 new_summary = await call_llm_with_retry(
                     minimax_client.chat,
                     [{"role": "user", "content": prompt}],
