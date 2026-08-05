@@ -284,17 +284,24 @@ class DocumentIndexer:
             doc_id[:8], len(chunks), embedded_count, len(old_chunks_map),
             status, (time.monotonic() - t_total) * 1000,
         )
-        # 新 chunk 全部 embedding 失败：保留旧索引，直接 failed（可重试恢复）。
-        # 旧逻辑会 replace_chunks(仅复用块)，把仍有效的旧 chunk 一并删掉
-        if total_new > 0 and embedded_count == len(old_chunks_map):
+        # 部分/全部新 chunk embedding 失败 + 有旧索引：保留旧索引 + failed。
+        # 旧逻辑只挡「全部新失败」，对「部分失败」→ diff upsert 把失败新块
+        # 对应的旧行删掉 → 静默丢内容。新逻辑统一处理：只要任一新块失败
+        # 且文档已索引过，就宁可保留旧版本不动，让用户重试恢复——
+        # 正确性优先于可用性，重试复用 hash 成本低。新文档首摄允许 partial
+        # （无可丢的旧内容）。
+        if old_chunks_map and error_messages:
+            msg = "保留旧索引，请重试：" + (final_error or "部分新增分块向量化失败")
             self._save_document(doc_id, user_id, kb_id, filename, len(chunks), "failed", doc_hash,
                                 embedded_chunk_count=embedded_count,
-                                error_message=final_error or "所有新增分块向量化失败，保留旧索引，请重试")
+                                error_message=msg)
+            _emit_progress(doc_id, user_id, embedded_count, len(chunks), "failed", msg)
             return {
                 "document_id": doc_id,
                 "filename": filename,
                 "status": "failed",
                 "chunk_count": len(chunks),
+                "message": msg,
             }
         try:
             if document_id:

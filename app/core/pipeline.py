@@ -217,8 +217,11 @@ class RAGPipeline:
                 logging.getLogger(__name__).exception("retrieve.sub_query_failed q=%s", sub_q[:40])
                 return []
 
-        for i, sub_q in enumerate(sub_queries):
-            yield f"event: status\ndata: {json.dumps({'phase':'retrieving','message':f'正在检索子问题 ({i+1}/{len(sub_queries)})...'})}\n\n"
+        # 单条状态提示：gather 真正并行前发一次即可，
+        # 旧实现按子问题循环发「正在检索子问题 (i/N)」纯误导——
+        # 全部 status 事件在 gather 之前就已发出，与实际并发时序对不上。
+        if len(sub_queries) > 1:
+            yield f"event: status\ndata: {json.dumps({'phase':'retrieving','message':f'正在并行检索 {len(sub_queries)} 个子问题...'})}\n\n"
 
         if len(sub_queries) > 1:
             results_list = await asyncio.gather(*[_retrieve_one(q) for q in sub_queries])

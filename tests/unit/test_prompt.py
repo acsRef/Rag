@@ -30,3 +30,42 @@ def test_trim_history_keeps_chronological_order_when_trimming():
     present = sorted((m for i in range(6) for m in ["msg-%d" % i] if m in text), key=text.index)
     assert len(present) >= 2
     assert present == sorted(present)   # 期望：旧消息在前
+
+
+# ── D7：单块巨型 chunk 截断兜底 ──────────────────────────
+
+def _chunk(text: str, chunk_id: str = "c1"):
+    from app.models.schemas import RetrievedChunk
+    return RetrievedChunk(chunk_id=chunk_id, document_id="d1", text=text, score=0.5)
+
+
+def test_trim_chunks_truncates_oversized_single_chunk():
+    """单 chunk 巨型：裁到 len==1 仍超预算 → 文本截断而非整块丢弃（避免检索空结果）。"""
+    big = "字" * 5000
+    # budget 大到能容纳部分字符：max_chars ≈ budget*1.5-20，应有截断
+    kept = prompt_builder._trim_chunks([_chunk(big)], token_budget=200)
+    assert len(kept) == 1
+    assert len(kept[0].text) < len(big)
+    assert len(kept[0].text) <= int(200 * 1.5)
+
+
+def test_trim_chunks_drops_oversized_when_no_chars_left():
+    """budget 仅够 1 chunk 但内容超大且截断后 ≤ 0 字符：丢弃。"""
+    big = "字" * 5000
+    kept = prompt_builder._trim_chunks([_chunk(big)], token_budget=1)
+    assert kept == []
+
+
+def test_trim_chunks_drops_oversized_when_no_chars_left():
+    """budget 仅够 1 chunk 但内容超大且截断后 ≤ 0 字符：丢弃。"""
+    big = "字" * 5000
+    kept = prompt_builder._trim_chunks([_chunk(big)], token_budget=1)
+    assert kept == []
+
+
+def test_trim_chunks_normal_flow_unchanged():
+    """多个 chunk 都装得下：不变。"""
+    a = _chunk("A", "a")
+    b = _chunk("B", "b")
+    kept = prompt_builder._trim_chunks([a, b], token_budget=10000)
+    assert [c.chunk_id for c in kept] == ["a", "b"]

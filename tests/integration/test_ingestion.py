@@ -178,6 +178,57 @@ def test_neighbor_expansion_survives_incremental_update(ingest_docs, fake_llm_st
     assert nb["after"] == texts[order[idx + 1]]
 
 
+def test_reindex_partial_embed_failure_preserves_old_index(integration_db, fake_llm_stack, monkeypatch):
+    """重索引时部分新块 embedding 失败：必须保留旧索引 + status=failed，
+    不得让差量 upsert 把失败新块对应的旧行删掉（旧实现下静默丢内容）。
+
+    旧实现只挡「全部新失败」，对部分失败→ 部分旧行被删、新行不入库→
+    重试仍能恢复但中间窗口查询缺数据。新行为：任一新块失败 + 旧索引存在→
+    整体保留旧索引 + failed，重试复用 hash 即可恢复。
+    """
+    from app.ingestion.indexer import document_indexer
+    from app.llm.embedding import sf_embedding
+    from app.store import pgvector_store
+
+    doc_id = _precreate_document_row("keep-partial.md")
+    NL = chr(10)
+    v1 = "# T1" + NL + NL + "首版正文，唯一小节。" + NL
+    res1 = document_indexer.index("keep-partial.md", v1.encode("utf-8"),
+                                 kb_id="test-kb", user_id="test-user",
+                                 document_id=doc_id)
+    assert res1["status"] == "indexed"
+    old_chunk_ids = {c["chunk_id"] for c in pgvector_store.get_chunks_by_document(doc_id)}
+    assert old_chunk_ids
+
+    # 第二版：新增 + 修改若干小节；让其中一条新块 embedding 失败
+    async def selective(texts, **kw):
+        from tests.integration.conftest import fake_vector
+        out = []
+        for t in texts:
+            if "FAILS" in t:
+                out.append((None, "模拟失败"))
+            else:
+                out.append((fake_vector(t), None))
+        return out
+
+    monkeypatch.setattr(sf_embedding, "embed_with_fallback", selective)
+
+    v2 = (
+        "# T2" + NL + NL + "首版正文，唯一小节。" + NL + NL
+        + "### 新增小节" + NL + NL + "FAILS" + NL + NL
+        + "### 新增正常小节" + NL + NL + "这一节会成功向量化。" + NL
+    ).encode("utf-8")
+    res2 = document_indexer.index("keep-partial.md", v2, kb_id="test-kb",
+                                  user_id="test-user", document_id=doc_id)
+    assert res2["status"] == "failed"
+    assert "保留旧索引" in res2.get("message", "")
+
+    # 旧 chunk 全部完整保留（chunk_id + content 不变）
+    after_ids = {c["chunk_id"] for c in pgvector_store.get_chunks_by_document(doc_id)}
+    assert after_ids == old_chunk_ids, (
+        f"重索引部分失败应保留旧索引；旧={len(old_chunk_ids)} 现={len(after_ids)}")
+
+
 def _precreate_document_row(filename: str) -> str:
     """模拟 api/documents.py 的上传契约：先建 Document 行，返回 doc_id。"""
     from app.store.db import get_db_ctx, Document, new_id, utc_now

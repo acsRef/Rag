@@ -219,7 +219,9 @@ class RAGPromptBuilder:
     def _trim_chunks(self, chunks: list[RetrievedChunk], token_budget: int) -> list[RetrievedChunk]:
         """Drop chunks from the end until the token estimate fits the budget.
 
-        If budget <= 0, return empty (no chunks to avoid overflowing prompt).
+        单 chunk 巨型场景兜底：裁到 len==1 后仍超预算 → 按字符数截断
+        该 chunk 文本（不再删除，避免检索空结果；同时不击穿总预算）。
+        budget ≤ 0 时返空集（无可用预算）。
         """
         if token_budget <= 0:
             return []
@@ -229,6 +231,21 @@ class RAGPromptBuilder:
             if total <= token_budget:
                 break
             kept = kept[:-1]
+        if kept:
+            total = sum(_est(c.text) + 20 for c in kept)
+            if total > token_budget:
+                # 单块超预算：按 token × 1.5 估算最大字符，截断头块文本
+                c = kept[0]
+                max_chars = max(0, int(token_budget * 1.5) - 20)
+                if max_chars <= 0:
+                    return []
+                # pydantic v2 model 允许字段赋值；返回新实例避免就地修改原对象
+                from app.models.schemas import RetrievedChunk as _RC
+                return [_RC(
+                    chunk_id=c.chunk_id, document_id=c.document_id,
+                    text=c.text[:max_chars], score=c.score,
+                    title=c.title, summary=c.summary, section_path=c.section_path,
+                )]
         return kept
 
     def _trim_history(self, history: list[dict], summary: str, budget: int) -> tuple[str, int]:

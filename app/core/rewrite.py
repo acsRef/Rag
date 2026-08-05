@@ -11,6 +11,7 @@ LLM 解析失败时回退到原 query,不抛异常。
 """
 from app.llm.chat import minimax_client
 from app.llm.base import CircuitOpenError, PermanentError, TemporaryError, call_llm_with_retry, robust_json_parse
+from app.config import settings
 from app.models.schemas import RewriteResult
 import logging
 
@@ -111,6 +112,10 @@ class QueryRewriteService:
         rewritten = data.get("rewritten_query") or question
         subs = [s for s in (data.get("sub_questions") or [])
                 if isinstance(s, str) and s.strip()]
+        # 封顶：LLM 控制的 sub_questions 数量无上限会触发 gather 并发雪崩
+        # （rerank 无内置限流）；按 settings 截断到 max_sub_questions。
+        if len(subs) > settings.max_sub_questions:
+            subs = subs[:settings.max_sub_questions]
         if not subs:
             subs = [rewritten]
         return RewriteResult(rewritten_query=rewritten, sub_questions=subs)

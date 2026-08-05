@@ -1,4 +1,5 @@
 """Auth API: register, login, me."""
+import threading
 import time
 from collections import defaultdict
 from fastapi import APIRouter, Depends, HTTPException, status, Request
@@ -15,6 +16,7 @@ from app.store.db import get_db_ctx, KnowledgeBase
 router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
 
 _LOGIN_ATTEMPTS: dict[str, list[float]] = defaultdict(list)
+_LOGIN_LOCK = threading.Lock()
 _LOGIN_WINDOW = 300  # seconds
 _LOGIN_MAX_ATTEMPTS = 10
 _RATE_LIMIT_MAX_KEYS = 10000  # 桶数量上界：超出整体清空，防 key 只增不删的缓慢泄漏
@@ -41,15 +43,19 @@ def _get_workspace_kb_id(user_id: str) -> str:
 
 
 def _check_rate_limit(key: str, message: str = "登录尝试过于频繁，请稍后再试"):
-    if len(_LOGIN_ATTEMPTS) > _RATE_LIMIT_MAX_KEYS:
-        # key 只增不删会缓慢泄漏：超过上界整体清空重建（简单有界）
-        _LOGIN_ATTEMPTS.clear()
-    now = time.time()
-    window = _LOGIN_ATTEMPTS[key]
-    window[:] = [t for t in window if now - t < _LOGIN_WINDOW]
-    if len(window) >= _LOGIN_MAX_ATTEMPTS:
-        raise HTTPException(status_code=429, detail=message)
-    window.append(now)
+    # 限流桶是进程级 dict + 列表：多 worker 不可见（架构限制，按 CLAUDE.md
+    # Next up 排队），但单 worker 内并发登录/注册会竞态（list[:]= 重建中间并发
+    # append 可能丢计数导致限额失效）。整段锁内串行。
+    with _LOGIN_LOCK:
+        if len(_LOGIN_ATTEMPTS) > _RATE_LIMIT_MAX_KEYS:
+            # key 只增不删会缓慢泄漏：超过上界整体清空重建（简单有界）
+            _LOGIN_ATTEMPTS.clear()
+        now = time.time()
+        window = _LOGIN_ATTEMPTS[key]
+        window[:] = [t for t in window if now - t < _LOGIN_WINDOW]
+        if len(window) >= _LOGIN_MAX_ATTEMPTS:
+            raise HTTPException(status_code=429, detail=message)
+        window.append(now)
 
 
 @router.post("/register", response_model=TokenResponse)

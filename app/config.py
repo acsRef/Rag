@@ -34,6 +34,7 @@ class Settings(BaseSettings):
     rerank_top_k: int = 5
     intent_min_score: float = 0.35
     max_intent_count: int = 3
+    max_sub_questions: int = 4   # rewrite 拆题上限（防 LLM 无限展开 + 重排/嵌入并发雪崩）
     hybrid_search_enabled: bool = True
     hybrid_search_top_k: int = 20  # 单路搜多取一些用于 RRF 合并
     hybrid_rrf_k: int = 60  # RRF 常数
