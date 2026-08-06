@@ -158,6 +158,7 @@ class RetrieveRequest(BaseModel):
 
 
 class RetrievedItem(BaseModel):
+    """对外 /retrieve 线路契约；内部管线请用 RetrievedChunk。"""
     chunk_id: str
     document_id: str
     text: str
