@@ -7,6 +7,7 @@ from app.store.db import engine
 from app.api.admin import router as admin_router
 from app.api.kb import router as kb_router
 from app.api.diagnostics import router as diag_router
+from app.api.retrieve import router as retrieve_router
 from app.store.db import init_db, get_session, Document
 from app.store.auth_store import seed_defaults
 from app.core.pii_rules import seed_pii_rules
@@ -31,6 +32,7 @@ app.include_router(kb_router)
 app.include_router(documents_router)
 app.include_router(chat_router)
 app.include_router(diag_router)
+app.include_router(retrieve_router)
 
 # 诊断遥测不再以静态目录暴露（曾无鉴权泄漏全量用户 query）：
 # JSON 一律经 /api/v1/diag/*（admin-only）访问；查看器 tools/diagnostics.html 从磁盘打开。
