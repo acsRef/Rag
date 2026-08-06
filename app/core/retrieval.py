@@ -23,6 +23,30 @@ from app.llm.base import provider_health
 logger = logging.getLogger(__name__)
 
 
+async def embed_query_with_fallback(query: str, ctx=None) -> tuple[list[float] | None, bool]:
+    """查询 embedding；熔断/失败时降级为零向量（BM25-only）。
+
+    返回 (embedding, degraded)。embedding 为 None 表示纯向量模式
+    （hybrid_search_enabled=False）下 embedding 失败——零向量余弦排序未定义，
+    调用方应返回空结果并交由上层兜底。
+
+    ctx 为可选 DiagContext：熔断时记录与原 retrieve 流程一致的诊断
+    （track_error('embedding', 'CircuitOpenError', ...)）；普通异常只留
+    warning 日志、不写诊断（保持重构前语义）。
+    """
+    try:
+        return await sf_embedding.embed(query), False
+    except CircuitOpenError:
+        logger.warning("embed_query degraded — circuit open, using zero-vector (BM25-only fallback)")
+        if ctx:
+            ctx.track_error("embedding", "CircuitOpenError", "embedding circuit breaker open, BM25-only", degraded=True)
+    except Exception:
+        logger.warning("embed_query degraded — embedding failed, using zero-vector (BM25-only fallback)")
+    if not settings.hybrid_search_enabled:
+        return None, True
+    return [0.0] * settings.embedding_dimension, True
+
+
 def _search_kb(
     kb_id: str,
     query_emb: list[float],
@@ -107,23 +131,9 @@ class RetrievalEngine:
             round_data["target_kb_ids"] = target_kb_ids
 
         t_embed = time.monotonic()
-        embedding_degraded = False
-        try:
-            query_emb = await sf_embedding.embed(query)
-            embed_elapsed = (time.monotonic() - t_embed) * 1000
-        except CircuitOpenError:
-            embedding_degraded = True
-            logger.warning("retrieve.embedding.degraded — circuit open, using zero-vector (BM25-only fallback)")
-            if ctx:
-                ctx.track_error("embedding", "CircuitOpenError", "embedding circuit breaker open, BM25-only", degraded=True)
-            query_emb = [0.0] * settings.embedding_dimension
-            embed_elapsed = (time.monotonic() - t_embed) * 1000
-        except Exception:
-            embedding_degraded = True
-            logger.warning("retrieve.embedding.failed — using zero-vector (BM25-only fallback)")
-            query_emb = [0.0] * settings.embedding_dimension
-            embed_elapsed = (time.monotonic() - t_embed) * 1000
-        if embedding_degraded and not settings.hybrid_search_enabled:
+        query_emb, embedding_degraded = await embed_query_with_fallback(query, ctx)
+        embed_elapsed = (time.monotonic() - t_embed) * 1000
+        if query_emb is None:
             # 纯向量模式 + embedding 失败：零向量余弦排序未定义，宁可空结果触发上层兜底
             logger.warning("retrieve.pure_vector_degraded — embedding failed with hybrid off, returning []")
             if ctx:
