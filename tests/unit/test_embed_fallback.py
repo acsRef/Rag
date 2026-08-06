@@ -1,13 +1,9 @@
 """embed_query_with_fallback：熔断/异常降级为零向量（BM25-only），纯向量模式返回 None。"""
-import asyncio
-
-import pytest
-
 from app.config import settings
 from app.llm.base import CircuitOpenError
 
 
-def test_fallback_on_circuit_open(monkeypatch):
+async def test_fallback_on_circuit_open(monkeypatch):
     from app.core import retrieval
 
     async def _boom(text, max_retries=1):
@@ -15,12 +11,12 @@ def test_fallback_on_circuit_open(monkeypatch):
 
     monkeypatch.setattr(retrieval.sf_embedding, "embed", _boom)
     monkeypatch.setattr(settings, "hybrid_search_enabled", True)
-    emb, degraded = asyncio.run(retrieval.embed_query_with_fallback("q"))
+    emb, degraded = await retrieval.embed_query_with_fallback("q")
     assert degraded is True
     assert emb == [0.0] * settings.embedding_dimension
 
 
-def test_fallback_on_generic_error(monkeypatch):
+async def test_fallback_on_generic_error(monkeypatch):
     from app.core import retrieval
 
     async def _boom(text, max_retries=1):
@@ -28,12 +24,25 @@ def test_fallback_on_generic_error(monkeypatch):
 
     monkeypatch.setattr(retrieval.sf_embedding, "embed", _boom)
     monkeypatch.setattr(settings, "hybrid_search_enabled", True)
-    emb, degraded = asyncio.run(retrieval.embed_query_with_fallback("q"))
+    emb, degraded = await retrieval.embed_query_with_fallback("q")
     assert degraded is True
-    assert emb is not None
+    assert emb == [0.0] * settings.embedding_dimension
 
 
-def test_pure_vector_mode_returns_none(monkeypatch):
+async def test_generic_error_pure_vector_returns_none(monkeypatch):
+    from app.core import retrieval
+
+    async def _boom(text, max_retries=1):
+        raise RuntimeError("429")
+
+    monkeypatch.setattr(retrieval.sf_embedding, "embed", _boom)
+    monkeypatch.setattr(settings, "hybrid_search_enabled", False)
+    emb, degraded = await retrieval.embed_query_with_fallback("q")
+    assert degraded is True
+    assert emb is None
+
+
+async def test_pure_vector_mode_returns_none(monkeypatch):
     from app.core import retrieval
 
     async def _boom(text, max_retries=1):
@@ -41,19 +50,19 @@ def test_pure_vector_mode_returns_none(monkeypatch):
 
     monkeypatch.setattr(retrieval.sf_embedding, "embed", _boom)
     monkeypatch.setattr(settings, "hybrid_search_enabled", False)
-    emb, degraded = asyncio.run(retrieval.embed_query_with_fallback("q"))
+    emb, degraded = await retrieval.embed_query_with_fallback("q")
     assert degraded is True
     assert emb is None
 
 
-def test_happy_path(monkeypatch):
+async def test_happy_path(monkeypatch):
     from app.core import retrieval
 
     async def _ok(text, max_retries=1):
         return [0.1] * 4
 
     monkeypatch.setattr(retrieval.sf_embedding, "embed", _ok)
-    emb, degraded = asyncio.run(retrieval.embed_query_with_fallback("q"))
+    emb, degraded = await retrieval.embed_query_with_fallback("q")
     assert degraded is False
     assert emb == [0.1] * 4
 
@@ -68,7 +77,7 @@ class _FakeCtx:
         self.errors.append((step, error_type, message, degraded))
 
 
-def test_circuit_open_records_diag_error_generic_does_not(monkeypatch):
+async def test_circuit_open_records_diag_error_generic_does_not(monkeypatch):
     """重构前的诊断语义必须保留：熔断降级记 track_error('embedding', 'CircuitOpenError')，
     普通异常降级不记（只留 warning 日志）。"""
     from app.core import retrieval
@@ -79,7 +88,7 @@ def test_circuit_open_records_diag_error_generic_does_not(monkeypatch):
     monkeypatch.setattr(retrieval.sf_embedding, "embed", _circuit)
     monkeypatch.setattr(settings, "hybrid_search_enabled", True)
     ctx = _FakeCtx()
-    asyncio.run(retrieval.embed_query_with_fallback("q", ctx))
+    await retrieval.embed_query_with_fallback("q", ctx)
     assert ctx.errors == [
         ("embedding", "CircuitOpenError", "embedding circuit breaker open, BM25-only", True)
     ]
@@ -89,5 +98,5 @@ def test_circuit_open_records_diag_error_generic_does_not(monkeypatch):
 
     monkeypatch.setattr(retrieval.sf_embedding, "embed", _generic)
     ctx2 = _FakeCtx()
-    asyncio.run(retrieval.embed_query_with_fallback("q", ctx2))
+    await retrieval.embed_query_with_fallback("q", ctx2)
     assert ctx2.errors == []

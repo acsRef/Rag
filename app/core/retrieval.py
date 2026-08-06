@@ -9,6 +9,7 @@
 import asyncio
 import logging
 import time
+from typing import TYPE_CHECKING
 
 from app.store import pgvector_store
 from app.llm.embedding import sf_embedding
@@ -20,10 +21,13 @@ from app.core.mmr import mmr_select
 from app.core.doc_relation import cross_doc_retriever
 from app.llm.base import provider_health
 
+if TYPE_CHECKING:
+    from app.core.diagnostics import DiagContext
+
 logger = logging.getLogger(__name__)
 
 
-async def embed_query_with_fallback(query: str, ctx=None) -> tuple[list[float] | None, bool]:
+async def embed_query_with_fallback(query: str, ctx: "DiagContext | None" = None) -> tuple[list[float] | None, bool]:
     """查询 embedding；熔断/失败时降级为零向量（BM25-only）。
 
     返回 (embedding, degraded)。embedding 为 None 表示纯向量模式
@@ -37,11 +41,11 @@ async def embed_query_with_fallback(query: str, ctx=None) -> tuple[list[float] |
     try:
         return await sf_embedding.embed(query), False
     except CircuitOpenError:
-        logger.warning("embed_query degraded — circuit open, using zero-vector (BM25-only fallback)")
+        logger.warning("embed_query.embedding.degraded — circuit open, using zero-vector (BM25-only fallback)")
         if ctx:
             ctx.track_error("embedding", "CircuitOpenError", "embedding circuit breaker open, BM25-only", degraded=True)
-    except Exception:
-        logger.warning("embed_query degraded — embedding failed, using zero-vector (BM25-only fallback)")
+    except Exception as exc:
+        logger.warning("embed_query.embedding.failed — embedding failed (%s), using zero-vector (BM25-only fallback)", exc)
     if not settings.hybrid_search_enabled:
         return None, True
     return [0.0] * settings.embedding_dimension, True
