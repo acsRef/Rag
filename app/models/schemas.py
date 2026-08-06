@@ -153,7 +153,7 @@ class SourceInfo(BaseModel):
 
 class RetrieveRequest(BaseModel):
     query: str = Field(min_length=1, max_length=4096)
-    kb_ids: list[str] = Field(min_length=1)
+    kb_ids: list[str] = Field(min_length=1, max_length=20)
     top_k: int = Field(default=5, ge=1, le=50)
 
 

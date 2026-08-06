@@ -26,6 +26,12 @@ def client(request):
 
 @pytest.fixture(autouse=True)
 def _stub_layers(monkeypatch):
+    # 隐式依赖，改动前必读：autouse 使本 fixture 同样作用于下方 _assert_kb_readable
+    # 分支矩阵测试，但矩阵测试在模块顶部 `from app.api.retrieve import _assert_kb_readable`
+    # 直接绑定了真函数对象，调用时不经过 mod 属性查找——所以这里 patch 掉
+    # mod._assert_kb_readable 不影响矩阵测试。若把矩阵测试改成经 mod 属性查找，
+    # 会命中本 stub 导致全绿假象；若去掉 autouse，须确认 5 个端点测试均已显式
+    # 声明本 fixture（现状如此）。
     import app.api.retrieve as mod
     monkeypatch.setattr(mod, "_assert_kb_readable", lambda session, user, kb_ids: None)
 
@@ -52,6 +58,56 @@ def test_retrieve_happy_path(client, _stub_layers):
     # kb_ids 必须原样 pin 进 hybrid_search（隔离保证）
     assert _stub_layers["kb_ids"] == ["kb-dict"]
     assert _stub_layers["top_k"] == 3
+    # 第二层鉴权接线：ADMIN fixture → read_all bypass，身份参数原样透传
+    assert _stub_layers["can_read_all"] is True
+    assert _stub_layers["user_id"] == "u-admin"
+    assert _stub_layers["user_role_ids"] == []
+    # settings 检索参数显式透传（与主路径 retrieval._search_kb 对齐）
+    from app.config import settings
+    assert _stub_layers["fetch_k"] == settings.hybrid_search_top_k
+    assert _stub_layers["rrf_k"] == settings.hybrid_rrf_k
+
+
+def test_retrieve_kb_ids_dedup_preserves_order(client, _stub_layers):
+    resp = client.post("/api/v1/retrieve",
+                       json={"query": "q", "kb_ids": ["kb-a", "kb-a", "kb-b"]})
+    assert resp.status_code == 200
+    assert _stub_layers["kb_ids"] == ["kb-a", "kb-b"]
+
+
+def test_retrieve_hybrid_disabled_uses_pure_vector(client, monkeypatch, _stub_layers):
+    """hybrid_search_enabled=False 镜像主路径：走纯向量 search，不碰 hybrid_search。"""
+    import app.api.retrieve as mod
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "hybrid_search_enabled", False)
+    called = {"hybrid": 0, "vector": 0}
+    vector_kwargs = {}
+
+    def _fake_vector(**kwargs):
+        called["vector"] += 1
+        vector_kwargs.update(kwargs)
+        return [{"chunk_id": "c1", "document_id": "d1", "text": "正文",
+                 "title": "t", "section_path": "s", "score": 0.8}]
+
+    def _fake_hybrid(**kwargs):
+        called["hybrid"] += 1
+        return []
+
+    monkeypatch.setattr(mod, "search", _fake_vector)
+    monkeypatch.setattr(mod, "hybrid_search", _fake_hybrid)
+    resp = client.post("/api/v1/retrieve", json={"query": "q", "kb_ids": ["kb-dict"], "top_k": 4})
+    assert resp.status_code == 200
+    assert resp.json()["items"][0]["chunk_id"] == "c1"
+    assert called == {"hybrid": 0, "vector": 1}
+    # 行级权限参数与 hybrid 分支等价；纯向量签名无 query/question channel 参数
+    assert vector_kwargs["kb_ids"] == ["kb-dict"]
+    assert vector_kwargs["top_k"] == 4
+    assert vector_kwargs["can_read_all"] is True
+    assert vector_kwargs["user_id"] == "u-admin"
+    assert vector_kwargs["user_role_ids"] == []
+    assert "query" not in vector_kwargs
+    assert "enable_question_channel" not in vector_kwargs
 
 
 @pytest.mark.parametrize("client", [USER], indirect=True)

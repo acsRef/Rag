@@ -15,6 +15,13 @@ def test_retrieve_request_rejects_empty_kb_ids():
         RetrieveRequest(query="销售额", kb_ids=[])
 
 
+def test_retrieve_request_kb_ids_max_length():
+    # 上限 20：21 个拒绝，20 个边界放行
+    with pytest.raises(ValidationError):
+        RetrieveRequest(query="q", kb_ids=[f"kb-{i}" for i in range(21)])
+    assert len(RetrieveRequest(query="q", kb_ids=[f"kb-{i}" for i in range(20)]).kb_ids) == 20
+
+
 def test_retrieve_request_rejects_bad_query():
     with pytest.raises(ValidationError):
         RetrieveRequest(query="", kb_ids=["kb-1"])
