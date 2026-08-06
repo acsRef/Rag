@@ -147,3 +147,25 @@ class SourceInfo(BaseModel):
     section_path: str = ""
     snippet: str = ""
     score: float = 0.0
+
+
+# ── Retrieve（只检索不生成，供字典桥/外部消费） ────────────
+
+class RetrieveRequest(BaseModel):
+    query: str = Field(min_length=1, max_length=4096)
+    kb_ids: list[str] = Field(min_length=1)
+    top_k: int = Field(default=5, ge=1, le=50)
+
+
+class RetrievedItem(BaseModel):
+    chunk_id: str
+    document_id: str
+    text: str
+    title: str = ""
+    section_path: str = ""
+    score: float
+
+
+class RetrieveResponse(BaseModel):
+    items: list[RetrievedItem]
+    degraded: bool = False
