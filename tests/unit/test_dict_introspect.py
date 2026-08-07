@@ -49,6 +49,8 @@ class FakeConn:
 def test_introspect_builds_columns_with_comment_enum_fk(monkeypatch):
     import mcp_server.introspect as mod
 
+    # sale_id 走 _sample_distinct：distinct 超限（21 行）→ enums=None
+    sale_id_over_limit = [(i,) for i in range(1, 22)]
     cur = FakeCursor([
         [("fact_sales",)],                                        # tables 列表
         [("销售记录事实表",)],                                    # obj_description
@@ -57,13 +59,13 @@ def test_introspect_builds_columns_with_comment_enum_fk(monkeypatch):
             ("channel", "character varying(10)", "销售渠道", "varchar"),
             ("date_id", "integer", "销售日期", "int4"),
         ],
-        [],                                                        # sale_id 的 FK 查询：无
-        None,                                                      # sale_id 枚举采样：distinct 超限哨兵（int4 走 _sample_distinct）
+        [],                                                        # sale_id 的 FK 查询：无 → 走枚举采样
+        sale_id_over_limit,                                       # sale_id 枚举采样：distinct 超限哨兵（21 行 > _ENUM_MAX_DISTINCT=20）
         [],                                                        # channel 的 FK 查询：无 → 走枚举采样
-        [("线上",), ("线下",)],                                    # channel 的枚举采样（FK 无故走 _sample_distinct）
+        [("线上",), ("线下",)],                                    # channel 的枚举采样（FK 查询无结果 → 走枚举采样）
         [("public", "dim_date", "date_id")],                       # date_id 的 FK 查询：命中
     ])
-    monkeypatch.setattr(mod.psycopg2, "connect", lambda dsn, connect_timeout=5: FakeConn(cur))
+    monkeypatch.setattr(mod.psycopg2, "connect", lambda dsn, connect_timeout=5, options="": FakeConn(cur))
 
     infos = mod.introspect_schema("postgresql://fake", "public")
     assert len(infos) == 1
@@ -76,6 +78,26 @@ def test_introspect_builds_columns_with_comment_enum_fk(monkeypatch):
     assert by_name["sale_id"]["enums"] is None
 
 
+def test_introspect_all_null_column_returns_no_enums(monkeypatch):
+    """全 NULL 列（distinct WHERE IS NOT NULL → []）不能当作低基数枚举，应返回 None。"""
+    import mcp_server.introspect as mod
+
+    cur = FakeCursor([
+        [("dim_status",)],                        # tables 列表
+        [("状态维度表",)],                         # obj_description
+        [                                          # pg_attribute 列
+            ("status_code", "varchar(10)", "状态码", "varchar"),
+        ],
+        [],                                        # status_code 的 FK 查询：无 → 走枚举采样
+        [],                                        # status_code 枚举采样：全 NULL → []
+    ])
+    monkeypatch.setattr(mod.psycopg2, "connect", lambda dsn, connect_timeout=5, options="": FakeConn(cur))
+
+    infos = mod.introspect_schema("postgresql://fake", "public")
+    by_name = {c["name"]: c for c in infos[0]["columns"]}
+    assert by_name["status_code"]["enums"] is None
+
+
 def test_introspect_table_filter(monkeypatch):
     import mcp_server.introspect as mod
 
@@ -84,7 +106,7 @@ def test_introspect_table_filter(monkeypatch):
         [("销售记录事实表",)],
         [],                                  # 无列（简化）
     ])
-    monkeypatch.setattr(mod.psycopg2, "connect", lambda dsn, connect_timeout=5: FakeConn(cur))
+    monkeypatch.setattr(mod.psycopg2, "connect", lambda dsn, connect_timeout=5, options="": FakeConn(cur))
     infos = mod.introspect_schema("postgresql://fake", "public", tables=["fact_sales"])
     assert [i["table"] for i in infos] == ["fact_sales"]
 
@@ -100,7 +122,7 @@ def test_introspect_isolates_failing_table(monkeypatch):
         [("日期维度表",)],                          # dim_date obj_description
         [],                                        # dim_date 无列 → 正常返回
     ])
-    monkeypatch.setattr(mod.psycopg2, "connect", lambda dsn, connect_timeout=5: FakeConn(cur))
+    monkeypatch.setattr(mod.psycopg2, "connect", lambda dsn, connect_timeout=5, options="": FakeConn(cur))
 
     infos = mod.introspect_schema("postgresql://fake", "public")
     by_table = {i["table"]: i for i in infos}

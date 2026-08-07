@@ -1,7 +1,12 @@
 """PG 结构自省（只读连接）：类型/FK 来自 information_schema 系视图，
 语义来自 COMMENT ON（col_description/obj_description）。
 
-低基数枚举采样：白名单类型 + distinct ≤20；不带自由样例（避 PII 红线）。
+低基数枚举采样：白名单内类型（varchar/bpchar/text/bool/int2/int4）
+且 distinct ≤20 时，原样返回真实枚举值。PII 审计由上游
+``app/core/pii_scanner.py`` 在摄入侧承担；本函数不脱敏。
+
+同步 API，预期作为离线批处理场景专用；async 调用方需自行
+``asyncio.to_thread(...)`` 包裹。
 """
 from __future__ import annotations
 
@@ -13,7 +18,11 @@ _ENUM_MAX_DISTINCT = 20
 
 
 def introspect_schema(dsn: str, schema: str = "public", tables: list[str] | None = None) -> list[dict]:
-    conn = psycopg2.connect(dsn, connect_timeout=5)
+    conn = psycopg2.connect(
+        dsn,
+        connect_timeout=5,
+        options="-c default_transaction_read_only=on",
+    )
     try:
         with conn.cursor() as cur:
             cur.execute(
@@ -56,6 +65,7 @@ def _introspect_table(cur, schema: str, table: str) -> dict:
         JOIN pg_type t ON t.oid = a.atttypid
         WHERE n.nspname = %s AND c.relname = %s
           AND a.attnum > 0 AND NOT a.attisdropped
+          AND a.attgenerated = ''
         ORDER BY a.attnum
         """,
         (schema, table),
@@ -92,15 +102,15 @@ def _fk_target(cur, schema: str, table: str, column: str) -> str | None:
 
 
 def _sample_distinct(cur, schema: str, table: str, column: str) -> list | None:
-    """distinct ≤20 → 返回枚举值；超限 → None（视为自由值列，不采样）。"""
+    """distinct ≤20 → 返回枚举值；超限 / 全 NULL → None（视为自由值列，不采样）。"""
     query = psql.SQL(
         "SELECT DISTINCT {col} FROM {tbl} WHERE {col} IS NOT NULL LIMIT %s"
     ).format(col=psql.Identifier(column), tbl=psql.Identifier(schema, table))
     cur.execute(query, (_ENUM_MAX_DISTINCT + 1,))
     rows = cur.fetchall()
-    if rows is None:
-        return None
     vals = [r[0] for r in rows]
+    if not vals:
+        return None
     if len(vals) > _ENUM_MAX_DISTINCT:
         return None
     return vals
