@@ -111,3 +111,27 @@ def test_retrieve_passes_payload():
         finally:
             await c.aclose()
     asyncio.run(run())
+
+
+def test_unmatched_route_raises_with_diagnostic():
+    """未注册路由时错误信息必须是诊断性的（包含 404 状态码 + 响应体片段）。
+
+    钉死契约：retrieve 命中未注册路径，错误文本应包含 HTTP 状态码与响应体，
+    便于上游快速定位（路由表漂移、版本不匹配等）。
+    """
+    async def run():
+        # 路由表只有 login，没有 /retrieve —— 调用 retrieve 会得到 404
+        c = _client(_handler({
+            ("POST", "/api/v1/auth/login"): httpx.Response(200, json={"access_token": "t"}),
+        }))
+        try:
+            with pytest.raises(RagentClientError) as excinfo:
+                await c.retrieve("销售额", ["kb-9"], top_k=3)
+            msg = str(excinfo.value)
+            # 必须包含响应体（_handler 对未注册路径返回 {"detail": "not found"}）
+            assert "not found" in msg, f"错误信息应包含响应体诊断，实际: {msg}"
+            # 同时保留 HTTP 状态码以便排查
+            assert "404" in msg, f"错误信息应包含 HTTP 状态码，实际: {msg}"
+        finally:
+            await c.aclose()
+    asyncio.run(run())

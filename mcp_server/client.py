@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 
 import httpx
@@ -17,9 +18,15 @@ class RagentClientError(RuntimeError):
 
 class RagentClient:
     def __init__(self, base_url: str = "", username: str = "", password: str = "", timeout: float = 30.0):
-        self.base_url = (base_url or os.getenv("RAGENT_URL", "http://localhost:8000")).rstrip("/")
+        self.base_url = (base_url or os.getenv("RAGENT_URL", "")).rstrip("/")
+        if not self.base_url:
+            # 默认 base_url 设为空字符串而非 localhost 兜底——__init__ 失败即响亮，
+            # 调用方在启动时就会发现环境变量没配，而不是等到第一次 HTTP 请求才报错。
+            raise RagentClientError("RAGENT_URL 未配置：请设置环境变量 RAGENT_URL 或显式传入 base_url")
         self.username = username or os.getenv("RAGENT_USER", "")
         self.password = password or os.getenv("RAGENT_PASSWORD", "")
+        # MCP 工具调用是串行的；并发场景（asyncio.gather / 多 worker / HTTP transport）
+        # 需外加 asyncio.Lock 包裹 _login + _request，避免重登竞态覆盖 token。
         self._token: str | None = None
         self._http = httpx.AsyncClient(base_url=self.base_url, timeout=timeout)
 
@@ -38,20 +45,31 @@ class RagentClient:
             raise RagentClientError("登录失败：请检查 RAGENT_USER / RAGENT_PASSWORD")
         if resp.status_code != 200:
             raise RagentClientError(f"登录异常：HTTP {resp.status_code}")
-        self._token = resp.json()["access_token"]
+        try:
+            self._token = resp.json()["access_token"]
+        except (KeyError, json.JSONDecodeError) as exc:
+            raise RagentClientError(f"登录响应格式异常: {exc}") from exc
 
     async def _request(self, method: str, path: str, **kwargs) -> httpx.Response:
         if not self._token:
             await self._login()
         headers = kwargs.pop("headers", {})
+        # kwargs 中不再含 headers；重试时显式传 headers= 参数
         headers["Authorization"] = f"Bearer {self._token}"
         try:
             resp = await self._http.request(method, path, headers=headers, **kwargs)
         except httpx.HTTPError as exc:
             raise RagentClientError(f"ragent-py 服务不可达（{self.base_url}）: {exc}") from exc
         if resp.status_code == 401:  # token 过期 → 重登一次
+            original_detail = resp.text[:200]
             self._token = None
-            await self._login()
+            try:
+                await self._login()
+            except RagentClientError as exc:
+                # 重登本身失败（账号被锁、token 黑名单等）→ 把第一次 401 的诊断体附上抛出
+                raise RagentClientError(
+                    f"401 重登失败：{exc}；原始响应：{original_detail}"
+                ) from exc
             headers["Authorization"] = f"Bearer {self._token}"
             try:
                 resp = await self._http.request(method, path, headers=headers, **kwargs)
@@ -82,6 +100,12 @@ class RagentClient:
         return resp.json()
 
     async def wait_indexed(self, document_id: str, timeout_s: float = 180.0, interval_s: float = 2.0) -> dict:
+        """轮询直至 status ∈ {indexed, failed}；超时未收敛则抛错而非伪成功。
+
+        - 失败状态正常返回 dict（让上层看到失败原因）。
+        - 超时未收敛：抛 RagentClientError，避免下游误把 status="processing" 当作
+        仍在等待而忽略超时。
+        """
         remaining = timeout_s
         while remaining > 0:
             resp = await self._request("GET", f"/api/v1/documents/{document_id}")
@@ -91,8 +115,9 @@ class RagentClient:
                     return doc
             await asyncio.sleep(interval_s)
             remaining -= interval_s
-        return {"document_id": document_id, "status": "processing", "chunk_count": 0,
-                "error_message": f"轮询超时（{timeout_s:.0f}s），请用 GET /api/v1/documents/{document_id} 复查"}
+        raise RagentClientError(
+            f"摄入轮询超时 ({timeout_s:.0f}s): document_id={document_id}"
+        )
 
     async def retrieve(self, query: str, kb_ids: list[str], top_k: int = 5) -> dict:
         resp = await self._request("POST", "/api/v1/retrieve",
@@ -106,7 +131,13 @@ class RagentClient:
         return resp.json()
 
     async def list_documents(self, kb_id: str, limit: int = 200) -> list[dict]:
-        """GET /documents 无 kb_id 参数——取一页后客户端侧过滤。"""
+        """仅返回当前服务账号可见的字典文档（除非服务账号有 doc.read_all 权限）。
+
+        服务端按 owner_id 过滤非 admin / 非 read_all 用户——本方法不会看到他人
+        上传的字典文档。A7 的 reconciliation 流程必须依赖这一点（避免静默漏看）。
+
+        GET /documents 无 kb_id 参数——取一页后客户端侧过滤。
+        """
         resp = await self._request("GET", "/api/v1/documents", params={"limit": limit})
         if resp.status_code != 200:
             raise RagentClientError(f"文档列表获取失败：HTTP {resp.status_code}")
