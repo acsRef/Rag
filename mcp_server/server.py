@@ -1,5 +1,9 @@
 """ragent-py 数据字典 MCP 服务（stdio）。
 
+mcp>=2.0.0 stdio 服务（mcp 2.0 protocol，`Server(...)` 用 `on_list_tools`/`on_call_tool`
+构造期参数绑定；模块级 `handle_*` async 函数便于单测，适配层 `_on_*` 在 `server.run`
+前一次性桥接）。
+
 启动: D:/miniConda/envs/rag/python.exe -m mcp_server.server
 配置（env，绝不进工具入参）:
   RAGENT_URL        ragent-py 地址
@@ -71,6 +75,8 @@ async def cmd_ingest_table_schemas(arguments: dict) -> str:
             results = []
             for info in infos:
                 table_ref = f"{info['schema']}.{info['table']}"
+                # 先初始化：table_filename 抛错时 except 块仍能引用 fname
+                fname = ""
                 try:
                     fname = table_filename(info["schema"], info["table"])
                     md = render_table_doc(schema=info["schema"], table=info["table"],
@@ -100,7 +106,7 @@ async def cmd_ingest_table_schemas(arguments: dict) -> str:
                     # 单表失败不影响其他表继续灌入
                     results.append({
                         "table": table_ref,
-                        "filename": fname if "fname" in locals() else "",
+                        "filename": fname,
                         "document_id": None,
                         "status": "error",
                         "chunk_count": 0,

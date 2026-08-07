@@ -159,3 +159,33 @@ def test_cmd_returns_text_when_ragent_url_missing(monkeypatch):
     ]:
         out = asyncio.run(cmd(args))
         assert "RAGENT_URL" in out, f"{cmd.__name__} 未透传 RAGENT_URL 错误: {out!r}"
+
+
+def test_ingest_table_filename_error_keeps_batch(monkeypatch):
+    """table_filename 抛非 RagentClientError 时，fname 已初始化，except 块可安全引用。
+
+    终审 I-2：修复前 except 块用 `fname if "fname" in locals() else ""` 兜底，
+    只覆盖 RagentClientError；此处断言 fname 预初始化后不再有 UnboundLocalError 风险。
+    """
+    monkeypatch.setenv("RAGENT_URL", "http://fake:8000")
+    monkeypatch.setenv("DICT_PG_DSN", "postgresql://fake")
+    monkeypatch.setattr(srv, "introspect_schema", lambda dsn, schema, tables=None: [
+        {"schema": "public", "table": "t_ok", "table_comment": "", "columns": []},
+        {"schema": "public", "table": "t_bad", "table_comment": "", "columns": []},
+    ])
+
+    real_table_filename = srv.table_filename
+
+    def flaky_filename(schema, table):
+        if table == "t_bad":
+            raise RagentClientError("文件名渲染失败：仅供测试")
+        return real_table_filename(schema, table)
+
+    monkeypatch.setattr(srv, "table_filename", flaky_filename)
+    monkeypatch.setattr(srv, "RagentClient", lambda: FakeClient())
+    out = json.loads(asyncio.run(srv.cmd_ingest_table_schemas({"schema": "public"})))
+    assert len(out) == 2, f"期望 2 项结果，实际 {len(out)}"
+    assert out[0]["status"] == "indexed"
+    assert out[1]["status"] == "error"
+    assert out[1]["filename"] == "", f"fname 未初始化为空串: {out[1]['filename']!r}"
+    assert "文件名渲染失败" in out[1]["error"]
