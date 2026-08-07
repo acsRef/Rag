@@ -103,3 +103,59 @@ def test_mcp_tool_surface():
     tools = asyncio.run(srv.handle_list_tools())
     names = {t.name for t in tools}
     assert names == {"ingest_table_schemas", "upsert_api_dictionary", "search_dictionary", "list_dictionary_docs"}
+
+
+def test_ingest_table_schemas_partial_failure(monkeypatch):
+    """(a) 第二张表抛 RagentClientError → results 数组长度 2，第二项有 error，第一项正常。"""
+    monkeypatch.setenv("DICT_PG_DSN", "postgresql://fake")
+    monkeypatch.setattr(srv, "introspect_schema", lambda dsn, schema, tables=None: [
+        {"schema": "public", "table": "t_ok", "table_comment": "", "columns": []},
+        {"schema": "public", "table": "t_bad", "table_comment": "", "columns": []},
+    ])
+
+    class PartialBoom(FakeClient):
+        async def upload_document(self, kb_id, filename, content):
+            if filename.endswith("dict-table_public_t_bad.md"):
+                raise RagentClientError("第二张表上传失败：仅供测试")
+            return dict(self._upload)
+
+    monkeypatch.setattr(srv, "RagentClient", lambda: PartialBoom())
+    out = json.loads(asyncio.run(srv.cmd_ingest_table_schemas({"schema": "public"})))
+    assert len(out) == 2, f"期望 2 项结果，实际 {len(out)}"
+    assert out[0]["status"] == "indexed"
+    assert out[0]["table"].endswith("t_ok")
+    assert out[1]["status"] == "error"
+    assert out[1]["table"].endswith("t_bad")
+    assert "第二张表上传失败" in out[1]["error"]
+
+
+def test_handle_call_tool_unknown_tool_returns_text():
+    """(b) 未知工具 dispatch → TextContent 文本，无 raise。"""
+    result = asyncio.run(srv.handle_call_tool("does_not_exist", {}))
+    assert len(result.content) == 1
+    assert isinstance(result.content[0], mcp.types.TextContent)
+    assert "未知工具" in result.content[0].text
+    assert "does_not_exist" in result.content[0].text
+
+
+def test_cmd_returns_text_when_ragent_url_missing(monkeypatch):
+    """(c) RAGENT_URL 未配（RagentClient 构造即抛）→ cmd_* 返文本，无 raise。"""
+    monkeypatch.delenv("RAGENT_URL", raising=False)
+    monkeypatch.setenv("DICT_PG_DSN", "postgresql://fake")  # 让 ingest 越过 DSN 检查
+
+    class NoUrlClient(FakeClient):
+        def __init__(self, *args, **kwargs):
+            raise RagentClientError("RAGENT_URL 未配置")
+
+    monkeypatch.setattr(srv, "introspect_schema", lambda dsn, schema, tables=None: [
+        {"schema": "public", "table": "t", "table_comment": "", "columns": []}
+    ])
+    monkeypatch.setattr(srv, "RagentClient", lambda: NoUrlClient())
+    for cmd, args in [
+        (srv.cmd_ingest_table_schemas, {"schema": "public"}),
+        (srv.cmd_upsert_api_dictionary, {"name": "x", "fields": [{"name": "a", "type": "string"}]}),
+        (srv.cmd_search_dictionary, {"query": "q"}),
+        (srv.cmd_list_dictionary_docs, {}),
+    ]:
+        out = asyncio.run(cmd(args))
+        assert "RAGENT_URL" in out, f"{cmd.__name__} 未透传 RAGENT_URL 错误: {out!r}"

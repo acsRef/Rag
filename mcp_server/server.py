@@ -12,14 +12,13 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+from contextlib import asynccontextmanager
 from typing import Any
 
 from mcp.server import Server
-from mcp.server.models import InitializationOptions
 from mcp.types import (
     CallToolResult,
     ListToolsResult,
-    ServerCapabilities,
     TextContent,
     Tool,
 )
@@ -31,6 +30,26 @@ from mcp_server.render import api_filename, render_api_doc, render_table_doc, ta
 
 def _kb_name() -> str:
     return os.getenv("DICT_KB_NAME", "数据字典")
+
+
+@asynccontextmanager
+async def _client_context():
+    """收敛 4 个 cmd_* 的 RagentClient() 构造 + aclose 清理。
+
+    构造错（如 RAGENT_URL 未配）会作为构造期异常透传——调用方统一 `except RagentClientError` 转中文文本。
+    """
+    client = RagentClient()
+    try:
+        yield client
+    finally:
+        await client.aclose()
+
+
+def _client_error(exc: BaseException) -> str:
+    """统一把 RagentClientError 转中文文本。"""
+    if isinstance(exc, RagentClientError):
+        return str(exc)
+    return f"客户端异常: {exc}"
 
 
 # ── 工具实现（模块级函数，便于单测 stub） ─────────────────────
@@ -46,29 +65,53 @@ async def cmd_ingest_table_schemas(arguments: dict) -> str:
         infos = await asyncio.to_thread(introspect_schema, dsn, schema, tables)
     except Exception as exc:
         return f"数据库自省失败: {exc}"
-    client = RagentClient()
     try:
-        kb_id = await client.ensure_kb(_kb_name())
-        results = []
-        for info in infos:
-            fname = table_filename(info["schema"], info["table"])
-            md = render_table_doc(schema=info["schema"], table=info["table"],
-                                  table_comment=info["table_comment"], columns=info["columns"])
-            up = await client.upload_document(kb_id, fname, md)
-            doc = await client.wait_indexed(up["document_id"])
-            results.append({
-                "table": f"{info['schema']}.{info['table']}",
-                "filename": fname,
-                "document_id": doc.get("document_id", up["document_id"]),
-                "status": doc.get("status", "unknown"),
-                "chunk_count": doc.get("chunk_count", 0),
-                "error": doc.get("error_message", ""),
-            })
+        async with _client_context() as client:
+            kb_id = await client.ensure_kb(_kb_name())
+            results = []
+            for info in infos:
+                table_ref = f"{info['schema']}.{info['table']}"
+                try:
+                    fname = table_filename(info["schema"], info["table"])
+                    md = render_table_doc(schema=info["schema"], table=info["table"],
+                                          table_comment=info["table_comment"], columns=info["columns"])
+                    up = await client.upload_document(kb_id, fname, md)
+                    doc_id = up.get("document_id") if isinstance(up, dict) else None
+                    if not doc_id:
+                        results.append({
+                            "table": table_ref,
+                            "filename": fname,
+                            "document_id": None,
+                            "status": "upload_failed",
+                            "chunk_count": 0,
+                            "error": "upload_document 未返回 document_id",
+                        })
+                        continue
+                    doc = await client.wait_indexed(doc_id)
+                    results.append({
+                        "table": table_ref,
+                        "filename": fname,
+                        "document_id": doc.get("document_id", doc_id),
+                        "status": doc.get("status", "unknown"),
+                        "chunk_count": doc.get("chunk_count", 0),
+                        "error": doc.get("error_message", ""),
+                    })
+                except RagentClientError as exc:
+                    # 单表失败不影响其他表继续灌入
+                    results.append({
+                        "table": table_ref,
+                        "filename": fname if "fname" in locals() else "",
+                        "document_id": None,
+                        "status": "error",
+                        "chunk_count": 0,
+                        "error": str(exc),
+                    })
+                    continue
         return json.dumps(results, ensure_ascii=False, indent=2)
     except RagentClientError as exc:
-        return str(exc)
-    finally:
-        await client.aclose()
+        return _client_error(exc)
+    except Exception as exc:
+        return _client_error(exc)
 
 
 async def cmd_upsert_api_dictionary(arguments: dict) -> str:
@@ -86,56 +129,62 @@ async def cmd_upsert_api_dictionary(arguments: dict) -> str:
         auth=arguments.get("auth", ""),
         fields=fields,
     )
-    client = RagentClient()
     try:
-        kb_id = await client.ensure_kb(_kb_name())
-        fname = api_filename(name)
-        up = await client.upload_document(kb_id, fname, md)
-        doc = await client.wait_indexed(up["document_id"])
-        return json.dumps({
-            "name": name,
-            "filename": fname,
-            "document_id": doc.get("document_id", up["document_id"]),
-            "status": doc.get("status", "unknown"),
-            "chunk_count": doc.get("chunk_count", 0),
-            "error": doc.get("error_message", ""),
-        }, ensure_ascii=False, indent=2)
+        async with _client_context() as client:
+            kb_id = await client.ensure_kb(_kb_name())
+            fname = api_filename(name)
+            up = await client.upload_document(kb_id, fname, md)
+            doc_id = up.get("document_id") if isinstance(up, dict) else None
+            if not doc_id:
+                return f"upload_document 未返回 document_id：{up}"
+            doc = await client.wait_indexed(doc_id)
+            return json.dumps({
+                "name": name,
+                "filename": fname,
+                "document_id": doc.get("document_id", doc_id),
+                "status": doc.get("status", "unknown"),
+                "chunk_count": doc.get("chunk_count", 0),
+                "error": doc.get("error_message", ""),
+            }, ensure_ascii=False, indent=2)
     except RagentClientError as exc:
-        return str(exc)
-    finally:
-        await client.aclose()
+        return _client_error(exc)
+    except Exception as exc:
+        return _client_error(exc)
 
 
 async def cmd_search_dictionary(arguments: dict) -> str:
     query = (arguments.get("query") or "").strip()
     if not query:
         return "缺少必填参数 query"
-    top_k = int(arguments.get("top_k") or 5)
-    client = RagentClient()
     try:
-        kb_id = await client.ensure_kb(_kb_name())
-        data = await client.retrieve(query, [kb_id], top_k=top_k)
-        items = data.get("items", [])
-        if not items:
-            return f"字典库无匹配：{query}"
-        return json.dumps({"matches": items, "degraded": data.get("degraded", False)},
-                          ensure_ascii=False, indent=2)
+        top_k = int(arguments.get("top_k") or 5)
+    except ValueError as e:
+        return f"参数 top_k 应为整数：{e}"
+    try:
+        async with _client_context() as client:
+            kb_id = await client.ensure_kb(_kb_name())
+            data = await client.retrieve(query, [kb_id], top_k=top_k)
+            items = data.get("items", [])
+            if not items:
+                return f"字典库无匹配：{query}"
+            return json.dumps({"matches": items, "degraded": data.get("degraded", False)},
+                              ensure_ascii=False, indent=2)
     except RagentClientError as exc:
-        return str(exc)
-    finally:
-        await client.aclose()
+        return _client_error(exc)
+    except Exception as exc:
+        return _client_error(exc)
 
 
 async def cmd_list_dictionary_docs(arguments: dict) -> str:
-    client = RagentClient()
     try:
-        kb_id = await client.ensure_kb(_kb_name())
-        docs = await client.list_documents(kb_id)
-        return json.dumps(docs, ensure_ascii=False, indent=2)
+        async with _client_context() as client:
+            kb_id = await client.ensure_kb(_kb_name())
+            docs = await client.list_documents(kb_id)
+            return json.dumps(docs, ensure_ascii=False, indent=2)
     except RagentClientError as exc:
-        return str(exc)
-    finally:
-        await client.aclose()
+        return _client_error(exc)
+    except Exception as exc:
+        return _client_error(exc)
 
 
 # ── MCP 接线 ──
@@ -215,7 +264,7 @@ _DISPATCH = {
 async def handle_call_tool(name: str, arguments: dict[str, Any] | None) -> CallToolResult:
     handler = _DISPATCH.get(name)
     if handler is None:
-        raise ValueError(f"Unknown tool: {name}")
+        return CallToolResult(content=[TextContent(type="text", text=f"未知工具：{name}")])
     text = await handler(arguments or {})
     return CallToolResult(content=[TextContent(type="text", text=text)])
 
@@ -244,11 +293,7 @@ async def main():
         await server.run(
             read_stream,
             write_stream,
-            InitializationOptions(
-                server_name="ragent-dictionary",
-                server_version="1.0.0",
-                capabilities=ServerCapabilities(),
-            ),
+            server.create_initialization_options(),
         )
 
 
