@@ -10,7 +10,7 @@
 
 ## 已完成
 
-- [2026-08-07-dict-mcp-server](2026-08-07-dict-mcp-server.md) — 数据字典 MCP stdio 服务（A7）：server.py 装配 4 工具（ingest_table_schemas / upsert_api_dictionary / search_dictionary / list_dictionary_docs）+ 错误契约（DSN/必填/introspect/RagentClientError 均返中文可读文本）+ finally aclose + KB 名走 env；mcp 2.0 协议适配（on_list_tools/on_call_tool 构造期参数替代 1.x 装饰器，handle_* 模块级 async 函数单测可独立 await）；7 例单测全绿 + 192 passed 无回归
+- [2026-08-07-dict-mcp-server](2026-08-07-dict-mcp-server.md) — 数据字典 MCP 桥（A1-A8 全部完成）：A1 检索契约模型 / A2 嵌入降级 helper / A3 `/api/v1/retrieve` 端点 / A4 Markdown 渲染 / A5 PG 只读自省 / A6 HTTP 客户端 / A7 MCP stdio 服务装配；70 例定向测试 + 全量 195 passed 无回归；既有隐患 `app/api/kb.py::delete_kb` `DocRoleAccess` import 缺失登记为 follow-up（不动）
 
 - [2026-08-05-resilience-round2](2026-08-05-resilience-round2.md) — 二轮审查韧性修复（完成，193 passed）：429 不打熔断（RateLimitError）、熔断器线程安全、rerank 按 loop 重建、retrieval 同步 DB 解阻、摘要锁前移、标签空白容忍、重索引部分失败保旧索引（B1–B6 + D1/D2/D3/D6/D7）；DB 降级加固：熔断计数/穿透兜底/故障与无内容分流//health 探针（DB-1…DB-4）
 
