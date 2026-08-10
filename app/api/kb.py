@@ -1,7 +1,7 @@
 """Knowledge Base CRUD API."""
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import or_
-from app.store.db import get_session, KnowledgeBase, KBRoleAccess, Document, Chunk, PiiAlert, PiiHold
+from app.store.db import get_session, KnowledgeBase, KBRoleAccess, Document, Chunk, PiiAlert, PiiHold, DocRoleAccess
 from app.middleware.auth import get_current_user
 from app.models.schemas import KBCreateRequest, KBResponse, KBRoleAccessRequest
 
@@ -78,6 +78,13 @@ def delete_kb(kb_id: str, current_user: dict = Depends(get_current_user)):
         session.query(KBRoleAccess).filter(KBRoleAccess.kb_id == kb_id).delete()
         session.delete(kb)
         session.commit()
+
+        # 设计审查 P0-3 + P0-3 的健壮性：显式清理 doc_relations 入边/出边。
+        # 与 delete_document 一致，DB cascade 之外双保险（防旧表缺 FK）。
+        from app.store import pgvector_store
+        for did in doc_ids:
+            pgvector_store.delete_doc_relations_by_doc_id(did)
+
         return {"ok": True}
     finally:
         session.close()

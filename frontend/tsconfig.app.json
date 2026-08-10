@@ -9,6 +9,7 @@
     "jsxImportSource": "vue",
     "skipLibCheck": true,
     "noUnusedLocals": false,
+    "noEmit": true,
     "paths": {
       "@/*": ["./src/*"]
     }

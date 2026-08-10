@@ -43,9 +43,12 @@ def _get_workspace_kb_id(user_id: str) -> str:
 
 
 def _check_rate_limit(key: str, message: str = "登录尝试过于频繁，请稍后再试"):
-    # 限流桶是进程级 dict + 列表：多 worker 不可见（架构限制，按 CLAUDE.md
-    # Next up 排队），但单 worker 内并发登录/注册会竞态（list[:]= 重建中间并发
+    # 限流桶是进程级 dict + 列表：多 worker 下不可见，限额会被每个 worker
+    # 独立计（架构限制，按 CLAUDE.md Next up 排队——真正多 worker 需 Redis/
+    # 外部共享存储）。单 worker 内并发登录/注册会竞态（list[:]= 重建中间并发
     # append 可能丢计数导致限额失效）。整段锁内串行。
+    # 设计审查 P3-18：X-Forwarded-For 仅当应用部署在受信反代之后才可信——
+    # 客户端可直接伪造该头，若直接暴露给外部须改从 socket 直连地址取 key。
     with _LOGIN_LOCK:
         if len(_LOGIN_ATTEMPTS) > _RATE_LIMIT_MAX_KEYS:
             # key 只增不删会缓慢泄漏：超过上界整体清空重建（简单有界）

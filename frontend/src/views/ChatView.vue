@@ -120,6 +120,7 @@ const streaming = ref(false)
 const streamingContent = ref('')
 const currentSources = ref<SourceInfo[]>([])
 const streamDone = ref(false)
+const streamError = ref(false)
 const loadingMsgs = ref(false)
 const msgContainer = ref<HTMLElement | null>(null)
 const currentConvId = ref<string | null>(null)
@@ -137,6 +138,7 @@ function abortStream() {
     abortController.abort()
     abortController = null
   }
+  streamError.value = false
 }
 
 async function loadMessages(cid: string) {
@@ -147,8 +149,8 @@ async function loadMessages(cid: string) {
     messages.value = msgs.map(m => {
       // Backend now stores thinking_content separately; also support legacy <think> tags
       const thinkMatch = m.content.match(/<think>(.*?)<\/think>/s)
-      const think = thinkMatch ? thinkMatch[1].trim() : undefined
-      const clean = m.content.replace(/<think>.*?<\/think>/s, '').trim()
+      const think = m.thinking_content ?? (thinkMatch ? thinkMatch[1].trim() : undefined)
+      const clean = m.thinking_content ? m.content : m.content.replace(/<think>.*?<\/think>/s, '').trim()
       return {
         role: m.role,
         content: clean,
@@ -169,6 +171,7 @@ watch(() => props.currentConvId, async (id) => {
     streamingContent.value = ''
     streamDone.value = false
     streaming.value = false
+    streamError.value = false
     statusPhase.value = ''
     statusMsg.value = ''
     thinkText.value = ''
@@ -202,6 +205,7 @@ async function send() {
   streamingContent.value = ''
   currentSources.value = []
   streamDone.value = false
+  streamError.value = false
   statusPhase.value = ''
   statusMsg.value = ''
   thinkText.value = ''
@@ -226,15 +230,20 @@ async function send() {
     },
     undefined,
     () => {
-      messages.value.push({
-        role: 'assistant',
-        content: streamingContent.value,
-        sources: [...currentSources.value],
-        time: now(),
-        _think: thinkText.value || undefined,
-      })
+      // 设计审查 P0-2：后端 PII 拒答/降级先 error 再 done，onDone 无条件
+      // push 一条空助手气泡会双气泡。发生 error 时跳过，错误气泡由 onError 负责。
+      if (!streamError.value) {
+        messages.value.push({
+          role: 'assistant',
+          content: streamingContent.value,
+          sources: [...currentSources.value],
+          time: now(),
+          _think: thinkText.value || undefined,
+        })
+      }
       streaming.value = false
       streamingContent.value = ''
+      streamError.value = false
       streamDone.value = true
       statusPhase.value = ''
       statusMsg.value = ''
@@ -242,9 +251,13 @@ async function send() {
       scrollToBottom()
     },
     (err) => {
+      streamError.value = true
       messages.value.push({ role: 'assistant', content: `错误：${err}`, time: now() })
       streaming.value = false
       streamingContent.value = ''
+      streamDone.value = true
+      statusPhase.value = ''
+      statusMsg.value = ''
     },
     (thinking) => {
       // SSE thinking event — separate from answer text

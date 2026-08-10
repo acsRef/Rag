@@ -1,3 +1,6 @@
+from contextlib import asynccontextmanager
+from collections.abc import AsyncIterator
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.api.chat import router as chat_router
@@ -16,30 +19,11 @@ import asyncio
 import logging
 import uvicorn
 
-app = FastAPI(title="RAGent Py", version="0.2.0")
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["http://localhost:5173"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-app.include_router(auth_router)
-app.include_router(admin_router)
-app.include_router(kb_router)
-app.include_router(documents_router)
-app.include_router(chat_router)
-app.include_router(diag_router)
-app.include_router(retrieve_router)
-
-# 诊断遥测不再以静态目录暴露（曾无鉴权泄漏全量用户 query）：
-# JSON 一律经 /api/v1/diag/*（admin-only）访问；查看器 tools/diagnostics.html 从磁盘打开。
-
-
-@app.on_event("startup")
-def startup():
+@asynccontextmanager
+async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    """设计审查 P2-12：弃用 @app.on_event("startup") + get_event_loop()。
+    改 lifespan + asyncio.get_running_loop()（on_event 在 FastAPI 已废弃）。
+    """
     from app.core.logging import setup_logging
     setup_logging()
     logger = logging.getLogger(__name__)
@@ -50,7 +34,7 @@ def startup():
         raise RuntimeError("请设置环境变量 PII_ENCRYPTION_KEY，不要使用默认值")
     # 保存主事件循环引用,供后台 ingestion 线程 emit SSE 事件
     from app.api.documents import set_main_loop
-    set_main_loop(asyncio.get_event_loop())
+    set_main_loop(asyncio.get_running_loop())
     init_db()
     seed_defaults()
     seed_pii_rules()
@@ -76,6 +60,29 @@ def startup():
         if session:
             session.close()
     logger.info("RAGent-py startup complete")
+    yield
+
+
+app = FastAPI(title="RAGent Py", version="0.2.0", lifespan=lifespan)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+app.include_router(auth_router)
+app.include_router(admin_router)
+app.include_router(kb_router)
+app.include_router(documents_router)
+app.include_router(chat_router)
+app.include_router(diag_router)
+app.include_router(retrieve_router)
+
+# 诊断遥测不再以静态目录暴露（曾无鉴权泄漏全量用户 query）：
+# JSON 一律经 /api/v1/diag/*（admin-only）访问；查看器 tools/diagnostics.html 从磁盘打开。
 
 
 @app.get("/health")

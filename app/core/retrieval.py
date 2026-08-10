@@ -83,7 +83,7 @@ def _search_kb(
         return []
 
 
-def _collect_results(
+async def _collect_results(
     kb_ids: list[str],
     query_emb: list[float],
     query: str,
@@ -94,9 +94,25 @@ def _collect_results(
     results: list[dict],
     user_id: str = "",
 ):
-    for kb_id in kb_ids:
-        chunks = _search_kb(kb_id, query_emb, query, user_role_ids, can_read_all, top_k,
-                            user_id=user_id)
+    """设计审查 P1-7：并行检索各 KB，再在主协程归并去重。
+
+    旧实现逐 KB 串行调 _search_kb（每 KB 最多 4 次顺序 DB 查询）。现在
+    asyncio.gather 并行各 KB（各搜索经 to_thread 跑在线程池）；去重/标注
+    在事件循环内由 gather 顺序收集后统一处理，天然线程竞态安全。
+    """
+    if not kb_ids:
+        return
+    per_kb = await asyncio.gather(
+        *(asyncio.to_thread(
+            _search_kb, kb_id, query_emb, query, user_role_ids, can_read_all, top_k,
+            user_id=user_id) for kb_id in kb_ids),
+        return_exceptions=True,
+    )
+    for kb_id, chunks in zip(kb_ids, per_kb):
+        if isinstance(chunks, BaseException):
+            # 单个 KB 检索失败不应拖垮整轮（_search_kb 内部已计入熔断）
+            logger.warning("retrieve.kb_failed kb_id=%s err=%r", kb_id, chunks)
+            continue
         for c in chunks:
             if c["chunk_id"] not in seen_ids:
                 seen_ids.add(c["chunk_id"])
@@ -160,8 +176,8 @@ class RetrievalEngine:
         seen_ids: set[str] = set()
         results: list[dict] = []
 
-        await asyncio.to_thread(
-            _collect_results, target_kb_ids, query_emb, query,
+        await _collect_results(
+            target_kb_ids, query_emb, query,
             user_role_ids, can_read_all, top_k, seen_ids, results,
             user_id,
         )
@@ -172,8 +188,8 @@ class RetrievalEngine:
                 # 同步 DB 调用必须 to_thread
                 all_kb_ids = await asyncio.to_thread(pgvector_store.list_kb_ids)
                 fallback = [k for k in all_kb_ids if k not in target_kb_ids]
-                await asyncio.to_thread(
-                    _collect_results, fallback, query_emb, query,
+                await _collect_results(
+                    fallback, query_emb, query,
                     user_role_ids, can_read_all, top_k, seen_ids, results,
                     user_id,
                 )

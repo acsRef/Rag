@@ -15,27 +15,15 @@ import time
 from datetime import timedelta
 
 import jieba
-from sqlalchemy import text
+from sqlalchemy import text, func
 from app.store.db import get_session, Chunk, ChunkQuestion, utc_now
 from app.config import settings
 
 logger = logging.getLogger(__name__)
 
 # ── 通用中文停用词表 (用于 BM25 索引和查询端去噪) ─────────────
-_STOP_WORDS = frozenset({
-    "的", "了", "在", "是", "我", "有", "和", "就", "不", "人", "都", "一",
-    "一个", "上", "也", "很", "到", "说", "要", "去", "你", "会", "着",
-    "没有", "看", "好", "自己", "这", "那", "哪", "谁",
-    "什么", "怎么", "为什么", "如何", "是否", "怎样", "哪个", "何时", "何处",
-    "表示", "意思", "含义", "说明", "解释", "叫做", "称为", "意指",
-    "请", "请问", "能", "可以", "应该", "需要", "可能", "必须",
-    "对", "对于", "关于", "把", "被", "让", "给", "向", "从", "在",
-    "与", "及", "或", "但", "而", "且", "如果", "因为", "所以", "但是",
-    "之", "其", "该", "此", "每", "各", "某",
-    "个", "种", "些", "等", "等等", "及", "以及",
-    "来", "去", "做", "为", "以", "所", "将", "已", "可",
-    "吗", "呢", "啊", "吧", "哦", "呀", "嗯",
-})
+# 设计审查 P2-13：单一共享定义，见 app/core/stopwords.py
+from app.core.stopwords import STOP_WORDS as _STOP_WORDS
 
 
 def add_chunks(chunks_data: list[dict]):
@@ -633,6 +621,53 @@ def get_all_doc_ids_with_entities(kb_ids: list[str] | None = None) -> list[str]:
         session.close()
 
 
+def get_global_df() -> tuple[dict[str, int], int]:
+    """设计审查 P1-8：SQL 聚合全局 DF，避免把全量实体拖进内存。
+
+    Returns (df_dict, total_docs)：df_dict[entity] = 含该实体的不同文档数。
+    doc_entities 只存 freq>=2 的实体（extract 已过滤），等价于旧内存版
+    refresh_global_stats 的"seen_in_doc 去重后计数"。
+    """
+    from app.store.db import DocEntity
+    session = get_session()
+    try:
+        rows = (
+            session.query(
+                DocEntity.entity,
+                func.count(func.distinct(DocEntity.document_id)),
+            ).group_by(DocEntity.entity).all()
+        )
+        df = {entity: cnt for entity, cnt in rows}
+        total = session.query(
+            func.count(func.distinct(DocEntity.document_id))
+        ).scalar() or 0
+        return df, total
+    finally:
+        session.close()
+
+
+def get_doc_ids_with_any_entity(terms: list[str]) -> list[str]:
+    """candidate 收敛：返回含任一给定实体的文档 id（去重）。
+
+    供 DocRelationBuilder.update_for_document 只评估与本文档有实体重叠的
+    文档，替代 get_all_doc_ids_with_entities + get_doc_entities_bulk(all)。
+    """
+    if not terms:
+        return []
+    from app.store.db import DocEntity
+    session = get_session()
+    try:
+        rows = (
+            session.query(DocEntity.document_id)
+            .filter(DocEntity.entity.in_(terms))
+            .distinct()
+            .all()
+        )
+        return [r[0] for r in rows]
+    finally:
+        session.close()
+
+
 def get_doc_relations(doc_id: str) -> list[dict]:
     from app.store.db import DocRelation
     session = get_session()
@@ -784,109 +819,6 @@ def upsert_doc_embedding(document_id: str, embedding: list[float], chunk_count: 
         session.close()
 
 
-def _clean_tables_in_text(text: str) -> str:
-    """Find markdown table blocks within chunk text and convert to natural language.
-
-    Handles chunk text with section path prefix like:
-        【产品规格书 / 2.3 指示灯说明】
-        ### 2.3 指示灯说明
-        | 指示灯 | 颜色 | 状态含义 |
-        |--------|------|---------|
-        | PWR | 绿色常亮 | 设备供电正常 |
-    """
-    from app.ingestion.chunker import _clean_table_text as _table_cleaner
-    lines = text.split("\n")
-    result: list[str] = []
-    in_table = False
-    table_lines: list[str] = []
-    for line in lines:
-        stripped = line.strip()
-        if stripped.startswith("|") and stripped.endswith("|"):
-            if not in_table:
-                in_table = True
-                table_lines = []
-            table_lines.append(stripped)
-        else:
-            if in_table:
-                in_table = False
-                cleaned = _table_cleaner("\n".join(table_lines))
-                result.append(cleaned)
-            result.append(line)
-    if in_table:
-        cleaned = _table_cleaner("\n".join(table_lines))
-        result.append(cleaned)
-    return "\n".join(result)
-
-
-def clean_all_table_chunks(batch_size: int = 20) -> int:
-    """Re-process all existing chunks that contain markdown tables.
-
-    Applies _clean_table_text to chunk text, re-embeds cleaned text,
-    and updates text/embedding/search_text in the database.
-
-    Returns the number of chunks updated.
-    """
-    _SQL = text("SELECT chunk_id, document_id, text, embedding FROM chunks WHERE text LIKE '%|%'")
-    session = get_session()
-    try:
-        rows = session.execute(_SQL).fetchall()
-    finally:
-        session.close()
-
-    if not rows:
-        return 0
-
-    logger.info("table_clean.start found=%d", len(rows))
-    from app.llm.embedding import sf_embedding
-    import asyncio
-
-    update_count = 0
-    for i in range(0, len(rows), batch_size):
-        batch = rows[i:i + batch_size]
-        clean_texts: list[str] = []
-        chunk_ids: list[str] = []
-
-        for r in batch:
-            chunk_id, doc_id, raw, emb = r
-            cleaned = _clean_tables_in_text(raw)
-            if cleaned != raw:
-                clean_texts.append(cleaned)
-                chunk_ids.append(chunk_id)
-
-        if not clean_texts:
-            continue
-
-        try:
-            emb_results = asyncio.run(sf_embedding.embed_with_fallback(clean_texts))
-        except Exception:
-            logger.exception("table_clean.embed_failed batch=%d", i // batch_size)
-            continue
-
-        new_session = get_session()
-        try:
-            for cid, cleaned, (new_emb, err) in zip(chunk_ids, clean_texts, emb_results):
-                if new_emb is None:
-                    logger.warning("table_clean.skip_embed_failed chunk=%s err=%s", cid[:12], err)
-                    continue
-                from app.store.pgvector_store import tokenize
-                new_search = tokenize(cleaned)
-                new_session.execute(
-                    text("UPDATE chunks SET text = :txt, embedding = :emb, search_text = :st "
-                         "WHERE chunk_id = :cid"),
-                    {"txt": cleaned, "emb": new_emb, "st": new_search, "cid": cid},
-                )
-                update_count += 1
-            new_session.commit()
-        except Exception:
-            new_session.rollback()
-            logger.exception("table_clean.update_failed batch=%d", i // batch_size)
-        finally:
-            new_session.close()
-
-        logger.info("table_clean.batch_done batch=%d updated=%d", i // batch_size, update_count)
-
-    logger.info("table_clean.done total_updated=%d", update_count)
-    return update_count
 
 
 _CHUNKS_PER_NEIGHBOR_DOC = 10   # 跨文档邻居每文档上限：代表性上下文即可，最终条数由 rerank_top_k 收口

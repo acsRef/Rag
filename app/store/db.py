@@ -9,7 +9,14 @@ from app.config import settings
 
 Base = declarative_base()
 
-engine = create_engine(settings.database_url, echo=False, pool_pre_ping=True)
+# 设计审查 P2-16：connect_timeout=2 让 /health 探针在 DB 失连时快速失败，
+# 不因驱动默认长超时挂起（pool_pre_ping 已开，仅负责断连检测）。
+engine = create_engine(
+    settings.database_url,
+    echo=False,
+    pool_pre_ping=True,
+    connect_args={"connect_timeout": 2},
+)
 SessionLocal = sessionmaker(bind=engine)
 
 

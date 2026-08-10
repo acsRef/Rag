@@ -240,11 +240,14 @@ async def upload_document(
     if "doc.upload" not in current_user["permissions"]:
         raise HTTPException(status_code=403, detail="Permission denied")
     if not can_read_all:
-        from app.store.db import KnowledgeBase
-        with get_db_ctx() as session:
-            kb = session.query(KnowledgeBase).filter(KnowledgeBase.id == kb_id).first()
-            if not kb or kb.owner_id != current_user["id"]:
-                raise HTTPException(status_code=403, detail="无权向该知识库上传文档")
+        # 设计审查 P1-11：同步 DB 查询包 to_thread，避免阻塞事件循环
+        def _owns_kb() -> bool:
+            from app.store.db import KnowledgeBase
+            with get_db_ctx() as session:
+                kb = session.query(KnowledgeBase).filter(KnowledgeBase.id == kb_id).first()
+                return bool(kb and kb.owner_id == current_user["id"])
+        if not await asyncio.to_thread(_owns_kb):
+            raise HTTPException(status_code=403, detail="无权向该知识库上传文档")
 
     max_bytes = settings.max_upload_size_mb * 1024 * 1024
     if file.size is not None and file.size > max_bytes:
@@ -259,9 +262,14 @@ async def upload_document(
             detail=f"文件过大（{len(content)//1024//1024}MB），最大允许 {settings.max_upload_size_mb}MB",
         )
 
-    visibility, allowed_roles = _get_kb_visibility(kb_id)
-    resolved_id = _ensure_document_id(_resolve_document_id(file.filename or "unknown", kb_id, document_id))
-    _upsert_processing_document(resolved_id, file.filename or "unknown", kb_id, current_user["id"])
+    # 设计审查 P1-11：三个同步 DB 调用包 to_thread
+    visibility, allowed_roles = await asyncio.to_thread(_get_kb_visibility, kb_id)
+    resolved_id = _ensure_document_id(
+        await asyncio.to_thread(_resolve_document_id, file.filename or "unknown", kb_id, document_id)
+    )
+    await asyncio.to_thread(
+        _upsert_processing_document, resolved_id, file.filename or "unknown", kb_id, current_user["id"]
+    )
 
     background_tasks.add_task(
         _run_ingestion_background,
@@ -283,7 +291,7 @@ async def upload_document(
 
 
 @router.get("", response_model=list[DocumentListItem])
-async def list_documents(
+def list_documents(
     current_user: dict = Depends(get_current_user),
     limit: int = 50,
     offset: int = 0,
@@ -335,6 +343,12 @@ def delete_document(document_id: str, current_user: dict = Depends(get_current_u
         session.delete(doc)
         session.commit()
 
+    # 设计审查 P0-3：清理 doc_relations 入边/出边。DB 级 ondelete=CASCADE 对
+    # 建表时带 FK 的库有效，但 init_db 用 CREATE TABLE IF NOT EXISTS——若线上
+    # 表早于该 FK 存在，cascade 缺失会泄漏关系边，故显式调用 helper 双保险。
+    from app.store import pgvector_store
+    pgvector_store.delete_doc_relations_by_doc_id(document_id)
+
     return {"message": "Document deleted", "document_id": document_id}
 
 
@@ -381,7 +395,7 @@ async def document_events(request: Request):
 
 
 @router.get("/{document_id}", response_model=DocumentStatusResponse)
-async def get_document(document_id: str, current_user: dict = Depends(get_current_user)):
+def get_document(document_id: str, current_user: dict = Depends(get_current_user)):
     with get_db_ctx() as session:
         record = session.query(Document).filter_by(document_id=document_id).first()
         if not record:

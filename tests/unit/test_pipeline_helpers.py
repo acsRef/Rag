@@ -27,6 +27,12 @@ def test_decomp_no_false_positive_on_common_words():
     assert _needs_decomposition("其实我不确定") is False
 
 
+def test_decomp_qi_ta_not_anaphoric():
+    """设计审查 P2-15：`它` 命中的 `其它` 不是代词，不应触发分解。"""
+    assert _needs_decomposition("其它方案可以吗") is False
+    assert _needs_decomposition("其他方案可以吗") is False
+
+
 # ── _sse_safe ───────────────────────────────────────────
 
 def test_sse_safe_escapes_newline_and_strips_cr():

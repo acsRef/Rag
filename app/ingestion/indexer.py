@@ -31,6 +31,27 @@ def _content_hash(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
+def _collect_future_pair(meta_fut, embed_fut):
+    """设计审查 P0-5：成对取并行 future 结果；任一失败时取消并吞掉另一个。
+
+    旧实现 `_meta_fut.result()` 抛异常时 `_embed_fut` 不被 await/cancel，
+    embedding 线程悬空、异常静默丢失。这里保证异常路径下另一个 future
+    也被收尾（cancel 未启动的 / exception() 等待跑完），不悬空线程。
+    """
+    try:
+        return meta_fut.result(), embed_fut.result()
+    except BaseException:
+        for fut in (meta_fut, embed_fut):
+            if not fut.done():
+                fut.cancel()
+        for fut in (meta_fut, embed_fut):
+            try:
+                fut.exception()
+            except BaseException:
+                pass
+        raise
+
+
 # ── 摄入进度事件：user 定向 + 节流 ─────────────────────────
 # 旧实现每个 chunk 向所有 SSE 订阅者广播一次（500 块 = 500 条 × 全员），
 # 还会把别人文档的 id/状态/报错推给无关用户。现按 5% 桶节流 + 携带 user_id。
@@ -103,8 +124,6 @@ class DocumentIndexer:
                 "status": "failed",
                 "chunk_count": 0,
             }
-        doc_hash = _content_hash(text)
-
         pii_findings_cache = None  # cache PII scan to avoid 3x pass
         if settings.pii_enabled:
             from app.core.pii_scanner import scan, scan_and_reject, mask_text
@@ -115,6 +134,10 @@ class DocumentIndexer:
             pii_findings_cache = scan(text)
             text = mask_text(text, findings=pii_findings_cache)
             logger.debug("ingest.pii_masked doc=%s mask_count=%d", u_tag, len(pii_findings_cache))
+
+        # 设计审查 P0-6：content_hash 必须基于脱敏后文本——存储内容变了 hash 才变，
+        # PII 规则变更后重传才会真正重索引。旧顺序（先 hash 再 mask）会跳过重传。
+        doc_hash = _content_hash(text)
 
         existing = None
         if document_id:
@@ -192,8 +215,7 @@ class DocumentIndexer:
                     sf_embedding.embed_with_fallback([c.text for c in new_chunks])
                 )
             )
-            new_chunks = _meta_fut.result()
-            embed_results = _embed_fut.result()
+            new_chunks, embed_results = _collect_future_pair(_meta_fut, _embed_fut)
         else:
             embed_results = []
         new_idx = 0

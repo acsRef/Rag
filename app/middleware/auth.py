@@ -1,5 +1,6 @@
 """JWT authentication middleware."""
 import asyncio
+import time
 from datetime import datetime, timedelta, timezone
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
@@ -12,16 +13,37 @@ bearer_required = HTTPBearer(auto_error=True)
 bearer_optional = HTTPBearer(auto_error=False)
 
 _admin_role_id: int | None = None
+_admin_role_ts: float = 0.0
+_ADMIN_ROLE_TTL = 300.0   # 设计审查 P3-18：admin 角色 id 缓存加 TTL，避免永不过期
+
+# 设计审查 P1-10：每请求 3 次 DB 查询（user + roles + permissions），
+# 按 user_id 做进程内 TTL 缓存（60s）。角色/权限变更走 invalidate_user_cache。
+_user_cache: dict[str, tuple[float, dict]] = {}
+_USER_CACHE_TTL = 60.0
+
+
+def invalidate_user_cache(user_id: str) -> None:
+    """角色/权限变更后调用，使该用户下次鉴权立即重查而非等 TTL。"""
+    _user_cache.pop(user_id, None)
+
+
+def invalidate_admin_role() -> None:
+    """设计审查 P3-18：admin 角色 id 缓存显式失效（角色变更后调用）。"""
+    global _admin_role_id, _admin_role_ts
+    _admin_role_id = None
+    _admin_role_ts = 0.0
 
 
 def _get_admin_role_id() -> int:
-    global _admin_role_id
-    if _admin_role_id is None:
+    global _admin_role_id, _admin_role_ts
+    now = time.monotonic()
+    if _admin_role_id is None or (now - _admin_role_ts) >= _ADMIN_ROLE_TTL:
         from app.store.db import get_session, Role
         session = get_session()
         try:
             role = session.query(Role).filter(Role.name == "admin").first()
             _admin_role_id = role.id if role else 0
+            _admin_role_ts = now
         finally:
             session.close()
     return _admin_role_id
@@ -42,9 +64,13 @@ def decode_token(token: str) -> dict | None:
 
 
 def _build_user_dict(user) -> dict:
+    now = time.monotonic()
+    cached = _user_cache.get(user.id)
+    if cached and (now - cached[0]) < _USER_CACHE_TTL:
+        return cached[1]
     role_ids = get_user_role_ids(user.id)
     permissions = get_user_permissions(user.id)
-    return {
+    d = {
         "id": user.id,
         "username": user.username,
         "display_name": user.display_name,
@@ -52,6 +78,8 @@ def _build_user_dict(user) -> dict:
         "permissions": permissions,
         "is_admin": _get_admin_role_id() in role_ids,
     }
+    _user_cache[user.id] = (now, d)
+    return d
 
 
 def _resolve_token(credentials: HTTPAuthorizationCredentials | None) -> dict | None:

@@ -15,7 +15,7 @@
 
 ## 2. Build / Lint / Test 命令
 
-**本仓库没有 pytest/tests/ 目录,不要创建。**
+**仓库含 `tests/`,pytest 按 `unit` / `integration` / `live_llm` 标记组织。**
 
 ```bash
 # 启动数据库
@@ -25,7 +25,16 @@ docker compose up -d
 D:/miniConda/envs/rag/python.exe -m app.main
 LOG_LEVEL=DEBUG python -m app.main  # DEBUG 日志看检索细节
 
-# 验证 import 链(替代测试)
+# 离线单测(禁触真实 DB/网络/LLM,凭据已哨兵化)
+D:/miniConda/envs/rag/python.exe -m pytest tests/unit -q
+
+# 全量(unit + integration,integration 用 ragent_test 库,PG 不可达自动跳过)
+D:/miniConda/envs/rag/python.exe -m pytest -q
+
+# 真实 API 用例(需 .env 真实 key,约 10 分钟,默认跳过)
+RAGENT_LIVE_LLM=1 D:/miniConda/envs/rag/python.exe -m pytest tests/integration -m live_llm -v
+
+# import 链校验
 D:/miniConda/envs/rag/python.exe -c "import app.main"
 
 # 前端(在 frontend/ 目录)
@@ -184,7 +193,7 @@ Parser(多格式→Markdown) → Cleaner → Structurer → Chunker
 - ❌ 不要删/改 PII 5 条默认规则(可加新规则)
 - ❌ 不要在前端引入 icon 库(emoji + 内联 SVG)
 - ❌ 不要 commit 真实 API key(`.env` 在 gitignore 中)
-- ❌ 不要创建 `tests/` 目录或 pytest 测试文件
+- ✅ 新纯逻辑必须配套 `tests/unit` 离线单测;DB 行为用 `tests/integration`,勿连真实 LLM;真实 API 用例打 `live_llm` 标记(默认跳过)
 - ❌ 不要引入 `trace_id`/`contextvars`(项目决策:不用全链路追踪)
 - ❌ 不要阻塞事件循环 — 所有 LLM I/O 是 async,DB 操作需用 `asyncio.to_thread`
 
@@ -230,7 +239,7 @@ if isinstance(typed, PermanentError):
 | 决策 | 理由 |
 |------|------|
 | 不用全链路追踪(trace_id/contextvars) | 复杂度增加 > 收益,诊断已够用 |
-| 无 pytest/tests 目录 | import chain + 端到端手动验证替代 |
+| pytest 分层:unit 离线 / integration 用 ragent_test 库(不写 dev 库、不触真实 LLM)/ live_llm 需真实 key 默认跳过 | 离线与 CI 稳定,线上行为留给 live 标记 |
 | 增量 hash 复用 | 避免重复 embedding,大幅降低 SiliconFlow 调用量 |
 | PII 三层:正则有->算法验->上下文排除 | 减少误报,支持 "sample/test" 内容白名单 |
 | LLM 懒加载按 event loop 重建 | Windows + uvicorn reload 场景避免事件循环错乱 |

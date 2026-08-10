@@ -10,6 +10,7 @@
 
 ## 已完成
 
+- [2026-08-06-design-review-fixes](2026-08-06-design-review-fixes.md) — 设计审查遗留修复（19 项，全量 284 passed + npm build 通过，分支 fix/design-review-fixes）：P0 diagnostics 开关生效、前端错误双气泡、删除清入边（DB cascade 已生效 + 修 `delete_kb` `DocRoleAccess` 未导入真正 500 bug）、thinking_content 回传、索引器孤儿 future (`_collect_future_pair`)、content_hash 后置 PII；P1 检索并行 (`asyncio.gather`)、跨文档 DF SQL 聚合 + candidate 收敛、neighbor 瘦查询（已达标）、auth TTL 缓存、documents to_thread；P2 lifespan、停用词合并、clean 工具外移 tools/、改写正则 `其它` 误报、engine connect_timeout；P3 tsconfig noEmit、admin_role 缓存失效 + 限流注释；P4 AGENTS.md 修正
 - [2026-08-10-schema-faq-mcp](2026-08-10-schema-faq-mcp.md) — Schema FAQ MCP（Phase A）commit `94c4930`；追加跨进程 token 缓存 commit `e2ff172`（`mcp_server/token_cache.py`，根治登录 429，`RagentClient._login` 命中共享缓存不再登录，401 自动失效重登） — Schema FAQ MCP（Phase A）：独立 FAQ 知识库 + `ingest_faq`/`search_faq`/`list_faq_docs` 工具 + `faq_seed.json` 20 条种子；`render_faq_doc` 单 chunk 渲染；全量 211 passed 无回归
 - [2026-08-07-dict-mcp-server](2026-08-07-dict-mcp-server.md) — 数据字典 MCP 桥（A1-A8 全部完成）：A1 检索契约模型 / A2 嵌入降级 helper / A3 `/api/v1/retrieve` 端点 / A4 Markdown 渲染 / A5 PG 只读自省 / A6 HTTP 客户端 / A7 MCP stdio 服务装配；70 例定向测试 + 全量 195 passed 无回归；既有隐患 `app/api/kb.py::delete_kb` `DocRoleAccess` import 缺失登记为 follow-up（不动）
 

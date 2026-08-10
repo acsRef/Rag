@@ -107,8 +107,10 @@ def _needs_decomposition(query: str) -> bool:
 
     # Rule 4: anaphoric pronouns (need resolution from context)
     # 不用裸单字 其/该/他/她——会误报 其他/其实/尤其/该文件 等常见词，
-    # 给无代词查询强加一次 LLM 改写
-    if re.search(r"(它|他们|她们|它们|这个|那个|这些|那些|这位|那位|上述|前面|上文)", query):
+    # 给无代词查询强加一次 LLM 改写。
+    # 设计审查 P2-15：`(?<!其)它` 排除 `其它`（其+它 的它非代词）；`他们` 等
+    # 多字代词不受影响，`其他` 的 他 无裸 他 规则故天然不命中。
+    if re.search(r"((?<!其)它|他们|她们|它们|这个|那个|这些|那些|这位|那位|上述|前面|上文)", query):
         return True
 
     return False

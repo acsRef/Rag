@@ -56,6 +56,10 @@ def update_user_roles(user_id: str, body: UserRoleUpdateRequest, current_user: d
                 if rid not in existing_role_ids:
                     raise HTTPException(status_code=400, detail=f"角色 {rid} 不存在")
         set_user_roles(user_id, body.role_ids)
+        # 设计审查 P1-10：角色变更后失效该用户的鉴权缓存，避免下次请求读旧权限
+        from app.middleware.auth import invalidate_user_cache, invalidate_admin_role
+        invalidate_user_cache(user_id)
+        invalidate_admin_role()
         return {"ok": True}
     finally:
         session.close()
@@ -78,6 +82,9 @@ def create_new_role(body: CreateRoleRequest, current_user: dict = Depends(get_cu
     role = create_role(body.name, body.description)
     if body.permissions:
         set_role_permissions(role.id, body.permissions)
+    # 设计审查 P3-18：角色表变更后失效 admin 角色 id 缓存
+    from app.middleware.auth import invalidate_admin_role
+    invalidate_admin_role()
     return {"id": role.id, "name": role.name}
 
 class PiiAlertItem(BaseModel):

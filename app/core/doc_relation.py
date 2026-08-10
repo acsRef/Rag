@@ -38,24 +38,8 @@ logger = logging.getLogger(__name__)
 
 # ── Constants ────────────────────────────────────────────────────────────
 
-_STOPWORDS: frozenset[str] = frozenset({
-    "的", "了", "在", "是", "我", "有", "和", "就", "不", "人", "都", "一",
-    "一个", "上", "也", "很", "到", "说", "要", "去", "你", "会", "着",
-    "没有", "看", "好", "自己", "这", "他", "她", "它", "们", "那", "些",
-    "与", "及", "等", "或", "但", "而", "且", "如果", "因为", "所以",
-    "可以", "能够", "应该", "必须", "可能", "已经", "还", "更", "最",
-    "被", "把", "对", "从", "向", "于", "以", "为", "由",
-    "the", "a", "an", "of", "in", "to", "is", "for", "on", "and",
-    "or", "but", "with", "as", "at", "by", "from", "that", "this",
-    "are", "was", "were", "been", "be", "have", "has", "had", "do",
-    "does", "did", "will", "would", "can", "could", "may", "might",
-    "shall", "should", "about", "into", "through", "during", "before",
-    "after", "above", "below", "up", "down", "out", "off", "over",
-    "under", "again", "further", "then", "once", "here", "there",
-    "when", "where", "why", "how", "all", "each", "every", "both",
-    "few", "more", "most", "other", "some", "such", "no", "nor",
-    "not", "only", "own", "same", "so", "than", "too", "very",
-})
+# 设计审查 P2-13：单一共享停用词表，见 app/core/stopwords.py
+from app.core.stopwords import STOP_WORDS as _STOPWORDS
 
 # Tunables — promote to Settings if these need operator-facing knobs.
 _MIN_TERM_FREQ = 2
@@ -102,14 +86,23 @@ class TfidfFeatureExtractor:
         self._total_docs: int = 0
 
     def refresh_global_stats(
-        self, all_docs_entities: dict[str, list[tuple[str, int]]]
+        self,
+        all_docs_entities: dict[str, list[tuple[str, int]]] | None = None,
+        *,
+        use_db: bool = False,
     ) -> None:
         """Compute global document frequency across all docs.
 
-        NOTE: Loads ALL document entities into memory. For N > 5000,
-        consider a global DF cache updated incrementally rather than
-        full recompute on every document update.
+        设计审查 P1-8：`use_db=True` 时走 `pgvector_store.get_global_df()`
+        SQL 聚合，不再把全量实体拖进内存（语料超大时 O(N) 恢复为 SQL GROUP BY）。
+        保留内存路径供 rebuild_all 全量重建用。
         """
+        if use_db:
+            df, total = pgvector_store.get_global_df()
+            self._global_df = df
+            self._total_docs = total
+            return
+        all_docs_entities = all_docs_entities or {}
         df: dict[str, int] = {}
         for entities in all_docs_entities.values():
             seen_in_doc: set[str] = set()
@@ -236,15 +229,17 @@ class DocRelationBuilder:
         except Exception:
             logger.exception("cross_doc.doc_embedding_failed doc=%s", doc_id[:8])
 
-        all_ids = pgvector_store.get_all_doc_ids_with_entities()
+        # 设计审查 P1-8：candidate 收敛为"与本文档实体有重叠的文档"——
+        # 无重叠者 cosine 必为 0(阈值下解)，无需全量拖进内存。global DF 走 SQL 聚合。
+        all_ids = pgvector_store.get_doc_ids_with_any_entity(
+            [e for e, _ in doc_entities]
+        )
         other_ids = [did for did in all_ids if did != doc_id]
         if not other_ids:
             return
 
+        self._extractor.refresh_global_stats(use_db=True)
         others_entities = pgvector_store.get_doc_entities_bulk(other_ids)
-        all_entities_map: dict[str, list[tuple[str, int]]] = {doc_id: doc_entities}
-        all_entities_map.update(others_entities)
-        self._extractor.refresh_global_stats(all_entities_map)
 
         relations: list[dict] = []
         for other_id, other_entities in others_entities.items():

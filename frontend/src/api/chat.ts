@@ -20,6 +20,7 @@ export interface SourceInfo {
 export interface ChatMessage {
   role: 'user' | 'assistant'
   content: string
+  thinking_content?: string | null
   created_at?: string
 }
 

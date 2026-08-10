@@ -5,6 +5,32 @@ from app.core.doc_relation import cross_doc_retriever
 from app.store import pgvector_store
 
 
+def test_global_df_aggregates_from_db(ingest_docs):
+    """设计审查 P1-8：global DF 走 SQL 聚合，不再把全量实体拖进内存。"""
+    df, total = pgvector_store.get_global_df()
+    assert total >= 3
+    assert df, "不应为空"
+    # 共享实体（如 Transformer）至少出现在 2 个文档
+    shared = max(df.values())
+    assert shared >= 2
+
+
+def test_doc_ids_with_any_entity_converges_candidates(ingest_docs):
+    """candidate 收敛：只返回与给定实体有重叠的文档。"""
+    doc1 = ingest_docs["transformer_basics.md"]
+    doc2 = ingest_docs["transformer_pytorch.md"]
+    doc3 = ingest_docs["rag_chunking.md"]
+
+    entities = pgvector_store.get_doc_entities_bulk([doc1]).get(doc1)
+    assert entities
+    terms = [e for e, _ in entities[:5]]
+
+    cands = pgvector_store.get_doc_ids_with_any_entity(terms)
+    assert doc1 in cands
+    assert doc2 in cands          # 共享术语 → 入选
+    assert doc3 not in cands      # 无实体重叠 → 不入选（语料有界）
+
+
 def test_get_chunks_by_document_includes_document_id(ingest_docs):
     chunks = pgvector_store.get_chunks_by_document(ingest_docs["transformer_basics.md"])
     assert chunks
@@ -73,8 +99,8 @@ async def test_cross_doc_extras_reach_final_results(ingest_docs, monkeypatch):
     for i, c in enumerate(d1_chunks):
         c["score"] = 0.02 - i * 0.001   # RRF 量级的直连分
 
-    def fake_collect(kb_ids, query_emb, query, user_role_ids, can_read_all,
-                     top_k, seen_ids, results, user_id=""):
+    async def fake_collect(kb_ids, query_emb, query, user_role_ids, can_read_all,
+                           top_k, seen_ids, results, user_id=""):
         for c in d1_chunks:
             seen_ids.add(c["chunk_id"])
             results.append(dict(c))

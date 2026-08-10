@@ -264,6 +264,42 @@ def test_ingest_masks_pii_before_persist(integration_db, fake_llm_stack):
         assert "110***********002X" in c["text"]
 
 
+def test_content_hash_is_post_pii(integration_db, fake_llm_stack):
+    """设计审查 P0-6：content_hash 须基于脱敏后文本，而非原始文本。
+
+    旧实现 `doc_hash = _content_hash(text)` 在 PII mask 之前执行，落库内容已
+    脱敏、hash 却基于原文——PII 规则变更后重传被 hash 跳过，垃圾内容永不重索引。
+    """
+    from app.config import settings
+    from app.ingestion.cleaner import document_cleaner
+    from app.ingestion.indexer import document_indexer, _content_hash
+    from app.ingestion.parser import document_parser
+    from app.store.db import get_db_ctx, Document
+
+    evil = "# 体检说明\n\n受检者证件号 11010519491231002X 请核查。\n" * 3
+    doc_id = _precreate_document_row("pii-hash.md")
+    res = document_indexer.index("pii-hash.md", evil.encode("utf-8"),
+                                 kb_id="test-kb", user_id="test-user",
+                                 document_id=doc_id)
+    assert res["status"] == "indexed"
+
+    with get_db_ctx() as session:
+        stored_hash = session.query(Document).filter(
+            Document.document_id == doc_id
+        ).first().content_hash
+
+    # 复刻 indexer 的清洗 + PII 脱敏路径，得到"脱敏后文本"的期望 hash
+    text = document_cleaner.clean(document_parser.parse_bytes(evil.encode("utf-8"), "pii-hash.md"))
+    if settings.pii_enabled:
+        from app.core.pii_scanner import scan, scan_and_reject, mask_text
+        assert not scan_and_reject(text)          # 本测试走 mask 而非 reject
+        masked = mask_text(text, findings=scan(text))
+        text = masked
+
+    # 关键断言：落库 hash == 脱敏后文本 hash（旧实现 = 原文 hash，会在此失败）
+    assert stored_hash == _content_hash(text)
+
+
 def test_index_without_precreated_document_row(integration_db, fake_llm_stack):
     """期望：indexer 自身能在 chunks 之前建好 Document 行。当前返回 failed。"""
     from app.ingestion.indexer import document_indexer
