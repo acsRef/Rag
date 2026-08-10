@@ -21,6 +21,33 @@ def api_filename(name: str) -> str:
     return f"dict-api_{name}.md"
 
 
+def faq_filename(faq_id: str) -> str:
+    """FAQ 文档文件名。即幂等键——同 kb 同名复用 document_id。
+
+    faq_id 通常来自种子条目（如 faq-001），或由 question 生成的 slug；需为
+    稳定 segment（不含目录分隔符/换行）。
+    """
+    return f"faq-{faq_id}.md"
+
+
+def render_faq_doc(*, question: str, keywords: list[str], tables: list[str],
+                   sql: str, note: str = "") -> str:
+    """单条 FAQ 渲染成 Markdown 文档。
+
+    FAQ 条目短（SQL ~5 行 + 要点 1 行），默认 chunk_size=512 下大概率单 chunk——
+    检索命中一次即得【问题+SQL+要点】全文，ReportAgent 可直接注入 SQL 生成 prompt。
+    """
+    lines = [f"# {question}", ""]
+    if keywords:
+        lines.append(f"关键词: {'、'.join(keywords)}")
+    if tables:
+        lines.append(f"涉及表: {', '.join(tables)}")
+    lines += ["", "示例 SQL:", "", "```sql", sql, "```"]
+    if note:
+        lines += ["", "要点:", "", note]
+    return "\n".join(lines) + "\n"
+
+
 def render_table_doc(*, schema: str, table: str, table_comment: str, columns: list[dict]) -> str:
     """columns 每项: {name, type, comment, enums: list|None, fk: str|None}"""
     lines = [f"# 表 `{schema}.{table}`", ""]

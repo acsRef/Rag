@@ -102,7 +102,11 @@ def test_list_dictionary_docs(monkeypatch):
 def test_mcp_tool_surface():
     tools = asyncio.run(srv.handle_list_tools())
     names = {t.name for t in tools}
-    assert names == {"ingest_table_schemas", "upsert_api_dictionary", "search_dictionary", "list_dictionary_docs"}
+    # 字典桥 4 工具 + Schema FAQ 3 工具（ingest_faq/search_faq/list_faq_docs）
+    assert names == {
+        "ingest_table_schemas", "upsert_api_dictionary", "search_dictionary", "list_dictionary_docs",
+        "ingest_faq", "search_faq", "list_faq_docs",
+    }
 
 
 def test_ingest_table_schemas_partial_failure(monkeypatch):

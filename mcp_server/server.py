@@ -29,11 +29,29 @@ from mcp.types import (
 
 from mcp_server.client import RagentClient, RagentClientError
 from mcp_server.introspect import introspect_schema
-from mcp_server.render import api_filename, render_api_doc, render_table_doc, table_filename
+from mcp_server.render import (
+    api_filename, faq_filename, render_api_doc, render_faq_doc,
+    render_table_doc, table_filename,
+)
 
 
 def _kb_name() -> str:
     return os.getenv("DICT_KB_NAME", "数据字典")
+
+
+def _faq_kb_name() -> str:
+    return os.getenv("FAQ_KB_NAME", "FAQ")
+
+
+def _slug_question(question: str) -> str:
+    """由 question 生成稳定文件名 segment（默认 id 用）。只保留中英文/数字，截断。"""
+    out = "".join(ch for ch in question if ch.isalnum())[:40]
+    return out or "faq"
+
+
+def _faq_entry_error(index: int, msg: str) -> dict:
+    return {"index": index, "id": "", "filename": "", "document_id": None,
+            "status": "error", "chunk_count": 0, "error": msg}
 
 
 @asynccontextmanager
@@ -181,6 +199,98 @@ async def cmd_search_dictionary(arguments: dict) -> str:
         return _client_error(exc)
 
 
+async def cmd_ingest_faq(arguments: dict) -> str:
+    faqs = arguments.get("faqs") or []
+    if not isinstance(faqs, list) or not faqs:
+        return "缺少必填参数 faqs（至少一个 FAQ 条目）"
+    try:
+        async with _client_context() as client:
+            kb_id = await client.ensure_kb(_faq_kb_name())
+            results = []
+            for i, f in enumerate(faqs):
+                question = (f.get("question") or "").strip() if isinstance(f, dict) else ""
+                if not question:
+                    results.append(_faq_entry_error(i, "缺少 question"))
+                    continue
+                faq_id = ((f.get("id") or "").strip() if isinstance(f, dict) else "") \
+                    or _slug_question(question)
+                fname = faq_filename(faq_id)
+                try:
+                    md = render_faq_doc(
+                        question=question,
+                        keywords=f.get("keywords") or [],
+                        tables=f.get("tables") or [],
+                        sql=f.get("sql") or "",
+                        note=f.get("note") or "",
+                    )
+                    up = await client.upload_document(kb_id, fname, md)
+                    doc_id = up.get("document_id") if isinstance(up, dict) else None
+                    if not doc_id:
+                        results.append({
+                            "index": i, "id": faq_id, "filename": fname,
+                            "document_id": None, "status": "upload_failed",
+                            "chunk_count": 0,
+                            "error": "upload_document 未返回 document_id",
+                        })
+                        continue
+                    doc = await client.wait_indexed(doc_id)
+                    results.append({
+                        "index": i, "id": faq_id, "filename": fname,
+                        "document_id": doc.get("document_id", doc_id),
+                        "status": doc.get("status", "unknown"),
+                        "chunk_count": doc.get("chunk_count", 0),
+                        "error": doc.get("error_message", ""),
+                    })
+                except RagentClientError as exc:
+                    # 单条失败不影响其他条继续灌入
+                    results.append({
+                        "index": i, "id": faq_id, "filename": fname,
+                        "document_id": None, "status": "error",
+                        "chunk_count": 0, "error": str(exc),
+                    })
+                    continue
+            return json.dumps(results, ensure_ascii=False, indent=2)
+    except RagentClientError as exc:
+        return _client_error(exc)
+    except Exception as exc:
+        return _client_error(exc)
+
+
+async def cmd_search_faq(arguments: dict) -> str:
+    query = (arguments.get("query") or "").strip()
+    if not query:
+        return "缺少必填参数 query"
+    try:
+        top_k = int(arguments.get("top_k") or 5)
+    except ValueError as e:
+        return f"参数 top_k 应为整数：{e}"
+    try:
+        async with _client_context() as client:
+            kb_id = await client.ensure_kb(_faq_kb_name())
+            data = await client.retrieve(query, [kb_id], top_k=top_k)
+            items = data.get("items", [])
+            if not items:
+                return f"FAQ 无匹配：{query}"
+            return json.dumps({"matches": items, "degraded": data.get("degraded", False)},
+                              ensure_ascii=False, indent=2)
+    except RagentClientError as exc:
+        return _client_error(exc)
+    except Exception as exc:
+        return _client_error(exc)
+
+
+async def cmd_list_faq_docs(arguments: dict) -> str:
+    try:
+        async with _client_context() as client:
+            kb_id = await client.ensure_kb(_faq_kb_name())
+            docs = await client.list_documents(kb_id)
+            return json.dumps(docs, ensure_ascii=False, indent=2)
+    except RagentClientError as exc:
+        return _client_error(exc)
+    except Exception as exc:
+        return _client_error(exc)
+
+
 async def cmd_list_dictionary_docs(arguments: dict) -> str:
     try:
         async with _client_context() as client:
@@ -256,6 +366,44 @@ async def handle_list_tools() -> list[Tool]:
             description="列出字典知识库中已登记的字典文档及摄入状态。无输入。",
             inputSchema={"type": "object", "properties": {}},
         ),
+        # ── Schema FAQ（SQL Agent 业务口径 RAG）──
+        Tool(
+            name="ingest_faq",
+            description=(
+                "灌入/更新一批 Schema FAQ 条目（常见分析问题的 SQL 模板 + 业务口径要点）到 FAQ 知识库。\n"
+                "输入：faqs（必填，数组）每项 {id?, question, keywords[], tables[], sql, note?}。\n"
+                "输出：每条 {index, id, filename, document_id, status, chunk_count, error}。\n"
+                "用于：首次建库、FAQ 条目增改后刷新。重复执行幂等（确定性文件名同名更新）。"
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "faqs": {"type": "array", "items": {"type": "object"}},
+                },
+                "required": ["faqs"],
+            },
+        ),
+        Tool(
+            name="search_faq",
+            description=(
+                "在 FAQ 知识库中检索与查询最相关的分析案例（常见问题 SQL 模板 + 业务口径要点，混合检索只读）。\n"
+                "输入：query（必填，中文自然语言）、top_k（默认 5）。\n"
+                "输出：{matches: [{chunk_id, document_id, text, title, score}], degraded}；无匹配时返回「FAQ 无匹配：<query>」。"
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string"},
+                    "top_k": {"type": "integer", "default": 5},
+                },
+                "required": ["query"],
+            },
+        ),
+        Tool(
+            name="list_faq_docs",
+            description="列出 FAQ 知识库中已登记的文档及摄入状态。无输入。",
+            inputSchema={"type": "object", "properties": {}},
+        ),
     ]
 
 
@@ -264,6 +412,9 @@ _DISPATCH = {
     "upsert_api_dictionary": cmd_upsert_api_dictionary,
     "search_dictionary": cmd_search_dictionary,
     "list_dictionary_docs": cmd_list_dictionary_docs,
+    "ingest_faq": cmd_ingest_faq,
+    "search_faq": cmd_search_faq,
+    "list_faq_docs": cmd_list_faq_docs,
 }
 
 

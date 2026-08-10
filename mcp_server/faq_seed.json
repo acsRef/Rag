@@ -1,0 +1,182 @@
+[
+  {
+    "id": "faq-001",
+    "category": "销售",
+    "question": "各区域销售额排名",
+    "keywords": ["区域", "销售额", "排名", "销售"],
+    "tables": ["fact_sales", "dim_region"],
+    "sql": "SELECT r.region_name AS 区域, SUM(f.total_amount) AS 销售额\nFROM fact_sales f\nJOIN dim_region r ON f.region_id = r.region_id\nGROUP BY r.region_name\nORDER BY 销售额 DESC",
+    "note": "区域销售额对 fact_sales.total_amount 求和；GROUP BY 后所有普通列用别名；ORDER BY 聚合别名降序即为排名。"
+  },
+  {
+    "id": "faq-002",
+    "category": "趋势",
+    "question": "月度销售趋势",
+    "keywords": ["月", "月度", "趋势", "走势", "逐月"],
+    "tables": ["fact_sales", "dim_date"],
+    "sql": "SELECT date_trunc('month', d.full_date) AS 月份, SUM(f.total_amount) AS 销售额\nFROM fact_sales f\nJOIN dim_date d ON f.date_id = d.date_id\nGROUP BY date_trunc('month', d.full_date)\nORDER BY 月份",
+    "note": "dim_date 没有 month 列，月度粒度用 date_trunc('month', full_date) 折算；季度可用 year + quarter_num，按日粒度用 full_date。"
+  },
+  {
+    "id": "faq-003",
+    "category": "销售",
+    "question": "品类销售占比",
+    "keywords": ["品类", "占比", "构成", "分类"],
+    "tables": ["fact_sales", "dim_product"],
+    "sql": "SELECT p.category AS 品类, SUM(f.total_amount) AS 销售额,\n       ROUND(SUM(f.total_amount) / NULLIF(SUM(SUM(f.total_amount)) OVER (), 0) * 100, 2) AS 占比\nFROM fact_sales f\nJOIN dim_product p ON f.product_id = p.product_id\nGROUP BY p.category\nORDER BY 销售额 DESC",
+    "note": "占比 = 各品类 / 全部合计，用窗口函数 SUM() OVER () 取全量合计；NULLIF 防除零。"
+  },
+  {
+    "id": "faq-004",
+    "category": "客户",
+    "question": "客户等级贡献",
+    "keywords": ["客户", "等级", "会员", "贡献"],
+    "tables": ["fact_sales", "dim_customer"],
+    "sql": "SELECT c.customer_tier AS 客户等级, SUM(f.total_amount) AS 销售额\nFROM fact_sales f\nJOIN dim_customer c ON f.customer_id = c.customer_id\nGROUP BY c.customer_tier\nORDER BY 销售额 DESC",
+    "note": "fact_sales 通过 customer_id 关联 dim_customer；等级字段是 customer_tier。"
+  },
+  {
+    "id": "faq-005",
+    "category": "客户",
+    "question": "大客户 Top N",
+    "keywords": ["大客户", "Top", "排名", "前N"],
+    "tables": ["fact_sales", "dim_customer"],
+    "sql": "SELECT c.customer_name AS 客户, SUM(f.total_amount) AS 销售额\nFROM fact_sales f\nJOIN dim_customer c ON f.customer_id = c.customer_id\nGROUP BY c.customer_name\nORDER BY 销售额 DESC\nLIMIT 10",
+    "note": "Top N 用 GROUP BY + ORDER BY 聚合后 LIMIT；明细类查询若不做聚合，建议 LIMIT 200。"
+  },
+  {
+    "id": "faq-006",
+    "category": "利润",
+    "question": "毛利率计算",
+    "keywords": ["毛利率", "毛利", "利润", "利润率"],
+    "tables": ["fact_sales", "dim_product"],
+    "sql": "SELECT p.category AS 品类,\n       ROUND(SUM(f.profit) / NULLIF(SUM(f.total_amount), 0) * 100, 2) AS 毛利率\nFROM fact_sales f\nJOIN dim_product p ON f.product_id = p.product_id\nGROUP BY p.category\nORDER BY 毛利率 DESC",
+    "note": "毛利率 = SUM(profit) / SUM(total_amount)；profit 是 fact_sales 的现成列，不要用 unit_price*quantity 自己算，会漏折扣。"
+  },
+  {
+    "id": "faq-007",
+    "category": "趋势",
+    "question": "同比（年对年）",
+    "keywords": ["同比", "年对年", "年度", "去年"],
+    "tables": ["fact_sales", "dim_date"],
+    "sql": "SELECT d.year AS 年份, SUM(f.total_amount) AS 销售额\nFROM fact_sales f\nJOIN dim_date d ON f.date_id = d.date_id\nWHERE d.year IN (2023, 2024)\nGROUP BY d.year\nORDER BY d.year",
+    "note": "同比要在同一 SQL 里取两年，用 dim_date.year 过滤；跨年增加幅如有需要再在外层聚合计算。"
+  },
+  {
+    "id": "faq-008",
+    "category": "销售",
+    "question": "各渠道销售额对比",
+    "keywords": ["渠道", "线上", "线下", "直销"],
+    "tables": ["fact_sales"],
+    "sql": "SELECT f.channel AS 渠道, SUM(f.total_amount) AS 销售额, SUM(f.quantity) AS 销量\nFROM fact_sales f\nGROUP BY f.channel\nORDER BY 销售额 DESC",
+    "note": "channel 是 fact_sales 的直接列，无需 JOIN 维度表。"
+  },
+  {
+    "id": "faq-009",
+    "category": "区域",
+    "question": "各省份销售排名",
+    "keywords": ["省份", "省", "排名"],
+    "tables": ["fact_sales", "dim_region"],
+    "sql": "SELECT r.province AS 省份, SUM(f.total_amount) AS 销售额\nFROM fact_sales f\nJOIN dim_region r ON f.region_id = r.region_id\nGROUP BY r.province\nORDER BY 销售额 DESC",
+    "note": "dim_region 有 province 字段（省），region_name 是大区（如华东）。分清两者，问「区域」用 region_name，问「省份」用 province。"
+  },
+  {
+    "id": "faq-010",
+    "category": "退货",
+    "question": "区域退货率",
+    "keywords": ["退货率", "退货", "退款"],
+    "tables": ["fact_returns", "fact_sales", "dim_region"],
+    "sql": "SELECT rc.region_name AS 区域,\n       ROUND(SUM(rt.return_amount) / NULLIF(SUM(f.total_amount), 0) * 100, 2) AS 退货率\nFROM fact_returns rt\nJOIN fact_sales f ON rt.sale_id = f.sale_id\nJOIN dim_region rc ON f.region_id = rc.region_id\nGROUP BY rc.region_name\nORDER BY 退货率 DESC",
+    "note": "退货率 = 退货金额 SUM(return_amount) / 对应销售额；fact_returns 通过 sale_id 关联 fact_sales，再经 fact_sales 连 dim_region。"
+  },
+  {
+    "id": "faq-011",
+    "category": "退货",
+    "question": "退货原因分布",
+    "keywords": ["退货原因", "退货", "原因"],
+    "tables": ["fact_returns"],
+    "sql": "SELECT return_reason AS 退货原因, SUM(return_quantity) AS 退货量, SUM(return_amount) AS 退货金额\nFROM fact_returns\nGROUP BY return_reason\nORDER BY 退货金额 DESC",
+    "note": "return_reason 是 fact_returns 的直接列；先按原因聚合，再可下钻到产品/区域。"
+  },
+  {
+    "id": "faq-012",
+    "category": "退货",
+    "question": "产品退货率 Top",
+    "keywords": ["产品", "退货率", "Top", "退得多"],
+    "tables": ["fact_returns", "fact_sales", "dim_product"],
+    "sql": "SELECT p.product_name AS 产品,\n       ROUND(SUM(rt.return_amount) / NULLIF(SUM(f.total_amount), 0) * 100, 2) AS 退货率\nFROM fact_returns rt\nJOIN fact_sales f ON rt.sale_id = f.sale_id\nJOIN dim_product p ON f.product_id = p.product_id\nGROUP BY p.product_name\nORDER BY 退货率 DESC\nLIMIT 10",
+    "note": "退货率分子在 fact_returns、分母在 fact_sales，必须经 sale_id 关联后再聚合。"
+  },
+  {
+    "id": "faq-013",
+    "category": "库存",
+    "question": "当前库存 / 可售量",
+    "keywords": ["库存", "可售", "存量", "当前库存"],
+    "tables": ["fact_inventory", "dim_product"],
+    "sql": "SELECT p.product_name AS 产品, i.warehouse_id AS 仓库, i.quantity_available AS 可售量, i.quantity_reserved AS 预留量\nFROM fact_inventory i\nJOIN dim_product p ON i.product_id = p.product_id\nWHERE i.date_id = (SELECT MAX(date_id) FROM fact_inventory)\nORDER BY i.quantity_available DESC",
+    "note": "fact_inventory 按产品+仓库+日期记录快照；「当前」取最新日期 date_id = MAX(date_id)。可售量 = quantity_available。"
+  },
+  {
+    "id": "faq-014",
+    "category": "库存",
+    "question": "库存周转",
+    "keywords": ["库存周转", "周转", "周转率"],
+    "tables": ["fact_sales", "fact_inventory", "dim_product"],
+    "sql": "SELECT p.product_name AS 产品,\n       ROUND(COALESCE(SUM(f.quantity), 0)::numeric / NULLIF(AVG(i.quantity_available), 0), 2) AS 库存周转\nFROM fact_sales f\nJOIN fact_inventory i ON f.product_id = i.product_id\nJOIN dim_product p ON f.product_id = p.product_id\nGROUP BY p.product_name\nORDER BY 库存周转 DESC",
+    "note": "简化口径：库存周转 ≈ 销量 / 平均可售库存。若需精确业务口径，优先查 memory.semantic_entry 里的指标定义（Phase 2 Metric RAG 会承接）。"
+  },
+  {
+    "id": "faq-015",
+    "category": "考勤",
+    "question": "出勤率",
+    "keywords": ["出勤率", "出勤", "考勤", "缺勤"],
+    "tables": ["fact_attendance"],
+    "sql": "SELECT COUNT(*) AS 记录数,\n       ROUND(COUNT(*) FILTER (WHERE a.status = '正常')::numeric / NULLIF(COUNT(*), 0) * 100, 2) AS 出勤率\nFROM fact_attendance a",
+    "note": "出勤率 = 正常状态记录数 / 总记录数；COUNT(*) FILTER 是 PostgreSQL 语法。status 字段值需先确认枚举（正常/请假/旷工等）。"
+  },
+  {
+    "id": "faq-016",
+    "category": "考勤",
+    "question": "部门考勤对比",
+    "keywords": ["部门", "出勤", "对比", "考勤"],
+    "tables": ["fact_attendance", "dim_employee"],
+    "sql": "SELECT e.department AS 部门,\n       ROUND(COUNT(*) FILTER (WHERE a.status = '正常')::numeric / NULLIF(COUNT(*), 0) * 100, 2) AS 出勤率\nFROM fact_attendance a\nJOIN dim_employee e ON a.employee_id = e.employee_id\nGROUP BY e.department",
+    "note": "fact_attendance 通过 employee_id 关联 dim_employee；department 在 dim_employee。"
+  },
+  {
+    "id": "faq-017",
+    "category": "趋势",
+    "question": "节假日 vs 工作日销售",
+    "keywords": ["节假日", "工作日", "促销", "假期"],
+    "tables": ["fact_sales", "dim_date"],
+    "sql": "SELECT d.is_holiday AS 是否节假日, SUM(f.total_amount) AS 销售额\nFROM fact_sales f\nJOIN dim_date d ON f.date_id = d.date_id\nGROUP BY d.is_holiday",
+    "note": "is_holiday 是 dim_date 的布尔字段，直接分组对比。"
+  },
+  {
+    "id": "faq-018",
+    "category": "时间",
+    "question": "时间过滤半开闭区间",
+    "keywords": ["时间", "区间", "过滤", "上半年", "今年以来"],
+    "tables": ["fact_sales", "dim_date"],
+    "sql": "SELECT d.year AS 年份, d.quarter_num AS 季度, SUM(f.total_amount) AS 销售额\nFROM fact_sales f\nJOIN dim_date d ON f.date_id = d.date_id\nWHERE d.full_date >= '2024-01-01' AND d.full_date < '2024-07-01'\nGROUP BY d.year, d.quarter_num\nORDER BY d.quarter_num",
+    "note": "时间过滤用半开闭区间 [start, end)，含头不含尾，避免边界日期重复计入。相对时间（今年/上月/近 N 天）以当前日期为基准换算成 [start, end)。"
+  },
+  {
+    "id": "faq-019",
+    "category": "利润",
+    "question": "毛利率 Top 产品",
+    "keywords": ["毛利率", "产品", "Top", "利润高"],
+    "tables": ["fact_sales", "dim_product"],
+    "sql": "SELECT p.product_name AS 产品, p.category AS 品类,\n       ROUND(SUM(f.profit) / NULLIF(SUM(f.total_amount), 0) * 100, 2) AS 毛利率\nFROM fact_sales f\nJOIN dim_product p ON f.product_id = p.product_id\nGROUP BY p.product_name, p.category\nORDER BY 毛利率 DESC\nLIMIT 10",
+    "note": "按产品+品类分组后再取毛利；GROUP BY 需包含所有非聚合列（product_name、category）。"
+  },
+  {
+    "id": "faq-020",
+    "category": "销售",
+    "question": "品牌销售对比",
+    "keywords": ["品牌", "对比", "销售"],
+    "tables": ["fact_sales", "dim_product"],
+    "sql": "SELECT p.brand AS 品牌, SUM(f.total_amount) AS 销售额, SUM(f.quantity) AS 销量\nFROM fact_sales f\nJOIN dim_product p ON f.product_id = p.product_id\nGROUP BY p.brand\nORDER BY 销售额 DESC",
+    "note": "brand 是 dim_product 的直接列；品牌粒度聚合无需下钻到产品名。"
+  }
+]
