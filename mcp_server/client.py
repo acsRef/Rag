@@ -11,6 +11,8 @@ import os
 
 import httpx
 
+from mcp_server import token_cache
+
 
 class RagentClientError(RuntimeError):
     """面向 MCP 工具调用方的可读错误——直接作为工具返回文本。"""
@@ -34,6 +36,11 @@ class RagentClient:
         await self._http.aclose()
 
     async def _login(self) -> None:
+        # 跨进程共享缓存：命中则直接复用，避免每次实例都登录撞限流。
+        cached = token_cache.get_token(self.base_url)
+        if cached:
+            self._token = cached
+            return
         try:
             resp = await self._http.post(
                 "/api/v1/auth/login",
@@ -49,6 +56,7 @@ class RagentClient:
             self._token = resp.json()["access_token"]
         except (KeyError, json.JSONDecodeError) as exc:
             raise RagentClientError(f"登录响应格式异常: {exc}") from exc
+        token_cache.set_token(self.base_url, self._token)
 
     async def _request(self, method: str, path: str, **kwargs) -> httpx.Response:
         if not self._token:
@@ -60,9 +68,10 @@ class RagentClient:
             resp = await self._http.request(method, path, headers=headers, **kwargs)
         except httpx.HTTPError as exc:
             raise RagentClientError(f"ragent-py 服务不可达（{self.base_url}）: {exc}") from exc
-        if resp.status_code == 401:  # token 过期 → 重登一次
+        if resp.status_code == 401:  # token 过期/被吊销 → 失效缓存 + 重登一次
             original_detail = resp.text[:200]
             self._token = None
+            token_cache.invalidate(self.base_url)
             try:
                 await self._login()
             except RagentClientError as exc:

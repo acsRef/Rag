@@ -32,3 +32,12 @@ def block_external_services(monkeypatch):
     monkeypatch.setattr(settings, "minimax_api_key", "test-not-real")
     monkeypatch.setattr(settings, "siliconflow_api_key", "test-not-real")
     yield
+
+
+@pytest.fixture(autouse=True)
+def isolate_token_cache(tmp_path, monkeypatch):
+    """token 共享缓存落到临时文件，避免测试登录污染真实 ~/.ragent_token_cache.json。"""
+    from mcp_server import token_cache
+
+    monkeypatch.setattr(token_cache, "_PATH", str(tmp_path / "ragent_token_cache.json"))
+    yield
