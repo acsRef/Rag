@@ -1,6 +1,6 @@
 # 2026-08-10 Schema FAQ MCP：FAQ 知识库 + ingest/search_faq 工具
 
-> 状态: 已完成（commit `94c4930`）
+> 状态: 已完成（commit `94c4930`；后续 2026-08-10 `e2ff172` 补跨进程 token 缓存，见 mcp_server/token_cache.py）
 
 ## Context
 

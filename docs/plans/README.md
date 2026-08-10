@@ -10,7 +10,7 @@
 
 ## 已完成
 
-- [2026-08-10-schema-faq-mcp](2026-08-10-schema-faq-mcp.md) — Schema FAQ MCP（Phase A）：独立 FAQ 知识库 + `ingest_faq`/`search_faq`/`list_faq_docs` 工具 + `faq_seed.json` 20 条种子；`render_faq_doc` 单 chunk 渲染；全量 211 passed 无回归
+- [2026-08-10-schema-faq-mcp](2026-08-10-schema-faq-mcp.md) — Schema FAQ MCP（Phase A）commit `94c4930`；追加跨进程 token 缓存 commit `e2ff172`（`mcp_server/token_cache.py`，根治登录 429，`RagentClient._login` 命中共享缓存不再登录，401 自动失效重登） — Schema FAQ MCP（Phase A）：独立 FAQ 知识库 + `ingest_faq`/`search_faq`/`list_faq_docs` 工具 + `faq_seed.json` 20 条种子；`render_faq_doc` 单 chunk 渲染；全量 211 passed 无回归
 - [2026-08-07-dict-mcp-server](2026-08-07-dict-mcp-server.md) — 数据字典 MCP 桥（A1-A8 全部完成）：A1 检索契约模型 / A2 嵌入降级 helper / A3 `/api/v1/retrieve` 端点 / A4 Markdown 渲染 / A5 PG 只读自省 / A6 HTTP 客户端 / A7 MCP stdio 服务装配；70 例定向测试 + 全量 195 passed 无回归；既有隐患 `app/api/kb.py::delete_kb` `DocRoleAccess` import 缺失登记为 follow-up（不动）
 
 - [2026-08-05-resilience-round2](2026-08-05-resilience-round2.md) — 二轮审查韧性修复（完成，193 passed）：429 不打熔断（RateLimitError）、熔断器线程安全、rerank 按 loop 重建、retrieval 同步 DB 解阻、摘要锁前移、标签空白容忍、重索引部分失败保旧索引（B1–B6 + D1/D2/D3/D6/D7）；DB 降级加固：熔断计数/穿透兜底/故障与无内容分流//health 探针（DB-1…DB-4）
