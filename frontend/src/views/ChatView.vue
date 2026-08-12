@@ -72,6 +72,7 @@
     </div>
 
     <div class="chat-input-area">
+      <div v-if="isBgGenerating()" class="bg-generating-hint">上一轮回答仍在后台生成，完成后将自动显示…</div>
       <div class="chat-input-wrapper">
         <textarea
           v-model="input"
@@ -81,7 +82,10 @@
           @keydown="handleKeydown"
           @input="autoResize"
         />
-        <button class="send-btn" :disabled="!input.trim() || streaming" @click="send">
+        <button v-if="streaming" class="send-btn stop-btn" @click="stopGeneration" title="停止生成">
+          <span class="stop-label">停止</span>
+        </button>
+        <button class="send-btn" :disabled="!input.trim() || streaming || isBgGenerating()" @click="send">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
             <line x1="22" y1="2" x2="11" y2="13" />
             <polygon points="22 2 15 22 11 13 2 9 22 2" />
@@ -129,16 +133,89 @@ const statusMsg = ref('')
 const thinkText = ref('')
 let abortController: AbortController | null = null
 
+// sse-disconnect-continue：后台生成任务追踪（断开后后端继续跑完）
+const bgConvs = ref<Set<string>>(new Set())
+let bgPollTimer: ReturnType<typeof setInterval> | null = null
+
+function isBgGenerating(): boolean {
+  return currentConvId.value !== null && bgConvs.value.has(currentConvId.value)
+}
+
+function stopBgPoll() {
+  if (bgPollTimer !== null) {
+    clearInterval(bgPollTimer)
+    bgPollTimer = null
+  }
+}
+
+async function checkBgStatus() {
+  for (const cid of [...bgConvs.value]) {
+    try {
+      const { generating } = await chatApi.generating(cid)
+      if (!generating) {
+        bgConvs.value = new Set([...bgConvs.value].filter((x) => x !== cid))
+        if (currentConvId.value === cid) {
+          await loadMessages(cid)   // 后台跑完：把完整答案刷出来
+        }
+      }
+    } catch {
+      /* 网络抖动：下轮轮询再试 */
+    }
+  }
+  if (bgConvs.value.size === 0 && bgPollTimer !== null) {
+    clearInterval(bgPollTimer)
+    bgPollTimer = null
+  }
+}
+
+function startBgPoll(convId: string) {
+  bgConvs.value = new Set(bgConvs.value).add(convId)
+  if (bgPollTimer === null) {
+    bgPollTimer = setInterval(checkBgStatus, 2000)
+  }
+  void checkBgStatus()
+}
+
+async function refreshBgStatus(cid: string) {
+  // 进入会话时探测一次：后台任务可能跨组件生命周期存活（刷新/重挂载）
+  try {
+    const { generating } = await chatApi.generating(cid)
+    if (generating) {
+      bgConvs.value = new Set(bgConvs.value).add(cid)
+      if (bgPollTimer === null) {
+        bgPollTimer = setInterval(checkBgStatus, 2000)
+      }
+      await checkBgStatus()
+    }
+  } catch {
+    /* ignore */
+  }
+}
+
 function now() {
   return new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
 }
 
-function abortStream() {
+function abortStream(startBg = true) {
   if (abortController) {
     abortController.abort()
     abortController = null
+    // 默认断开后后端后台跑完：记录后台会话，同会话禁发 + 有边界轮询
+    if (startBg && currentConvId.value) {
+      startBgPoll(currentConvId.value)
+    }
   }
   streamError.value = false
+  streaming.value = false
+}
+
+async function stopGeneration() {
+  // 「停止」按钮 = 真正取消（区别于离开的后台跑完）：调后端 cancel 端点
+  const cid = currentConvId.value
+  if (cid) {
+    try { await chatApi.cancelGeneration(cid) } catch { /* 已断开/无任务：忽略 */ }
+  }
+  abortStream(false)   // 不启动后台轮询：已显式取消
 }
 
 async function loadMessages(cid: string) {
@@ -177,6 +254,7 @@ watch(() => props.currentConvId, async (id) => {
     thinkText.value = ''
     if (id) {
       await loadMessages(id)
+      await refreshBgStatus(id)
     } else {
       messages.value = []
     }
@@ -187,14 +265,18 @@ onMounted(async () => {
   if (props.currentConvId) {
     currentConvId.value = props.currentConvId
     await loadMessages(props.currentConvId)
+    await refreshBgStatus(props.currentConvId)
   }
 })
 
-onUnmounted(abortStream)
+onUnmounted(() => {
+  abortStream()
+  stopBgPoll()
+})
 
 async function send() {
   const q = input.value.trim()
-  if (!q || streaming.value) return
+  if (!q || streaming.value || isBgGenerating()) return
   input.value = ''
 
   messages.value.push({ role: 'user', content: q, time: now() })
@@ -299,6 +381,13 @@ function scrollToBottom() {
 </script>
 
 <style scoped>
+.bg-generating-hint {
+  font-size: 12px;
+  color: var(--text-secondary);
+  padding: 4px 2px 6px;
+}
+.stop-btn { background: var(--danger, #e5484d); }
+.stop-label { font-size: 12px; }
 .cursor-blink {
   animation: blink 1s step-end infinite;
 }

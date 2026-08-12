@@ -36,6 +36,14 @@ export const chatApi = {
     const res = await api.get(`/chat/conversations/${conversationId}/messages`)
     return res.data
   },
+  async generating(conversationId: string): Promise<{ generating: boolean }> {
+    const res = await api.get(`/chat/conversations/${conversationId}/generating`)
+    return res.data
+  },
+  async cancelGeneration(conversationId: string): Promise<{ cancelled: boolean }> {
+    const res = await api.post(`/chat/conversations/${conversationId}/cancel`)
+    return res.data
+  },
   streamChat(
     query: string,
     conversationId: string | null,
