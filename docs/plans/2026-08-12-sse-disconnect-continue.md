@@ -1,6 +1,7 @@
 # 前端断开后台保活（sse-disconnect-continue）设计
 
-> **状态**：设计评审通过，待细化实施计划。分支建议：`feat/sse-disconnect-continue`
+> **状态**：已完成（分支 fix/design-review-fixes，commits `396b055`..`a64d037`）。全量 281 passed + 8 新增测试绿；11 个既有 SSL 环境失败（基线同样失败，无关）；npm run build 通过；运行时实测通过（断开后台跑完落 completed / cancel 后可立即重发 / 同会话 409）。
+> **分支建议**：`feat/sse-disconnect-continue`
 > **For agentic workers:** 步骤用 `- [ ]` 勾选跟踪。原则：**每个修复先落测试**（新纯逻辑 → `tests/unit` 离线单测；DB/并发 → `tests/integration` ragent_test 库），再改实现；全部完成后全量回归 + 运行时实测。
 
 **Goal:** 客户端断开（点停止 / 关页 / 断网）时，后端**不再停链**——在后台把当前回答生成完整并落库 `status=completed`，用户回来看到完整答案；前端在后台生成期间禁止同会话发送新消息。

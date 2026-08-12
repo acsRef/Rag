@@ -6,9 +6,11 @@
 
 ## 进行中
 
-- [2026-08-12-sse-disconnect-continue](2026-08-12-sse-disconnect-continue.md) — 前端断开后台保活（设计评审通过，待细化实施）：客户端断开后后端后台跑完当前回答落 `completed`；同会话后台生成期间禁发新消息；有边界轮询 `/generating`
+（暂无）
 
 ## 已完成
+
+- [2026-08-12-sse-disconnect-continue](2026-08-12-sse-disconnect-continue.md) — 前端断开后台保活（完成，commits `396b055`..`a64d037`）：客户端断开后后端后台跑完当前回答落 `completed`；`/generating` 状态端点 + 有边界轮询 + 同会话禁发；`/cancel` 停止按钮（真正取消，可立即重发）；409 安全网；lifespan 关停清理；`get_history` 排除 interrupted。8 新测试 + 运行时实测通过
 
 - [2026-08-06-design-review-fixes](2026-08-06-design-review-fixes.md) — 设计审查遗留修复（19 项，全量 284 passed + npm build 通过，分支 fix/design-review-fixes）：P0 diagnostics 开关生效、前端错误双气泡、删除清入边（DB cascade 已生效 + 修 `delete_kb` `DocRoleAccess` 未导入真正 500 bug）、thinking_content 回传、索引器孤儿 future (`_collect_future_pair`)、content_hash 后置 PII；P1 检索并行 (`asyncio.gather`)、跨文档 DF SQL 聚合 + candidate 收敛、neighbor 瘦查询（已达标）、auth TTL 缓存、documents to_thread；P2 lifespan、停用词合并、clean 工具外移 tools/、改写正则 `其它` 误报、engine connect_timeout；P3 tsconfig noEmit、admin_role 缓存失效 + 限流注释；P4 AGENTS.md 修正
 - [2026-08-10-schema-faq-mcp](2026-08-10-schema-faq-mcp.md) — Schema FAQ MCP（Phase A）commit `94c4930`；追加跨进程 token 缓存 commit `e2ff172`（`mcp_server/token_cache.py`，根治登录 429，`RagentClient._login` 命中共享缓存不再登录，401 自动失效重登） — Schema FAQ MCP（Phase A）：独立 FAQ 知识库 + `ingest_faq`/`search_faq`/`list_faq_docs` 工具 + `faq_seed.json` 20 条种子；`render_faq_doc` 单 chunk 渲染；全量 211 passed 无回归
