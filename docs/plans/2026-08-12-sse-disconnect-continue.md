@@ -96,3 +96,723 @@ _IN_FLIGHT: dict[str, asyncio.Task] = {}   # conversation_id → 生产者 task�
 - 实时续传（用户回来看到生成过程）——不做。
 - 跨 worker 后台任务（注册表进程内，多 uvicorn worker 下仅存活在发起请求的 worker）——既有架构边界，文档注明，不引入 Redis。
 - 后台任务配额/速率限制——单用户/小规模应用不做。
+- 前端新增「停止」按钮——当前 UI 无停止入口，断开场景 = 切会话/离开/断网，全部走后台跑完。
+
+---
+
+# Implementation Plan
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking. 原则：每项先落测试（integration 用 ragent_test + fake LLM 层），再改实现，全绿后 commit。
+
+**Goal:** 客户端断开后，后端在后台把当前回答生成完整并落库 `completed`；前端在后台生成期间禁发同会话新消息，完成时自动刷出完整答案。
+
+**Architecture:** 方案 A——`chat.py` 加有界队列 + 后台生产者 task：消费者（StreamingResponse）断开时置 `connected=False`，生产者切丢弃模式继续跑完 pipeline（pipeline 本体零改动，`except GeneratorExit` 保留为服务关停兜底）。进程内 `_IN_FLIGHT` 注册表 + `/generating` 状态端点 + 409 安全网 + lifespan 关停清理。
+
+**Tech Stack:** FastAPI asyncio、pytest（unit / integration ragent_test）、Vue 3 + TypeScript。
+
+## File Structure
+
+| 动作 | 文件 | 职责 |
+| ----- | ---- | ----- |
+| Modify | `app/api/chat.py` | `_IN_FLIGHT` 注册表、`_release_in_flight`/`_log_producer_error`、`shutdown_in_flight_generations`、`stream_chat` 队列+生产者、`/generating` 端点 |
+| Modify | `app/main.py` | lifespan `yield` 后关停后台生成任务 |
+| Modify | `app/core/memory.py:128` | `get_history` 排除 `interrupted` |
+| Create | `tests/unit/test_sse_disconnect.py` | 注册表清理纯逻辑 |
+| Create | `tests/integration/test_sse_disconnect.py` | 断开后台跑完 / 409 / generating 翻转 / 关停取消 / interrupted 排除 |
+| Modify | `frontend/src/api/chat.ts` | 新增 `generating(conversationId)` |
+| Modify | `frontend/src/views/ChatView.vue` | `bgConvs` 追踪 + 禁发 + 有边界轮询 + 提示 |
+
+---
+
+### Task 1: integration 测试先落（断开 → 后台跑完）
+
+**Files:**
+- Create: `tests/integration/test_sse_disconnect.py`
+
+- [ ] **Step 1: 写失败测试**（对当前代码 red：`_IN_FLIGHT` 尚不存在会 ImportError；即使绕过，断开后当前代码只落 `interrupted` 半截，断言必败）
+
+```python
+"""sse-disconnect-continue：客户端断开后，生产者后台跑完并落库 completed。
+
+覆盖：断开→完整答案入库；同会话 409；/generating 状态翻转；服务关停取消；
+get_history 排除 interrupted 半截回答。
+"""
+import asyncio
+import time
+
+import pytest
+
+from app.api.chat import (
+    _IN_FLIGHT,
+    conversation_generating,
+    shutdown_in_flight_generations,
+    stream_chat,
+)
+from app.config import settings
+from app.models.schemas import ChatRequest
+from app.store.db import get_db_ctx, Message
+
+USER = {"id": "test-user", "permissions": ["chat"], "role_ids": [], "is_admin": False}
+
+
+async def _slow_chat_stream(*args, **kwargs):
+    """慢速确定性流：每 token 间 sleep，让「消费到 token 后断开」可控。"""
+    for tok in ["后台", "生成", "完成", "！"]:
+        yield tok
+        await asyncio.sleep(0.05)
+
+
+async def _wait_until(predicate, timeout=8.0, interval=0.05):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        await asyncio.sleep(interval)
+    return False
+
+
+async def test_disconnect_background_completes(
+        integration_db, fake_llm_stack, monkeypatch):
+    from app.llm.chat import minimax_client
+    monkeypatch.setattr(minimax_client, "chat_stream", _slow_chat_stream)
+    monkeypatch.setattr(settings, "diagnostics_enabled", False)
+
+    req = ChatRequest(query="你好", conversation_id="conv-bg")
+    response = await stream_chat(req, current_user=USER)
+    body = response.body_iterator
+
+    # 消费到第一个 token 事件后模拟断开（aclose 触发消费者 finally）
+    saw_token = False
+    for _ in range(50):
+        evt = await anext(body)
+        if "event: token" in evt:
+            saw_token = True
+            break
+    assert saw_token, "断开前应消费到 token 事件"
+
+    task = _IN_FLIGHT.get("conv-bg")
+    assert task is not None, "生产者应已注册"
+    await body.aclose()          # ↓ 消费者断开
+    assert not task.done(), "断开后生产者不应被取消（后台跑完）"
+    await asyncio.wait_for(task, timeout=10)
+
+    with get_db_ctx() as session:
+        msgs = session.query(Message).filter(
+            Message.conversation_id == "conv-bg").order_by(Message.id.asc()).all()
+    assert [m.role for m in msgs] == ["user", "assistant"], "断开后应落库完整一问一答"
+    assert msgs[-1].status == "completed", "后台跑完应落 completed"
+    assert "完成" in (msgs[-1].content or ""), "应为完整回答而非半截"
+
+
+async def test_same_conversation_409(integration_db, fake_llm_stack, monkeypatch):
+    from fastapi import HTTPException
+    from app.llm.chat import minimax_client
+    monkeypatch.setattr(minimax_client, "chat_stream", _slow_chat_stream)
+    monkeypatch.setattr(settings, "diagnostics_enabled", False)
+
+    resp1 = await stream_chat(
+        ChatRequest(query="你好", conversation_id="conv-409"), current_user=USER)
+    body1 = resp1.body_iterator
+    task = _IN_FLIGHT.get("conv-409")
+    assert task is not None and not task.done()
+
+    with pytest.raises(HTTPException) as ei:
+        await stream_chat(
+            ChatRequest(query="再问", conversation_id="conv-409"), current_user=USER)
+    assert ei.value.status_code == 409
+
+    await body1.aclose()
+    await asyncio.wait_for(task, timeout=10)
+
+
+async def test_generating_endpoint_flips(integration_db, fake_llm_stack, monkeypatch):
+    from app.llm.chat import minimax_client
+    monkeypatch.setattr(minimax_client, "chat_stream", _slow_chat_stream)
+    monkeypatch.setattr(settings, "diagnostics_enabled", False)
+
+    resp = await stream_chat(
+        ChatRequest(query="你好", conversation_id="conv-gen"), current_user=USER)
+    body = resp.body_iterator
+    task = _IN_FLIGHT.get("conv-gen")
+
+    assert conversation_generating("conv-gen", current_user=USER)["generating"] is True
+
+    await body.aclose()
+    await asyncio.wait_for(task, timeout=10)
+    assert conversation_generating("conv-gen", current_user=USER)["generating"] is False
+
+
+async def test_shutdown_cancels_background(integration_db, fake_llm_stack, monkeypatch):
+    from app.llm.chat import minimax_client
+    monkeypatch.setattr(minimax_client, "chat_stream", _slow_chat_stream)
+    monkeypatch.setattr(settings, "diagnostics_enabled", False)
+
+    resp = await stream_chat(
+        ChatRequest(query="你好", conversation_id="conv-shutdown"), current_user=USER)
+    task = _IN_FLIGHT.get("conv-shutdown")
+    await resp.body_iterator.aclose()
+    assert task is not None and not task.done()
+
+    await shutdown_in_flight_generations()
+    assert task.done(), "关停后后台任务应被取消并结束"
+    assert "conv-shutdown" not in _IN_FLIGHT, "注册表应清理"
+
+
+async def test_interrupted_message_excluded_from_history(integration_db):
+    from app.core.memory import conversation_memory
+    conv_id = conversation_memory.get_or_create_conversation("conv-hist", "test-user")
+    await conversation_memory.add_message(conv_id, "user", "问题一", user_id="test-user")
+    await conversation_memory.add_message(
+        conv_id, "assistant", "半截回答", status="interrupted", user_id="test-user")
+    await conversation_memory.add_message(
+        conv_id, "assistant", "完整回答", status="completed", user_id="test-user")
+    history = conversation_memory.get_history(conv_id)
+    contents = [m["content"] for m in history if m["role"] == "assistant"]
+    assert contents == ["完整回答"], "interrupted 半截回答不应进入 LLM 上下文"
+```
+
+- [ ] **Step 2: 运行确认 red**
+
+```bash
+D:/miniConda/envs/rag/python.exe -m pytest tests/integration/test_sse_disconnect.py -q
+```
+Expected: 全部 FAIL/ERROR（`_IN_FLIGHT` 未定义 → import error；`get_history` 未排除 interrupted → 断言失败）。
+
+- [ ] **Step 3: 提交 red 测试作为记录**
+
+```bash
+git add tests/integration/test_sse_disconnect.py
+git commit -m "test(sse-disconnect): failing integration tests for background completion"
+```
+
+---
+
+### Task 2: chat.py 队列 + 后台生产者 + 注册表
+
+**Files:**
+- Modify: `app/api/chat.py`（顶部 import + `stream_chat` 重构 + 新函数）
+- Create: `tests/unit/test_sse_disconnect.py`
+
+- [ ] **Step 1: 写 unit 测试（注册表「确认还是自己」清理逻辑）**
+
+```python
+"""sse-disconnect-continue：注册表清理纯逻辑（离线）。
+
+客户端断开后生产者后台跑完；注册表移除时须确认当前任务仍是自己，
+避免旧任务收尾误删新请求的任务。
+"""
+import asyncio
+
+from app.api.chat import _IN_FLIGHT, _release_in_flight
+
+
+def _reset():
+    _IN_FLIGHT.clear()
+
+
+async def _wait_task(t):
+    try:
+        await t
+    except asyncio.CancelledError:
+        pass
+
+
+async def test_release_removes_same_task():
+    _reset()
+    t = asyncio.create_task(asyncio.sleep(0))
+    _IN_FLIGHT["conv-x"] = t
+    _release_in_flight("conv-x", t)
+    assert "conv-x" not in _IN_FLIGHT
+    t.cancel()
+    await _wait_task(t)
+
+
+async def test_release_keeps_newer_task():
+    _reset()
+    old = asyncio.create_task(asyncio.sleep(0))
+    new = asyncio.create_task(asyncio.sleep(0))
+    _IN_FLIGHT["conv-x"] = new
+    _release_in_flight("conv-x", old)   # 旧任务收尾误调清理
+    assert _IN_FLIGHT.get("conv-x") is new
+    old.cancel()
+    new.cancel()
+    await _wait_task(old)
+    await _wait_task(new)
+```
+
+- [ ] **Step 2: 运行确认 red**
+
+```bash
+D:/miniConda/envs/rag/python.exe -m pytest tests/unit/test_sse_disconnect.py -q
+```
+Expected: FAIL（`_release_in_flight` 未定义）。
+
+- [ ] **Step 3: 实现 chat.py**
+
+顶部 import 改为（`stream_chat` 内的 `from fastapi.responses import StreamingResponse` 保留原位）：
+
+```python
+"""Chat API with optional auth."""
+import asyncio
+import logging
+
+from app.core.pipeline import rag_pipeline
+from app.core.diagnostics import DiagContext
+from app.config import settings
+from app.core.memory import conversation_memory
+from app.models.schemas import ChatRequest, ConversationResponse
+from app.middleware.auth import get_current_user
+from app.store.db import get_db_ctx, Conversation
+from fastapi import APIRouter, Depends, HTTPException
+
+router = APIRouter(prefix="/api/v1/chat", tags=["Chat"])
+
+logger = logging.getLogger(__name__)
+
+# 进程内后台生成任务注册表：conversation_id → 生产者 task。
+# 客户端断开后生产者继续跑完 pipeline 并落库 completed（见 sse-disconnect-continue plan）。
+# 注意：进程内注册表，多 uvicorn worker 下仅覆盖发起请求的 worker（既有架构边界）。
+_IN_FLIGHT: dict[str, asyncio.Task] = {}
+
+_SSE_QUEUE_MAX = 256          # SSE 事件队列上限：慢客户端背压；断开后清空解除
+_STREAM_END = object()        # 传输层结束哨兵（区别于任何 SSE 事件字符串）
+
+
+def _release_in_flight(conv_id: str, task: asyncio.Task) -> None:
+    """从注册表移除任务：确认还是自己再删，避免旧任务收尾误删新请求的任务。"""
+    if _IN_FLIGHT.get(conv_id) is task:
+        _IN_FLIGHT.pop(conv_id, None)
+
+
+def _log_producer_error(task: asyncio.Task) -> None:
+    if not task.cancelled() and task.exception() is not None:
+        logger.error("后台生成任务异常（断开后链路）", exc_info=task.exception())
+
+
+async def shutdown_in_flight_generations() -> None:
+    """服务关停：取消所有后台生成任务。
+
+    生产者捕获 CancelledError 后主动 aclose 生成器，触发 pipeline 的
+    GeneratorExit 兜底——半截答案落 interrupted，不丢状态。
+    """
+    tasks = list(_IN_FLIGHT.values())
+    for t in tasks:
+        t.cancel()
+    if tasks:
+        await asyncio.gather(*tasks, return_exceptions=True)
+```
+
+`_build_diag_ctx` 保持不变。`stream_chat` 整体替换为：
+
+```python
+@router.post("/stream")
+async def stream_chat(
+    req: ChatRequest,
+    current_user: dict = Depends(get_current_user),
+):
+    from fastapi.responses import StreamingResponse
+    if "chat" not in current_user["permissions"]:
+        raise HTTPException(status_code=403, detail="Permission denied")
+    user_id = current_user["id"]
+    user_role_ids = current_user["role_ids"]
+    can_read_all = current_user["is_admin"] or "doc.read_all" in current_user["permissions"]
+    ctx = _build_diag_ctx(req.query)
+
+    # 幂等拿 conv_id（pipeline:128 还会再取一次，幂等）——注册表 key 与 409 检查需要它
+    conv_id = await asyncio.to_thread(
+        conversation_memory.get_or_create_conversation,
+        req.conversation_id, user_id,
+    )
+
+    # 同会话后台生成中 → 409（安全网；正常前端已禁发）
+    active = _IN_FLIGHT.get(conv_id)
+    if active is not None and not active.done():
+        raise HTTPException(status_code=409, detail="该对话仍在生成回答，请稍后再试")
+
+    queue: asyncio.Queue[str] = asyncio.Queue(maxsize=_SSE_QUEUE_MAX)
+    connected = {"value": True}
+
+    async def producer():
+        gen = rag_pipeline.execute(
+            req, user_id=user_id, user_role_ids=user_role_ids,
+            can_read_all=can_read_all, ctx=ctx,
+        )
+        try:
+            async for evt in gen:
+                if not connected["value"]:
+                    continue  # 客户端已断开：丢弃模式，pipeline 继续跑完
+                await queue.put(evt)
+        except asyncio.CancelledError:
+            # 服务关停：主动关闭生成器，触发 GeneratorExit 兜底（落 interrupted）
+            await gen.aclose()
+            raise
+        finally:
+            try:
+                if connected["value"]:
+                    # 正常跑完：通知消费者收尾（1s 上限防关停时满队列阻塞）
+                    await asyncio.wait_for(queue.put(_STREAM_END), timeout=1.0)
+            except (asyncio.TimeoutError, asyncio.CancelledError):
+                pass  # 消费者已断开/关停：无需送达结束哨兵
+            finally:
+                _release_in_flight(conv_id, asyncio.current_task())
+
+    task = asyncio.create_task(producer())
+    _IN_FLIGHT[conv_id] = task
+    task.add_done_callback(_log_producer_error)
+
+    async def event_stream():
+        try:
+            while True:
+                evt = await queue.get()
+                if evt is _STREAM_END:
+                    break
+                yield evt
+        finally:
+            # 客户端断开：生产者不取消，切丢弃模式继续跑完
+            connected["value"] = False
+            # 清空队列，唤醒可能阻塞在 put 的生产者（解除背压）
+            while not queue.empty():
+                queue.get_nowait()
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+```
+
+新增 `conversation_generating` 端点（放在 `get_messages` 之前）：
+
+```python
+@router.get("/conversations/{conversation_id}/generating")
+def conversation_generating(conversation_id: str, current_user: dict = Depends(get_current_user)):
+    """前端有边界轮询：后台生成任务是否仍在运行（归属鉴权与 get_messages 一致）。"""
+    with get_db_ctx() as session:
+        conv = session.query(Conversation).filter(
+            Conversation.conversation_id == conversation_id,
+            Conversation.user_id == current_user["id"],
+        ).first()
+        if not conv:
+            raise HTTPException(status_code=404, detail="Conversation not found")
+    task = _IN_FLIGHT.get(conversation_id)
+    return {"generating": task is not None and not task.done()}
+```
+
+- [ ] **Step 4: 运行确认 green**
+
+```bash
+D:/miniConda/envs/rag/python.exe -m pytest tests/unit/test_sse_disconnect.py tests/integration/test_sse_disconnect.py -q
+```
+Expected: 全部 PASS（integration 需 PG 可达；PG 不可达时 integration 自动 skip，unit 必绿）。
+
+- [ ] **Step 5: 提交**
+
+```bash
+git add app/api/chat.py tests/unit/test_sse_disconnect.py tests/integration/test_sse_disconnect.py
+git commit -m "feat(sse-disconnect): background completion via queue+producer, in-flight registry, /generating endpoint"
+```
+
+---
+
+### Task 3: 服务关停清理（lifespan）
+
+**Files:**
+- Modify: `app/main.py:22-63`
+
+- [ ] **Step 1: 实现**（lifespan `yield` 后取消后台任务）
+
+`app/main.py` 顶部 import 加一行：
+
+```python
+from app.api.chat import shutdown_in_flight_generations
+```
+
+lifespan 末尾 `yield` 之后追加：
+
+```python
+    yield
+    logger.info("RAGent-py shutting down: cancelling in-flight background generations")
+    await shutdown_in_flight_generations()
+```
+
+- [ ] **Step 2: 验证**
+
+```bash
+D:/miniConda/envs/rag/python.exe -c "import app.main"
+```
+Expected: 无异常（import 链 + lifespan 语法）。
+
+```bash
+D:/miniConda/envs/rag/python.exe -m pytest tests/integration/test_sse_disconnect.py::test_shutdown_cancels_background -q
+```
+Expected: PASS。
+
+- [ ] **Step 3: 提交**
+
+```bash
+git add app/main.py
+git commit -m "feat(sse-disconnect): cancel in-flight generations on lifespan shutdown"
+```
+
+---
+
+### Task 4: memory get_history 排除 interrupted
+
+**Files:**
+- Modify: `app/core/memory.py:114-128`
+
+- [ ] **Step 1: 实现**（`get_history` 过滤条件 + docstring）
+
+```python
+        """Return recent messages within token budget (history_max_tokens).
+
+        DB 侧按 id 倒序取最新 _HISTORY_SCAN_LIMIT 条，再按预算从新往旧累加——
+        不再全表加载；按 id（单调）排序，消除 created_at 同值并列隐患。
+        空内容与 streaming/interrupted 状态消息不进上下文（半截回答不污染 LLM）。
+        """
+```
+
+过滤行改为：
+
+```python
+            if not m.content or m.status in ("streaming", "interrupted"):
+                continue
+```
+
+- [ ] **Step 2: 运行确认 green**
+
+```bash
+D:/miniConda/envs/rag/python.exe -m pytest tests/integration/test_sse_disconnect.py::test_interrupted_message_excluded_from_history -q
+```
+Expected: PASS（Task 1 已落该测试）。
+
+- [ ] **Step 3: 提交**
+
+```bash
+git add app/core/memory.py
+git commit -m "fix(memory): exclude interrupted messages from LLM context"
+```
+
+---
+
+### Task 5: 前端禁发 + 有边界轮询
+
+**Files:**
+- Modify: `frontend/src/api/chat.ts`
+- Modify: `frontend/src/views/ChatView.vue`
+
+- [ ] **Step 1: 实现 `chat.ts`**（`getMessages` 之后加一个方法）
+
+```typescript
+  async generating(conversationId: string): Promise<{ generating: boolean }> {
+    const res = await api.get(`/chat/conversations/${conversationId}/generating`)
+    return res.data
+  },
+```
+
+- [ ] **Step 2: 实现 `ChatView.vue` script**（`let abortController` 之后加状态与函数）
+
+```typescript
+// sse-disconnect-continue：后台生成任务追踪（断开后后端继续跑完）
+const bgConvs = ref<Set<string>>(new Set())
+let bgPollTimer: ReturnType<typeof setInterval> | null = null
+
+function isBgGenerating(): boolean {
+  return currentConvId.value !== null && bgConvs.value.has(currentConvId.value)
+}
+
+function stopBgPoll() {
+  if (bgPollTimer !== null) {
+    clearInterval(bgPollTimer)
+    bgPollTimer = null
+  }
+}
+
+async function checkBgStatus() {
+  for (const cid of [...bgConvs.value]) {
+    try {
+      const { generating } = await chatApi.generating(cid)
+      if (!generating) {
+        bgConvs.value = new Set([...bgConvs.value].filter((x) => x !== cid))
+        if (currentConvId.value === cid) {
+          await loadMessages(cid)   // 后台跑完：把完整答案刷出来
+        }
+      }
+    } catch {
+      /* 网络抖动：下轮轮询再试 */
+    }
+  }
+  if (bgConvs.value.size === 0 && bgPollTimer !== null) {
+    clearInterval(bgPollTimer)
+    bgPollTimer = null
+  }
+}
+
+function startBgPoll(convId: string) {
+  bgConvs.value = new Set(bgConvs.value).add(convId)
+  if (bgPollTimer === null) {
+    bgPollTimer = setInterval(checkBgStatus, 2000)
+  }
+  void checkBgStatus()
+}
+
+async function refreshBgStatus(cid: string) {
+  // 进入会话时探测一次：后台任务可能跨组件生命周期存活（刷新/重挂载）
+  try {
+    const { generating } = await chatApi.generating(cid)
+    if (generating) {
+      bgConvs.value = new Set(bgConvs.value).add(cid)
+      if (bgPollTimer === null) {
+        bgPollTimer = setInterval(checkBgStatus, 2000)
+      }
+      await checkBgStatus()
+    }
+  } catch {
+    /* ignore */
+  }
+}
+```
+
+- [ ] **Step 3: 改 `abortStream` / `send` / watch / onMounted / onUnmounted**
+
+```typescript
+function abortStream() {
+  if (abortController) {
+    abortController.abort()
+    abortController = null
+    // 断开后后端后台跑完：记录后台会话，同会话禁发 + 有边界轮询
+    if (currentConvId.value) {
+      startBgPoll(currentConvId.value)
+    }
+  }
+  streamError.value = false
+  streaming.value = false
+}
+```
+
+`send()` 守卫第一行改为：
+
+```typescript
+  if (!q || streaming.value || isBgGenerating()) return
+```
+
+conv-switch watch 里 `if (id) {` 分支改为：
+
+```typescript
+    if (id) {
+      await loadMessages(id)
+      await refreshBgStatus(id)
+    } else {
+      messages.value = []
+    }
+```
+
+`onMounted` 改为：
+
+```typescript
+onMounted(async () => {
+  if (props.currentConvId) {
+    currentConvId.value = props.currentConvId
+    await loadMessages(props.currentConvId)
+    await refreshBgStatus(props.currentConvId)
+  }
+})
+```
+
+`onUnmounted` 改为：
+
+```typescript
+onUnmounted(() => {
+  abortStream()
+  stopBgPoll()
+})
+```
+
+- [ ] **Step 4: 改 template**——发送按钮禁用条件 + 后台生成提示
+
+```html
+    <div class="chat-input-area">
+      <div v-if="isBgGenerating()" class="bg-generating-hint">上一轮回答仍在后台生成，完成后将自动显示…</div>
+      <div class="chat-input-wrapper">
+        <textarea
+          v-model="input"
+          class="chat-input"
+          rows="1"
+          placeholder="请输入问题..."
+          @keydown="handleKeydown"
+          @input="autoResize"
+        />
+        <button class="send-btn" :disabled="!input.trim() || streaming || isBgGenerating()" @click="send">
+```
+
+scoped style 里（`.chat-input-area` 附近）加：
+
+```css
+.bg-generating-hint {
+  font-size: 12px;
+  color: var(--text-secondary);
+  padding: 4px 2px 6px;
+}
+```
+
+- [ ] **Step 5: 构建验证**
+
+```bash
+cd frontend && npm run build
+```
+Expected: vue-tsc 类型检查 + vite build 通过，无 .js 产物污染（P3-17 已开 noEmit）。
+
+- [ ] **Step 6: 提交**
+
+```bash
+git add frontend/src/api/chat.ts frontend/src/views/ChatView.vue
+git commit -m "feat(frontend): block same-conversation send while background generation runs, bounded /generating polling"
+```
+
+---
+
+### Task 6: 全量回归 + 运行时实测
+
+- [ ] **Step 1: 全量单测 + 集成**
+
+```bash
+D:/miniConda/envs/rag/python.exe -m pytest -q
+```
+Expected: 全量 PASS（含既有 211 例，无回归）。
+
+- [ ] **Step 2: import 链检查**
+
+```bash
+D:/miniConda/envs/rag/python.exe -c "import app.main"
+```
+Expected: 无异常。
+
+- [ ] **Step 3: 运行时实测**（docker compose up -d 起 PG 后）
+
+```bash
+D:/miniConda/envs/rag/python.exe -m app.main        # 终端 1：后端
+cd frontend && npm run dev                            # 终端 2：前端 → http://localhost:5173
+```
+
+操作路径：
+1. 登录 → 发一条问题 → 等 token 流出 → **切换到另一个会话**（触发断开）。
+2. 后端日志确认：无 CancelledError/异常，后台任务继续跑完。
+3. 立即切回原会话：应看到「后台生成中」提示、发送按钮禁用。
+4. 等几秒（轮询 2s）→ 完整回答自动刷出 → 提示消失、发送恢复可用。
+5. 再发新消息 → 正常。
+6. 刷新页面回到该会话 → 完整答案仍在（已落库）。
+
+Expected: 6 步全部符合；后端日志无「后台生成任务异常」。
+
+- [ ] **Step 4: 更新 plan 状态 + 提交收尾**
+
+```bash
+git add docs/plans/2026-08-12-sse-disconnect-continue.md docs/plans/README.md
+git commit -m "docs(plan): mark sse-disconnect-continue complete"
+```
+
+（完成后把 README 索引「进行中」条目移到「已完成」并补 commit hash。）
