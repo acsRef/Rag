@@ -111,7 +111,7 @@ class ConversationMemory:
 
         DB 侧按 id 倒序取最新 _HISTORY_SCAN_LIMIT 条，再按预算从新往旧累加——
         不再全表加载；按 id（单调）排序，消除 created_at 同值并列隐患。
-        空内容与 streaming 状态消息不进上下文。
+        空内容与 streaming/interrupted 状态消息不进上下文（半截回答不污染 LLM）。
         """
         with get_db_ctx() as session:
             recent = (
@@ -125,7 +125,7 @@ class ConversationMemory:
         selected: list[dict] = []
         token_total = 0
         for m in recent:  # newest-first
-            if not m.content or m.status == "streaming":
+            if not m.content or m.status in ("streaming", "interrupted"):
                 continue
             t = _estimate_tokens(m.content)
             if token_total + t > settings.history_max_tokens:

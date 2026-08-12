@@ -4,6 +4,7 @@ from collections.abc import AsyncIterator
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.api.chat import router as chat_router
+from app.api.chat import shutdown_in_flight_generations
 from app.api.documents import router as documents_router
 from app.api.auth import router as auth_router
 from app.store.db import engine
@@ -61,6 +62,8 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
             session.close()
     logger.info("RAGent-py startup complete")
     yield
+    logger.info("RAGent-py shutting down: cancelling in-flight background generations")
+    await shutdown_in_flight_generations()
 
 
 app = FastAPI(title="RAGent Py", version="0.2.0", lifespan=lifespan)
