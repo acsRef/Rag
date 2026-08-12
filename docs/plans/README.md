@@ -6,7 +6,7 @@
 
 ## 进行中
 
-（暂无）
+- [2026-08-12-sse-disconnect-continue](2026-08-12-sse-disconnect-continue.md) — 前端断开后台保活（设计评审通过，待细化实施）：客户端断开后后端后台跑完当前回答落 `completed`；同会话后台生成期间禁发新消息；有边界轮询 `/generating`
 
 ## 已完成
 
