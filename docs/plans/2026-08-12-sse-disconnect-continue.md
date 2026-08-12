@@ -20,9 +20,11 @@
 3. **前端**：`ChatView.vue` `abortStream()` 断开 fetch，UI 本地复位，无任何「后台继续」感知；`send()` 守卫只查 `streaming`。
 
 **决策（与用户对齐）**：
-- 断开后**后台跑完**，完整答案落 `completed`（接受用户主动停止时也烧 LLM token 的代价）。
+- 断开后**后台跑完**，完整答案落 `completed`（接受用户被动离开时也烧 LLM token 的代价）。
 - 前端 abort 后提示「回答仍在后台生成」，**不轮询常驻**，仅在有后台任务时做有边界轮询。
 - 后台生成期间**同会话禁发新消息**（避免消息乱序：Q1 abort → 后台跑 A1 → 用户发 Q2 → A1 后落库变 Q1,Q2,A2,A1）；新对话不受限。
+- **「停止」按钮 = 真正取消**（区别于离开）：`POST /cancel` 取消生产者，半截答案不保留（取消点异），注册表立即清空 → 可马上发新消息。用户显式放弃时不烧 token。
+- 「用户直接关浏览器再打开」= 后台跑完 + 落库，打开会话即见完整答案（**硬需求**，已覆盖）。
 - 改动最小、高内聚低耦合、遵循现有代码规范。
 
 ---
@@ -57,8 +59,10 @@ _IN_FLIGHT: dict[str, asyncio.Task] = {}   # conversation_id → 生产者 task�
 ```
 
 - **状态端点** `GET /api/v1/chat/conversations/{conversation_id}/generating` → `{"generating": bool}`；校验调用者是该会话主人（复用 `get_messages` 的归属检查）。
+- **取消端点** `POST /api/v1/chat/conversations/{conversation_id}/cancel` → `{"cancelled": bool}`；停止按钮专用：取消生产者并 `await gather` 等清理完成（注册表移除），返回后用户可立即发新消息。归属鉴权同上。
 - **409 安全网**：`stream_chat` 入口发现同会话活跃 → HTTP 409「该对话仍在生成回答」。
-- **服务关停**：lifespan 里 `cancel()` 所有 `_IN_FLIGHT` 任务 → 走 GeneratorExit 兜底 → 半截答案落 `interrupted`，不丢状态。
+- **服务关停**：lifespan 里 `cancel()` 所有 `_IN_FLIGHT` 任务。
+- **取消/关停的持久化粒度**：取消点落在 LLM 流内时（常见），CancelledError 直穿生成器（`except GeneratorExit` 不捕 CancelledError），半截助手消息**不落库**——用户消息（LLM 前一节已落）保留，无半截污染；取消点落在两个 yield 之间时走 GeneratorExit 落 `interrupted`。两种情况都不丢用户消息、不损坏状态，故不改 pipeline。
 
 ### 前端：ChatView.vue
 
@@ -78,8 +82,9 @@ _IN_FLIGHT: dict[str, asyncio.Task] = {}   # conversation_id → 生产者 task�
 
 | 场景 | 行为 |
 | ----- | ---- |
-| 客户端断开 | 消费者退出，生产者切丢弃模式跑完，落 `completed` |
-| 服务关停 | lifespan cancel 生产者 → GeneratorExit → 落 `interrupted` + diag 保存 |
+| 客户端断开（离开/关页/切走） | 消费者退出，生产者切丢弃模式跑完，落 `completed` |
+| 用户点「停止」 | `POST /cancel` 取消生产者并等清理 → 注册表清空 → 立即发新消息；半截不保留 |
+| 服务关停 | lifespan cancel 生产者 → 半截落 `interrupted`（yield 间）或丢弃（LLM 流内），用户消息不丢 |
 | 生产者异常 | done 回调记日志；注册表 finally 移除（确认是自己） |
 | 同会话新请求（绕过前端） | 409 |
 | 队列满（慢客户端） | 生产者背压 await put，语义不变 |
@@ -96,7 +101,6 @@ _IN_FLIGHT: dict[str, asyncio.Task] = {}   # conversation_id → 生产者 task�
 - 实时续传（用户回来看到生成过程）——不做。
 - 跨 worker 后台任务（注册表进程内，多 uvicorn worker 下仅存活在发起请求的 worker）——既有架构边界，文档注明，不引入 Redis。
 - 后台任务配额/速率限制——单用户/小规模应用不做。
-- 前端新增「停止」按钮——当前 UI 无停止入口，断开场景 = 切会话/离开/断网，全部走后台跑完。
 
 ---
 
@@ -114,7 +118,7 @@ _IN_FLIGHT: dict[str, asyncio.Task] = {}   # conversation_id → 生产者 task�
 
 | 动作 | 文件 | 职责 |
 | ----- | ---- | ----- |
-| Modify | `app/api/chat.py` | `_IN_FLIGHT` 注册表、`_release_in_flight`/`_log_producer_error`、`shutdown_in_flight_generations`、`stream_chat` 队列+生产者、`/generating` 端点 |
+| Modify | `app/api/chat.py` | `_IN_FLIGHT` 注册表、`_release_in_flight`/`_log_producer_error`、`shutdown_in_flight_generations`、`stream_chat` 队列+生产者、`/generating` 状态端点、`/cancel` 取消端点 |
 | Modify | `app/main.py` | lifespan `yield` 后关停后台生成任务 |
 | Modify | `app/core/memory.py:128` | `get_history` 排除 `interrupted` |
 | Create | `tests/unit/test_sse_disconnect.py` | 注册表清理纯逻辑 |
@@ -144,6 +148,7 @@ import pytest
 
 from app.api.chat import (
     _IN_FLIGHT,
+    cancel_generation,
     conversation_generating,
     shutdown_in_flight_generations,
     stream_chat,
@@ -256,6 +261,27 @@ async def test_shutdown_cancels_background(integration_db, fake_llm_stack, monke
     await shutdown_in_flight_generations()
     assert task.done(), "关停后后台任务应被取消并结束"
     assert "conv-shutdown" not in _IN_FLIGHT, "注册表应清理"
+
+
+async def test_cancel_stops_background(integration_db, fake_llm_stack, monkeypatch):
+    from app.llm.chat import minimax_client
+    monkeypatch.setattr(minimax_client, "chat_stream", _slow_chat_stream)
+    monkeypatch.setattr(settings, "diagnostics_enabled", False)
+
+    resp = await stream_chat(
+        ChatRequest(query="你好", conversation_id="conv-cancel"), current_user=USER)
+    task = _IN_FLIGHT.get("conv-cancel")
+    assert task is not None and not task.done()
+
+    res = await cancel_generation("conv-cancel", current_user=USER)
+    assert res["cancelled"] is True
+    assert "conv-cancel" not in _IN_FLIGHT, "取消后注册表应清空，可立即发新消息"
+
+    with get_db_ctx() as session:
+        msgs = session.query(Message).filter(
+            Message.conversation_id == "conv-cancel").order_by(Message.id.asc()).all()
+    assert msgs and msgs[0].role == "user", "用户消息在取消后仍应保留"
+    # 半截助手消息是否落库取决于取消点（yield 间 vs LLM 流内），不强制断言
 
 
 async def test_interrupted_message_excluded_from_history(integration_db):
@@ -500,6 +526,30 @@ def conversation_generating(conversation_id: str, current_user: dict = Depends(g
             raise HTTPException(status_code=404, detail="Conversation not found")
     task = _IN_FLIGHT.get(conversation_id)
     return {"generating": task is not None and not task.done()}
+
+
+@router.post("/conversations/{conversation_id}/cancel")
+async def cancel_generation(conversation_id: str, current_user: dict = Depends(get_current_user)):
+    """「停止」按钮：显式取消生成任务。
+
+    与「离开自动后台跑完」不同——用户主动停止 = 放弃该答案。
+    取消后等任务清理完成（注册表移除），返回即可立即发新消息；
+    半截助手消息是否落库取决于取消点（yield 间走 GeneratorExit 落 interrupted，
+    LLM 流内 CancelledError 直穿不落），用户消息始终保留。
+    """
+    with get_db_ctx() as session:
+        conv = session.query(Conversation).filter(
+            Conversation.conversation_id == conversation_id,
+            Conversation.user_id == current_user["id"],
+        ).first()
+        if not conv:
+            raise HTTPException(status_code=404, detail="Conversation not found")
+    task = _IN_FLIGHT.get(conversation_id)
+    if task is None or task.done():
+        return {"cancelled": False}
+    task.cancel()
+    await asyncio.gather(task, return_exceptions=True)
+    return {"cancelled": True}
 ```
 
 - [ ] **Step 4: 运行确认 green**
@@ -605,11 +655,15 @@ git commit -m "fix(memory): exclude interrupted messages from LLM context"
 - Modify: `frontend/src/api/chat.ts`
 - Modify: `frontend/src/views/ChatView.vue`
 
-- [ ] **Step 1: 实现 `chat.ts`**（`getMessages` 之后加一个方法）
+- [ ] **Step 1: 实现 `chat.ts`**（`getMessages` 之后加两个方法）
 
 ```typescript
   async generating(conversationId: string): Promise<{ generating: boolean }> {
     const res = await api.get(`/chat/conversations/${conversationId}/generating`)
+    return res.data
+  },
+  async cancelGeneration(conversationId: string): Promise<{ cancelled: boolean }> {
+    const res = await api.post(`/chat/conversations/${conversationId}/cancel`)
     return res.data
   },
 ```
@@ -677,20 +731,29 @@ async function refreshBgStatus(cid: string) {
 }
 ```
 
-- [ ] **Step 3: 改 `abortStream` / `send` / watch / onMounted / onUnmounted**
+- [ ] **Step 3: 改 `abortStream` / 新增 `stopGeneration` / `send` / watch / onMounted / onUnmounted**
 
 ```typescript
-function abortStream() {
+function abortStream(startBg = true) {
   if (abortController) {
     abortController.abort()
     abortController = null
-    // 断开后后端后台跑完：记录后台会话，同会话禁发 + 有边界轮询
-    if (currentConvId.value) {
+    // 默认断开后后端后台跑完：记录后台会话，同会话禁发 + 有边界轮询
+    if (startBg && currentConvId.value) {
       startBgPoll(currentConvId.value)
     }
   }
   streamError.value = false
   streaming.value = false
+}
+
+async function stopGeneration() {
+  // 「停止」按钮 = 真正取消（区别于离开的后台跑完）：调后端 cancel 端点
+  const cid = currentConvId.value
+  if (cid) {
+    try { await chatApi.cancelGeneration(cid) } catch { /* 已断开/无任务：忽略 */ }
+  }
+  abortStream(false)   // 不启动后台轮询：已显式取消
 }
 ```
 
@@ -746,6 +809,9 @@ onUnmounted(() => {
           @keydown="handleKeydown"
           @input="autoResize"
         />
+        <button v-if="streaming" class="send-btn stop-btn" @click="stopGeneration" title="停止生成">
+          <span class="stop-label">停止</span>
+        </button>
         <button class="send-btn" :disabled="!input.trim() || streaming || isBgGenerating()" @click="send">
 ```
 
@@ -757,6 +823,8 @@ scoped style 里（`.chat-input-area` 附近）加：
   color: var(--text-secondary);
   padding: 4px 2px 6px;
 }
+.stop-btn { background: var(--danger, #e5484d); }
+.stop-label { font-size: 12px; }
 ```
 
 - [ ] **Step 5: 构建验证**
@@ -803,10 +871,12 @@ cd frontend && npm run dev                            # 终端 2：前端 → ht
 2. 后端日志确认：无 CancelledError/异常，后台任务继续跑完。
 3. 立即切回原会话：应看到「后台生成中」提示、发送按钮禁用。
 4. 等几秒（轮询 2s）→ 完整回答自动刷出 → 提示消失、发送恢复可用。
-5. 再发新消息 → 正常。
-6. 刷新页面回到该会话 → 完整答案仍在（已落库）。
+5. 再发一条问题 → 流出几个 token 后点**「停止」按钮** → 流立即停止、无后台提示（已真正取消）→ 立即可发新消息。
+6. **直接关闭浏览器标签页**（后台生成中）→ 重新打开 http://localhost:5173 → 进入该会话 → 完整答案已在。
+7. 刷新页面回到该会话 → 完整答案仍在（已落库）。
+8. 回归：发消息 → 自然跑完 → 正常收 done。
 
-Expected: 6 步全部符合；后端日志无「后台生成任务异常」。
+Expected: 8 步全部符合；后端日志无「后台生成任务异常」。
 
 - [ ] **Step 4: 更新 plan 状态 + 提交收尾**
 
