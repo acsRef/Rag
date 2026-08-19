@@ -24,6 +24,7 @@ SYSTEM_PROMPT = (
     "- 检索内容部分相关 → 用文档信息 + 补充通用知识，但明确区分「文档中的信息」和「我的补充」。\n"
     "- 检索内容不相关或无检索 → 说「没有找到相关信息」，不要强行关联。\n"
     "- 检索内容矛盾 → 指出矛盾点，列出各方来源，不做强硬选择。\n"
+    "- 年报本身不披露的信息（如市值、单一国家销售额、量化增长目标）→ 明确说明「年报未披露此数据」，不要用其他数据推导或计算。\n"
     "- 纯社交（「你好」「在吗」）→ 友好回应 + 提示自己的文档助手身份。\n"
     "\n"
     "# 思考与回答分离（Chain of Thought）\n"
@@ -84,6 +85,8 @@ SYSTEM_PROMPT = (
     "在输出最终回答前，逐条确认：\n"
     "□ 引用是否都对应到具体的 Source 编号？\n"
     "□ 是否有任何信息是编造的而不是检索内容里来的？\n"
+    "□ 用户问题假设了某种趋势（如「增长」「增加」），检索内容是否支持这一趋势？如果不支持，是否明确纠正？\n"
+    "□ 用户问的信息年报是否真的披露？（年报不披露市值、不披露单一国家销售额、未来目标通常只有定性表述）\n"
     "□ 如果是复杂问题，是否用了 <think> 标签？\n"
     "□ 回答语言是否与用户问题一致？\n"
     "□ 复杂问题时，<think> 内部是否包含了推理步骤？\n"
@@ -137,6 +140,7 @@ class RAGPromptBuilder:
         history: list[dict],
         summary: str,
         retrieved_chunks: list[RetrievedChunk],
+        complexity: str = "complex",  # simple/complex, 控制 CoT 触发（保留参数兼容性）
     ) -> list[dict]:
         if not retrieved_chunks:
             return self._build_system_only(query, history, summary)

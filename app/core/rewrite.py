@@ -33,6 +33,24 @@ REWRITE_PROMPT = """你是一个查询改写助手。你的任务是将用户问
 3. 将消代后的问题改写为独立、完整、适合检索的自包含查询
 4. 如果问题包含多个不同的子问题，将它们拆分开
 
+# 特殊场景处理
+
+## 年份/时间范围拆分
+当问题涉及多个年份或时间范围时（如"2023-2025年"、"近三年"、"分别"），拆分为每个年份/时间段的独立子问题：
+- "2023-2025年营收分别是多少" → 拆为 "2023年营收"、"2024年营收"、"2025年营收"
+- "近三年海外收入" → 拆为每年的海外收入子问题
+- 如果无法确定具体年份，保留原始查询但确保子问题包含时间限定
+
+## 前提验证
+当问题包含可能不正确的前提时（如"为什么X增长了"、"X增加了多少"），增加一个验证性子问题：
+- "为什么研发投入连续三年加大" → 子问题增加 "研发投入近三年的实际变化趋势"
+- "混凝土机械收入同比增长了多少" → 子问题增加 "混凝土机械收入的实际同比变化"
+- 验证性子问题用于检索实际数据，帮助模型判断前提是否成立
+
+## 跨文档/跨实体对比
+当问题涉及多个实体或文档的对比时，拆分为各实体的独立查询：
+- "A 和 B 的区别" → 拆为 "A 的特点"、"B 的特点"、"A 和 B 的区别"
+
 # 边界处理
 
 - 没有问题 → 直接原样返回
@@ -46,9 +64,17 @@ REWRITE_PROMPT = """你是一个查询改写助手。你的任务是将用户问
 对话摘要："用户询问了 Transformer 注意力机制的原理，已解释 QKV 计算方式"
 输出：{{"rewritten_query": "如何用 PyTorch 实现 Transformer 注意力机制的 QKV 计算", "sub_questions": ["如何用 PyTorch 实现 Transformer 注意力机制的 QKV 计算"]}}
 
-用户问题："上面的方法和基于向量的有什么区别？"
-对话摘要："讨论了 RAG 的三种分块策略：固定大小分块、基于句子的分块和语义分块"
-输出：{{"rewritten_query": "语义分块方法和基于向量的分块方法有什么区别", "sub_questions": ["语义分块方法和基于向量的分块方法有什么区别"]}}
+用户问题："2023-2025年三一重工营业收入分别是多少？"
+对话摘要：""
+输出：{{"rewritten_query": "三一重工2023-2025年营业收入", "sub_questions": ["三一重工2023年营业收入", "三一重工2024年营业收入", "三一重工2025年营业收入"]}}
+
+用户问题："为什么三一重工连续三年加大研发投入金额？"
+对话摘要：""
+输出：{{"rewritten_query": "三一重工研发投入变化趋势", "sub_questions": ["三一重工研发投入近三年的实际变化趋势", "三一重工各年研发投入金额及占营收比例"]}}
+
+用户问题："2024年三一重工混凝土机械收入同比增长了多少？"
+对话摘要：""
+输出：{{"rewritten_query": "2024年三一重工混凝土机械收入同比变化", "sub_questions": ["2024年三一重工混凝土机械销售收入", "2023年三一重工混凝土机械销售收入", "混凝土机械收入的实际同比变化"]}}
 
 用户问题："什么是 RAG？"
 对话摘要：""
@@ -63,14 +89,54 @@ REWRITE_PROMPT = """你是一个查询改写助手。你的任务是将用户问
 用户问题：{question}
 
 # 输出格式
-{{"rewritten_query": "改写后的主查询", "sub_questions": ["子问题1", "子问题2", ...]}}
+{{"rewritten_query": "改写后的主查询", "sub_questions": ["子问题1", "子问题2", ...], "sub_dependencies": [[], [0], [0,1]], "complexity": "complex"}}
 
-如果只有一个问题，sub_questions 中只包含改写后的查询即可。
+`sub_dependencies` 标注依赖关系（0-based 索引）：
+- `[]` 无依赖，独立检索
+- `[0]` 依赖第 1 个子问题的结果
+- `[0,1]` 依赖前两个
+
+如果只有一个问题，sub_questions 只含改写后的查询，sub_dependencies 为 `[[]]`。
+
+## 子问题依赖示例（覆盖常见模式）
+
+【示例 A · 独立拆分】无依赖，平行检索
+问题："近三年营收分别是多少？"
+输出：{{"rewritten_query": "近三年营收对比", "sub_questions": ["2023年营收", "2024年营收", "2025年营收"], "sub_dependencies": [[], [], []]}}
+
+【示例 B · 链式推理】后续子问题依赖前面的检索结果
+问题："为什么2025年净利润大增？"
+输出：{{"rewritten_query": "2025年净利润大增原因分析", "sub_questions": ["2025年净利润数据", "2025年营收和毛利变化", "2025年成本费用变化"], "sub_dependencies": [[], [0], [0,1]]}}
+
+【示例 C · 前提验证】验证子问题先于主推理
+问题："为什么研发投入连续三年加大？"
+输出：{{"rewritten_query": "研发投入近三年实际变化", "sub_questions": ["研发投入近三年实际数值", "研发投入与营收比例变化"], "sub_dependencies": [[], [0]]}}
+
+【示例 D · 综合判断】先检索证据再综合判断
+问题："判断盈利改善是否靠国内市场爆发"
+输出：{{"rewritten_query": "盈利改善驱动因素分析", "sub_questions": ["近三年营收增速", "国际国内占比变化", "国际毛利率趋势"], "sub_dependencies": [[], [0], [0,1]], "complexity": "complex"}}
+
+## 难度分类（控制 CoT 触发）
+
+`complexity` 控制下游是否触发 Chain-of-Thought：
+- `"simple"`: 直接事实查询，单点信息——不要触发 CoT，直接给答案
+  - 例：「2023 年营收是多少？」「公司有哪些子公司？」「专利申请多少件」
+- `"complex"`: 需要跨文档/多步骤推理/前提验证/趋势判断——触发 CoT
+  - 例：「判断盈利改善是否靠国内爆发」「为什么研发投入连续三年加大」「近三年海外收入趋势」
+
+判断要点：
+- 只问单个数字/单点信息 → simple
+- 涉及「为什么」「判断」「是否成立」「趋势」「差异」「变化」→ complex
+- 需要跨年/跨文档综合对比 → complex
+- 包含「请解释」「如何」「原因」 → complex
 
 # 输出前确认
 □ 所有代词都已消除？
 □ 改写后的查询能独立理解？
 □ 没有引入原文不存在的信息？
+□ 涉及多年度时是否拆分为各年子问题？
+□ 问题前提可能不正确时是否增加了验证性子问题？
+□ sub_dependencies 是否正确标注依赖关系？
 □ JSON 格式正确？"""
 
 
@@ -118,7 +184,33 @@ class QueryRewriteService:
             subs = subs[:settings.max_sub_questions]
         if not subs:
             subs = [rewritten]
-        return RewriteResult(rewritten_query=rewritten, sub_questions=subs)
+        # 解析 sub_dependencies（0-based 索引列表的列表）
+        # 容错：长度不对/类型不对/索引越界时降级为全无依赖
+        raw_deps = data.get("sub_dependencies") or []
+        deps: list[list[int]] = []
+        if isinstance(raw_deps, list) and len(raw_deps) == len(subs):
+            for i, dep in enumerate(raw_deps):
+                if not isinstance(dep, list):
+                    deps.append([])
+                    continue
+                # 只保留合法范围内且 < i 的索引（不能依赖自己或后续）
+                valid = [int(d) for d in dep if isinstance(d, int) and 0 <= d < i]
+                deps.append(valid)
+        else:
+            deps = [[] for _ in subs]
+
+        # 解析 complexity（控制 CoT 触发）
+        # 失败时默认 "complex"——保守触发 CoT 防止误判
+        complexity = data.get("complexity", "complex")
+        if complexity not in ("simple", "complex"):
+            complexity = "complex"
+
+        return RewriteResult(
+            rewritten_query=rewritten,
+            sub_questions=subs,
+            sub_dependencies=deps,
+            complexity=complexity,
+        )
 
 
 query_rewrite_service = QueryRewriteService()

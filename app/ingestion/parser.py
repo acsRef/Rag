@@ -190,7 +190,81 @@ class DocumentParser:
     # ── Doc handlers ──────────────────────────────────────
 
     def _handle_pdf(self, content: bytes, filename: str) -> str:
-        return self._parse_via_docling(content, filename)
+        """PDF via pymupdf4llm — preserves table structure in Markdown (比纯 PyMuPDF 好很多).
+
+        速度约 4 分钟/250页 PDF (CPU),但表格识别质量显著提升。
+        后处理：去除页眉页脚噪音（页码、重复的文档标题）。
+        """
+        import tempfile
+        import pymupdf4llm
+        try:
+            # pymupdf4llm needs a file path, not bytes
+            suffix = ".pdf"
+            with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+                tmp.write(content)
+                tmp_path = tmp.name
+            try:
+                md = pymupdf4llm.to_markdown(tmp_path)
+                if not md or not md.strip():
+                    return self._parse_pdf_basic(content, filename)
+                # 去除页眉页脚噪音
+                md = self._clean_pdf_noise(md)
+                return md
+            finally:
+                import os
+                os.unlink(tmp_path)
+        except Exception:
+            import logging
+            logging.getLogger(__name__).exception("pymupdf4llm failed for %s, falling back to basic", filename)
+            return self._parse_pdf_basic(content, filename)
+
+    @staticmethod
+    def _clean_pdf_noise(md: str) -> str:
+        """去除 PDF 页眉页脚噪音：页码行、重复的文档标题行。
+
+        匹配模式：
+        - "**N** / **M**" 或 "N / M" 形式的页码
+        - 连续出现 3+ 次的短行（如 "2023 年年度报告"）视为页眉/页脚
+        """
+        lines = md.split("\n")
+        cleaned: list[str] = []
+
+        # 统计短行出现频率，找出页眉/页脚候选
+        from collections import Counter
+        short_lines = Counter()
+        for line in lines:
+            stripped = line.strip()
+            if stripped and len(stripped) < 40:
+                short_lines[stripped] += 1
+
+        # 出现 5+ 次的短行视为页眉/页脚（年报 250 页，页眉至少出现 100+ 次）
+        noise_patterns = {text for text, count in short_lines.items() if count >= 5}
+        # 页码模式 "**N** / **M**" 或 "N / M"
+        page_num_re = re.compile(r'^\*?\*?\d+\*?\*?\s*/\s*\*?\*?\d+\*?\*?$')
+
+        for line in lines:
+            stripped = line.strip()
+            # 跳过页码行
+            if page_num_re.match(stripped):
+                continue
+            # 跳过高频短行（页眉/页脚）
+            if stripped in noise_patterns:
+                continue
+            cleaned.append(line)
+
+        return "\n".join(cleaned)
+
+    def _parse_pdf_basic(self, content: bytes, filename: str) -> str:
+        """Fallback: basic PyMuPDF text extraction (fast but no table structure)."""
+        import fitz
+        doc = fitz.open(stream=content, filetype="pdf")
+        pages_md: list[str] = []
+        for i, page in enumerate(doc, 1):
+            text = page.get_text("text")
+            if text and text.strip():
+                pages_md.append(f"<!-- Page {i} -->\n\n{text.strip()}")
+        doc.close()
+        return "\n\n---\n\n".join(pages_md) if pages_md else ""
 
     def _handle_docx(self, content: bytes, filename: str) -> str:
         return self._parse_via_docling(content, filename)

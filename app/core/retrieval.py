@@ -59,6 +59,7 @@ def _search_kb(
     can_read_all: bool,
     top_k: int,
     user_id: str = "",
+    document_ids: list[str] | None = None,
 ) -> list[dict]:
     fn = pgvector_store.hybrid_search if settings.hybrid_search_enabled else pgvector_store.search
     kwargs: dict = dict(
@@ -72,6 +73,12 @@ def _search_kb(
     if settings.hybrid_search_enabled:
         kwargs.update(query=query, fetch_k=settings.hybrid_search_top_k, rrf_k=settings.hybrid_rrf_k,
                        enable_question_channel=settings.question_channel_enabled)
+        if document_ids:
+            kwargs["document_ids"] = document_ids
+    else:
+        # Pure vector search also supports document_ids
+        if document_ids:
+            kwargs["document_ids"] = document_ids
     # DB 熔断入口闸门：postgres OPEN 时直接返回 []（不再撞库导致 SSE 挂起）
     if not provider_health.get("postgres").allow_request():
         return []
@@ -93,19 +100,23 @@ async def _collect_results(
     seen_ids: set[str],
     results: list[dict],
     user_id: str = "",
+    document_ids: list[str] | None = None,
 ):
     """设计审查 P1-7：并行检索各 KB，再在主协程归并去重。
 
     旧实现逐 KB 串行调 _search_kb（每 KB 最多 4 次顺序 DB 查询）。现在
     asyncio.gather 并行各 KB（各搜索经 to_thread 跑在线程池）；去重/标注
     在事件循环内由 gather 顺序收集后统一处理，天然线程竞态安全。
+
+    document_ids: if provided, restrict search to chunks in these documents only
+    (two-stage retrieval: stage 2 uses document filter from stage 1).
     """
     if not kb_ids:
         return
     per_kb = await asyncio.gather(
         *(asyncio.to_thread(
             _search_kb, kb_id, query_emb, query, user_role_ids, can_read_all, top_k,
-            user_id=user_id) for kb_id in kb_ids),
+            user_id=user_id, document_ids=document_ids) for kb_id in kb_ids),
         return_exceptions=True,
     )
     for kb_id, chunks in zip(kb_ids, per_kb):
@@ -120,6 +131,242 @@ async def _collect_results(
                 results.append(c)
 
 
+# ── Section-aware boost ──────────────────────────────────
+
+# Section 类型定义：(查询关键词, 权威 section 模式, boost 倍数)
+# 原理：向量/BM25 检索偏向叙述性文本，表格数据（如"主要会计数据"）分数偏低。
+# 通过 section 权威性 boost 把权威 section 的 chunk 推到最前面。
+_SECTION_RULES = [
+    {
+        "query_keywords": {
+            "营收", "营业收入", "营业总收入", "利润", "净利润", "归母",
+            "资产", "总资产", "负债", "现金流", "每股", "分红", "股利",
+            "毛利率", "净利率", "净资产", "负债率", "权益", "公积金",
+            "基本每股收益", "稀释每股收益", "单位", "金额单位", "千元",
+        },
+        "section_patterns": [
+            "主要会计数据", "主要财务指标",
+        ],
+        "boost": 5.0,  # 强力 boost：核心汇总数据表
+    },
+    {
+        "query_keywords": {
+            "研发", "资本化", "费用化", "研发投入",
+        },
+        "section_patterns": [
+            "研发投入情况表", "研发投入",
+        ],
+        "boost": 5.0,  # 研发表格
+    },
+    {
+        "query_keywords": {
+            "营收", "营业收入", "利润", "资产", "负债", "现金流",
+            "每股", "分红", "股利",
+        },
+        "section_patterns": [
+            "合并利润表", "合并资产负债表", "合并现金流量表",
+            "利润表", "资产负债表", "现金流量表", "所有者权益变动表",
+        ],
+        "boost": 3.0,  # 财务报表
+    },
+    {
+        "query_keywords": {
+            "员工", "在职", "人数", "职工",
+        },
+        "section_patterns": [
+            "在职员工", "员工情况", "员工",
+        ],
+        "boost": 3.0,
+    },
+    {
+        "query_keywords": {
+            "持股", "控股", "子公司", "参股",
+        },
+        "section_patterns": [
+            "主要控股", "子公司", "参股公司",
+        ],
+        "boost": 3.0,
+    },
+    {
+        "query_keywords": {
+            "战略", "业务", "市场", "竞争", "行业", "产品", "客户",
+            "渠道", "海外", "国际", "国内", "创新", "趋势",
+            "经营", "讨论", "分析",
+        },
+        "section_patterns": [
+            "管理层讨论与分析", "经营情况讨论与分析",
+        ],
+        "boost": 2.0,  # 业务分析
+    },
+    {
+        "query_keywords": {
+            "董事", "监事", "高管", "薪酬", "股东", "股权", "治理",
+            "签字", "会计师", "审计", "委员会",
+        },
+        "section_patterns": [
+            "公司治理", "董事", "监事", "高级管理人员", "股东信息",
+        ],
+        "boost": 2.0,
+    },
+]
+
+
+def _boost_by_section_type(results: list[dict], query: str) -> list[dict]:
+    """根据 query 关键词给权威 section 的 chunks 大幅加分。
+
+    匹配 section_path 的最后一级（叶子节点），避免父级路径误匹配。
+    多规则叠加：如果一个 chunk 匹配多个规则，boost 倍数累积。
+    """
+    if not results or not query:
+        return results
+
+    boosted = False
+    for r in results:
+        full_path = r.get("section_path", "") or ""
+        leaf = full_path.rsplit(">", 1)[-1].strip() if ">" in full_path else full_path
+        total_boost = 1.0
+
+        for rule in _SECTION_RULES:
+            if not any(kw in query for kw in rule["query_keywords"]):
+                continue
+            if any(pat in leaf for pat in rule["section_patterns"]):
+                total_boost *= rule["boost"]
+                boosted = True
+
+        if total_boost > 1.0:
+            r["score"] = r.get("score", 0) * total_boost
+
+    if boosted:
+        results.sort(key=lambda x: x.get("score", 0), reverse=True)
+        logger.debug("section_boost applied query=%s", query[:40])
+
+    return results
+
+
+# 权威 section 列表 — 这些 section 的数据最重要，需要保证被检索到
+_AUTHORITATIVE_SECTIONS = [
+    # 核心财务汇总表
+    "主要会计数据", "主要财务指标",
+    # 研发相关
+    "研发投入情况表", "研发投入",
+    # 利润表相关
+    "利润表", "合并利润表", "母公司利润表",
+    # 资产负债相关
+    "资产负债表", "合并资产负债表", "母公司资产负债表",
+    # 现金流相关
+    "现金流量表", "合并现金流量表",
+    # 员工相关
+    "在职员工", "员工情况",
+    # 分红相关
+    "利润分配", "分红",
+]
+
+
+def _supplement_authoritative_sections(
+    results: list[dict],
+    query: str,
+    kb_ids: list[str],
+    user_role_ids: list[int] | None,
+    can_read_all: bool,
+    user_id: str,
+) -> list[dict]:
+    """补充检索：确保权威 section 的正确 chunks 在候选中。
+
+    问题：
+    1. BM25 ts_rank 偏向叙述性文本，表格数据（如"主要会计数据"）经常被挤出 top-K
+    2. 同一 section path 下可能有多个 chunk（正确的表格 + 无关的文本），
+       主检索可能只拿到无关的那个
+
+    解决：对财务类查询，定向 BM25 检索权威 section 的 chunks，
+    确保最高分的正确 chunk 在候选中。
+    """
+    if not query:
+        return results
+
+    # 检查 query 是否涉及权威 section 的数据类型
+    financial_keywords = {
+        # 财务数据
+        "营收", "营业收入", "营业总收入", "利润", "净利润", "归母",
+        "资产", "总资产", "负债", "现金流", "每股", "分红", "股利",
+        "毛利率", "净利率", "净资产", "负债率", "权益", "公积金",
+        "基本每股收益", "稀释每股收益",
+        # 研发
+        "研发", "资本化", "费用化",
+        # 表格/单位
+        "单位", "金额单位", "千元", "万元", "亿元",
+        # 员工
+        "员工", "在职", "人数",
+        # 投资/持股
+        "持股", "控股", "子公司",
+    }
+    if not any(kw in query for kw in financial_keywords):
+        return results
+
+    existing_ids = {r.get("chunk_id") for r in results}
+    import re as _re
+    query_years = set(_re.findall(r'(20\d{2})', query))
+
+    # Step 1: 对已有结果中的权威 chunks 加分（防止低分被 rerank/MMR 淘汰）
+    boosted_existing = 0
+    for r in results:
+        full_path = r.get("section_path", "") or ""
+        leaf = full_path.rsplit(">", 1)[-1].strip() if ">" in full_path else full_path
+        if not any(sec in leaf for sec in _AUTHORITATIVE_SECTIONS):
+            continue
+        # 年份匹配
+        if query_years:
+            chunk_years = set(_re.findall(r'(20\d{2})', full_path))
+            if not (query_years & chunk_years):
+                continue
+        # 权威 chunk 且年份匹配 → 加分
+        r["score"] = r.get("score", 0) * 3.0
+        boosted_existing += 1
+
+    if boosted_existing > 0:
+        results.sort(key=lambda x: x.get("score", 0), reverse=True)
+        logger.info("section_supplement boosted_existing=%d query=%s",
+                     boosted_existing, query[:40])
+
+    # Step 2: 定向补充检索（添加主检索中缺失的权威 chunks）
+    try:
+        from app.store.pgvector_store import bm25_search
+        supplementary = bm25_search(
+            kb_ids=kb_ids,
+            query=query,
+            user_role_ids=user_role_ids,
+            can_read_all=can_read_all,
+            top_k=50,
+            user_id=user_id,
+        )
+
+        added = 0
+        for r in supplementary:
+            if r.get("chunk_id") in existing_ids:
+                continue
+            full_path = r.get("section_path", "") or ""
+            leaf = full_path.rsplit(">", 1)[-1].strip() if ">" in full_path else full_path
+            if not any(sec in leaf for sec in _AUTHORITATIVE_SECTIONS):
+                continue
+            if query_years:
+                chunk_years = set(_re.findall(r'(20\d{2})', full_path))
+                if not (query_years & chunk_years):
+                    continue
+            results.append(r)
+            existing_ids.add(r["chunk_id"])
+            added += 1
+            if added >= 2:
+                break
+
+        if added > 0:
+            results.sort(key=lambda x: x.get("score", 0), reverse=True)
+            logger.info("section_supplement added=%d query=%s", added, query[:40])
+
+    except Exception:
+        logger.exception("section_supplement failed")
+
+    return results
+
+
 class RetrievalEngine:
     async def retrieve(
         self,
@@ -129,6 +376,7 @@ class RetrievalEngine:
         can_read_all: bool = False,
         ctx=None,  # DiagContext, injected from pipeline.py
         user_id: str = "",
+        use_two_stage: bool = False,
     ) -> list[RetrievedChunk]:
         top_k = settings.vector_search_top_k
         round_data: dict | None = None
@@ -176,10 +424,36 @@ class RetrievalEngine:
         seen_ids: set[str] = set()
         results: list[dict] = []
 
+        # Two-stage retrieval: first find relevant documents, then search within them
+        doc_filter: list[str] | None = None
+        if use_two_stage:
+            t_stage1 = time.monotonic()
+            try:
+                doc_filter = await asyncio.to_thread(
+                    pgvector_store.pre_retrieve_documents,
+                    query_emb, target_kb_ids,
+                    5,  # top_k_docs
+                    0.3,  # threshold
+                )
+                stage1_elapsed = (time.monotonic() - t_stage1) * 1000
+                logger.info(
+                    "retrieve.two_stage stage1_docs=%d elapsed_ms=%.1f",
+                    len(doc_filter), stage1_elapsed,
+                )
+                if round_data is not None:
+                    round_data.setdefault("two_stage", {})["stage1"] = {
+                        "doc_count": len(doc_filter),
+                        "doc_ids": doc_filter[:5],
+                        "elapsed_ms": round(stage1_elapsed, 1),
+                    }
+            except Exception:
+                logger.exception("two_stage.stage1_failed, falling back to single-stage")
+                doc_filter = None
+
         await _collect_results(
             target_kb_ids, query_emb, query,
             user_role_ids, can_read_all, top_k, seen_ids, results,
-            user_id,
+            user_id, document_ids=doc_filter,
         )
 
         if intent and intent.matches:
@@ -191,8 +465,16 @@ class RetrievalEngine:
                 await _collect_results(
                     fallback, query_emb, query,
                     user_role_ids, can_read_all, top_k, seen_ids, results,
-                    user_id,
+                    user_id, document_ids=doc_filter,
                 )
+
+        # 补充检索：确保权威 section 的 chunks 在候选中
+        # BM25 ts_rank 偏向叙述性文本，表格数据（如"主要会计数据"）关键词稀疏
+        # 经常被挤出 top-K，导致 LLM 拿到错误 section 的数据
+        results = _supplement_authoritative_sections(
+            results, query, target_kb_ids,
+            user_role_ids, can_read_all, user_id,
+        )
 
         results.sort(key=lambda x: x["score"], reverse=True)
         candidate_k = settings.mmr_candidate_k if settings.mmr_enabled else top_k
@@ -357,6 +639,27 @@ class RetrievalEngine:
 
         for r in results:
             r.setdefault("document_id", "")
+
+        # 年份注入：按 document_id 查文件名提取年份，注入到每条结果
+        # 显式字段，不依赖路径猜测；非年报类文档（无年份）则 year 为空
+        doc_ids = {r["document_id"] for r in results if r["document_id"]}
+        year_map: dict[str, str] = {}
+        if doc_ids:
+            try:
+                from app.store.db import get_db_ctx, Document
+                with get_db_ctx() as session:
+                    rows = session.query(Document.document_id, Document.filename).filter(
+                        Document.document_id.in_(doc_ids)).all()
+                    from app.ingestion.indexer import _extract_year_from_filename
+                    for doc_id, filename in rows:
+                        year_map[doc_id] = _extract_year_from_filename(filename) or ""
+            except Exception:
+                logger.exception("year_enrichment_failed")
+        for r in results:
+            r["year"] = year_map.get(r["document_id"], "")
+
+        # Section-aware boost: 根据 query 关键词给特定 section 的 chunks 加分
+        results = _boost_by_section_type(results, query)
 
         if round_data is not None:
             round_data["total_elapsed_ms"] = round((time.monotonic() - t_total) * 1000, 1)

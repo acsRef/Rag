@@ -10,6 +10,7 @@ import concurrent.futures
 import hashlib
 import json
 import logging
+import re
 import time
 
 from app.store import pgvector_store
@@ -25,6 +26,66 @@ from app.core.doc_relation import cross_doc_builder
 
 logger = logging.getLogger(__name__)
 _INDEX_POOL = concurrent.futures.ThreadPoolExecutor(max_workers=2)
+
+
+def _extract_year_from_filename(filename: str) -> str | None:
+    """从文件名提取年份标签，用于 chunk 的时序标注。
+
+    匹配模式：
+    - "三一重工_2023年年度报告.pdf" → "2023年"
+    - "2024_annual_report.pdf" → "2024年"
+    - "Q1_2025_report.docx" → "2025年"
+    """
+    m = re.search(r"((?:19|20)\d{2})\s*年?", filename)
+    if m:
+        return f"{m.group(1)}年"
+    return None
+
+
+def _extract_year_from_content(text: str) -> str | None:
+    """从文档正文提取年份（多源兜底）。
+
+    适用场景：文件名不含年份（如 "annual_report.pdf"），但文档第一页有 "2023 年"
+    等模式。扫描文本前 1500 字（通常包含报告封面/标题），匹配多个常见模式：
+    - "2023年年度报告" / "2023 年度报告"
+    - "本报告期：2023 年" / "报告年度：2023"
+    - "2023 年 12 月 31 日"（用最新出现的年份）
+
+    Returns: "YYYY年" 或 None
+    """
+    if not text:
+        return None
+    head = text[:1500]
+
+    # 优先匹配明确的"年度报告"形式（最高置信度）
+    patterns = [
+        r"((?:19|20)\d{2})\s*年(?:度报告|年度报告|年报)",
+        r"报告(?:期|年度)\s*[::]\s*((?:19|20)\d{2})",
+        r"((?:19|20)\d{2})\s*年\s*报告",
+        r"((?:19|20)\d{2})\s*年\s*\d+\s*月",  # 2023 年 12 月
+    ]
+    for pat in patterns:
+        m = re.search(pat, head)
+        if m:
+            return f"{m.group(1)}年"
+
+    # 兜底：找第一个 1900-2099 之间的年份
+    m = re.search(r"((?:19|20)\d{2})", head)
+    if m:
+        return f"{m.group(1)}年"
+    return None
+
+
+def extract_document_year(filename: str, content_text: str) -> str | None:
+    """综合多源提取文档年份。
+
+    优先级：文件名 > 内容（多源兜底，确保通用性）。
+    适用于任何类型文档——年报、API 文档、用户手册等。
+    """
+    year = _extract_year_from_filename(filename)
+    if year:
+        return year
+    return _extract_year_from_content(content_text)
 
 
 def _content_hash(text: str) -> str:
@@ -160,6 +221,14 @@ class DocumentIndexer:
         t_chunk = time.monotonic()
         sections = document_structurer.structure(text)
         chunks: list[Chunk] = text_chunker.chunk(sections)
+
+        # 多源提取文档年份（文件名优先，内容兜底），加到 chunk 的 section_path 前面
+        doc_year = extract_document_year(filename, text)
+        if doc_year:
+            for chunk in chunks:
+                # 过滤空字符串避免 "2023年 >  > 标题" 这种空路径
+                chunk.section_path = [doc_year] + [p for p in chunk.section_path if p]
+
         logger.info(
             "ingest.chunked doc=%s sections=%d chunks=%d elapsed_ms=%.1f",
             u_tag, len(sections), len(chunks), (time.monotonic() - t_chunk) * 1000,

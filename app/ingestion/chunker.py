@@ -26,41 +26,38 @@ class Chunk:
 
 
 def _clean_table_text(table_text: str) -> str:
-    """Strip markdown table formatting and convert to compact natural language.
+    """对小型表格（≤4 行数据）去除 Markdown 格式转自然语言；大表格保留 Markdown。
 
-    Input:
-        | 指示灯 | 颜色 | 状态含义 |
-        |--------|------|---------|
-        | PWR | 绿色常亮 | 设备供电正常 |
-        | SYS | 绿色闪烁 | 系统运行中 |
+    小表格（如指示灯含义）去除格式后 embedding 信号密度更高。
+    大表格（如财务报表）保留 Markdown 格式，因为列对齐对理解数据至关重要。
 
-    Output:
-        指示灯 PWR 颜色 绿色常亮 状态含义 设备供电正常
-        指示灯 SYS 颜色 绿色闪烁 状态含义 系统运行中
-
-    Embedding signal density improves dramatically because ~60 % of formatting
-    tokens (pipes, dashes, alignment markers) are removed.
+    旧版本对所有表格都做清洗，导致财务表格列-值对应关系丢失，
+    RAG 检索到后 LLM 无法正确解读数字含义。
     """
     lines = [ln.strip() for ln in table_text.strip().split("\n") if ln.strip()]
     if len(lines) < 2:
         return table_text
 
-    # Parse header row:  | col1 | col2 | col3 |
+    # 检查是否是 Markdown 表格
     m = re.match(r"^\|(.+)\|$", lines[0])
     if not m:
         return table_text
-    headers = [h.strip() for h in m.group(1).split("|")]
 
-    # Skip separator line (line 1), process data rows
+    # 统计数据行数（跳过 header 和 separator）
+    data_rows = [l for l in lines[2:] if l.startswith("|")]
+
+    # 大表格（>4 行数据）保留 Markdown 格式
+    if len(data_rows) > 4:
+        return table_text
+
+    # 小表格：转换为自然语言
+    headers = [h.strip() for h in m.group(1).split("|")]
     rows = []
-    for line in lines[2:]:
-        if not line.startswith("|"):
-            continue
+    for line in data_rows:
         cells = [c.strip() for c in line.strip("|").split("|")]
         if len(cells) == len(headers):
             rows.append(" ".join(f"{h} {c}" for h, c in zip(headers, cells)))
         else:
-            # Fallback: join cells without headers
             rows.append(" ".join(cells))
     return "\n".join(rows) if rows else table_text
 

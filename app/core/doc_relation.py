@@ -503,6 +503,11 @@ class CrossDocSynthesizer:
     """
 
     def synthesize_texts(self, chunks: list[Any]) -> tuple[list[str], list[dict]]:
+        """Group chunks by document, annotate source labels for LLM synthesis.
+
+        Format is generic — works for any document type, not just annual reports.
+        Each chunk preserves its section_path for precise location within document.
+        """
         groups: dict[str, dict[str, Any]] = {}
         for c in chunks:
             doc_id = _chunk_attr(c, "document_id")
@@ -520,7 +525,8 @@ class CrossDocSynthesizer:
         doc_groups: list[dict] = []
         for doc_id, group in groups.items():
             label = group["filename"] or group["title"] or doc_id[:8]
-            parts = [f"[来源: {label}]"]
+            header = f"[来源文档: {label}]"
+            parts = [header]
             for c in group["chunks"]:
                 text = _chunk_attr(c, "text")
                 section = _chunk_attr(c, "section_path")

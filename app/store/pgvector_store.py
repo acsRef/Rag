@@ -95,6 +95,7 @@ def search(
     can_read_all: bool = False,
     top_k: int = 10,
     user_id: str = "",
+    document_ids: list[str] | None = None,
 ) -> list[dict]:
     """Vector cosine similarity search with role-based access control.
 
@@ -104,17 +105,24 @@ def search(
       - allowed_roles overlaps with user_role_ids (PostgreSQL && operator), OR
       - 属主旁路：chunk 所属文档的 owner 是当前用户（个人工作空间
         restricted 文档对属主本人必须可检索，对他人不可见）
+
+    document_ids: if provided, restrict search to chunks in these documents only.
     """
     rows = []  # finally 的 debug 日志引用 rows；execute 抛错时不得再抛 UnboundLocalError 掩盖原始异常
     session = get_session()
     t0 = time.monotonic()
-    logger.debug("vector.search.start kb_count=%d top_k=%d can_read_all=%s", len(kb_ids), top_k, can_read_all)
+    logger.debug("vector.search.start kb_count=%d top_k=%d can_read_all=%s doc_filter=%s",
+                 len(kb_ids), top_k, can_read_all, len(document_ids) if document_ids else "none")
     try:
-        sql = """
+        doc_filter = ""
+        if document_ids:
+            doc_filter = "AND document_id = ANY(:document_ids)"
+        sql = f"""
             SELECT chunk_id, document_id, text, embedding, title, summary,
                    section_path, 1 - (embedding <=> (:query)::vector) AS score
             FROM chunks
             WHERE kb_id = ANY(:kb_ids)
+              {doc_filter}
               AND (:can_read_all = TRUE
                    OR visibility = 'public'
                    OR (visibility IN ('internal', 'restricted')
@@ -126,14 +134,17 @@ def search(
             ORDER BY embedding <=> (:query)::vector
             LIMIT :top_k
         """
-        rows = session.execute(text(sql), {
+        params = {
             "query": embedding,
             "kb_ids": kb_ids,
             "can_read_all": can_read_all,
             "user_roles": user_role_ids or [],
             "top_k": top_k,
             "user_id": user_id or "",
-        }).fetchall()
+        }
+        if document_ids:
+            params["document_ids"] = document_ids
+        rows = session.execute(text(sql), params).fetchall()
 
         return [
             {
@@ -194,6 +205,7 @@ def bm25_search(
     top_k: int = 10,
     stopwords: bool = True,
     user_id: str = "",
+    document_ids: list[str] | None = None,
 ) -> list[dict]:
     """BM25-style lexical search using PostgreSQL ts_rank + jieba tokenization.
 
@@ -205,6 +217,7 @@ def bm25_search(
         stopwords: If True, remove common stop words from the query
                    (e.g. "什么" "表示" "怎么") to reduce noise in BM25 matching.
                    Set to False for a relaxed fallback pass.
+        document_ids: if provided, restrict search to chunks in these documents only.
     """
     query_tokens = tokenize(query, stopwords=stopwords)
     # Convert AND-based plainto_tsquery to OR-based to_tsquery
@@ -215,15 +228,20 @@ def bm25_search(
     rows = []  # 同 search()：防 finally 日志以 UnboundLocalError 掩盖原始异常
     session = get_session()
     t0 = time.monotonic()
-    logger.debug("bm25.search.start kb_count=%d top_k=%d", len(kb_ids), top_k)
+    logger.debug("bm25.search.start kb_count=%d top_k=%d doc_filter=%s",
+                 len(kb_ids), top_k, len(document_ids) if document_ids else "none")
     try:
-        sql = """
+        doc_filter = ""
+        if document_ids:
+            doc_filter = "AND document_id = ANY(:document_ids)"
+        sql = f"""
             SELECT chunk_id, document_id, text, embedding, title, summary,
                    section_path,
                    ts_rank(to_tsvector('simple', search_text),
                            to_tsquery('simple', :or_query)) AS score
             FROM chunks
             WHERE kb_id = ANY(:kb_ids)
+              {doc_filter}
               AND (:can_read_all = TRUE
                    OR visibility = 'public'
                    OR (visibility IN ('internal', 'restricted')
@@ -236,14 +254,17 @@ def bm25_search(
             ORDER BY score DESC
             LIMIT :top_k
         """
-        rows = session.execute(text(sql), {
+        params = {
             "or_query": or_query,
             "kb_ids": kb_ids,
             "can_read_all": can_read_all,
             "user_roles": user_role_ids or [],
             "top_k": top_k,
             "user_id": user_id or "",
-        }).fetchall()
+        }
+        if document_ids:
+            params["document_ids"] = document_ids
+        rows = session.execute(text(sql), params).fetchall()
 
         return [
             {
@@ -304,24 +325,32 @@ def question_vector_search(
     can_read_all: bool = False,
     top_k: int = 20,
     user_id: str = "",
+    document_ids: list[str] | None = None,
 ) -> list[dict]:
     """Retrieve chunks by question-vector similarity (cosine).
 
     Multiple questions per chunk → take the MIN distance (nearest question wins).
     ACL filtering mirrors vector_search.
+
+    document_ids: if provided, restrict search to chunks in these documents only.
     """
     rows = []  # 同 search()：防 finally 日志以 UnboundLocalError 掩盖原始异常
     session = get_session()
     t0 = time.monotonic()
-    logger.debug("question_vector.search.start kb_count=%d top_k=%d", len(kb_ids), top_k)
+    logger.debug("question_vector.search.start kb_count=%d top_k=%d doc_filter=%s",
+                 len(kb_ids), top_k, len(document_ids) if document_ids else "none")
     try:
-        sql = """
+        doc_filter = ""
+        if document_ids:
+            doc_filter = "AND c.document_id = ANY(:document_ids)"
+        sql = f"""
             SELECT c.chunk_id, c.document_id, c.text, c.embedding, c.title, c.summary,
                    c.section_path,
                    1 - MIN(q.embedding <=> (:query)::vector) AS score
             FROM chunk_questions q
             JOIN chunks c ON c.chunk_id = q.chunk_id
             WHERE c.kb_id = ANY(:kb_ids)
+              {doc_filter}
               AND (:can_read_all = TRUE
                    OR c.visibility = 'public'
                    OR (c.visibility IN ('internal', 'restricted')
@@ -335,14 +364,17 @@ def question_vector_search(
             ORDER BY MIN(q.embedding <=> (:query)::vector)
             LIMIT :top_k
         """
-        rows = session.execute(text(sql), {
+        params = {
             "query": query_emb,
             "kb_ids": kb_ids,
             "can_read_all": can_read_all,
             "user_roles": user_role_ids or [],
             "top_k": top_k,
             "user_id": user_id or "",
-        }).fetchall()
+        }
+        if document_ids:
+            params["document_ids"] = document_ids
+        rows = session.execute(text(sql), params).fetchall()
 
         return [
             {
@@ -374,20 +406,23 @@ def hybrid_search(
     rrf_k: int = 60,
     enable_question_channel: bool = False,
     user_id: str = "",
+    document_ids: list[str] | None = None,
 ) -> list[dict]:
     """Hybrid vector + BM25 + optional question-vector search with RRF merge.
 
     RRF formula: score = Σ weight / (k + rank + 1)
     k defaults to 60 (smooth long-tail ranks).
+
+    document_ids: if provided, restrict all channels to chunks in these documents only.
     """
     t0 = time.monotonic()
     vector_results = search(
         kb_ids, embedding, user_role_ids, can_read_all, top_k=fetch_k,
-        user_id=user_id,
+        user_id=user_id, document_ids=document_ids,
     )
     bm25_results = bm25_search(
         kb_ids, query, user_role_ids, can_read_all, top_k=fetch_k,
-        user_id=user_id,
+        user_id=user_id, document_ids=document_ids,
     )
 
     channel_weights: dict[str, float] = {}
@@ -407,6 +442,7 @@ def hybrid_search(
             kb_ids, embedding, user_role_ids, can_read_all,
             top_k=settings.question_channel_top_k,
             user_id=user_id,
+            document_ids=document_ids,
         )
         _accumulate(question_results, "question",
                     weight=settings.question_channel_rrf_weight)
@@ -903,5 +939,79 @@ def delete_orphan_chunk_questions(document_id: str, valid_chunk_ids: list[str]) 
             q = q.filter(~ChunkQuestion.chunk_id.in_(valid_chunk_ids))
         q.delete(synchronize_session=False)
         session.commit()
+    finally:
+        session.close()
+
+
+# ── Document-level pre-retrieval ────────────────────────
+
+import numpy as np
+
+
+def pre_retrieve_documents(
+    query_emb: list[float],
+    kb_ids: list[str] | None = None,
+    top_k: int = 5,
+    threshold: float = 0.3,
+) -> list[str]:
+    """Document-level pre-retrieval: find the most relevant documents for a query.
+
+    Uses doc_embeddings table (precomputed during ingestion as mean-pooled chunk
+    embeddings) to compute cosine similarity between query and each document.
+
+    Returns document_ids sorted by relevance (descending), up to top_k.
+    Only returns documents with cosine >= threshold.
+
+    This is Stage 1 of two-stage retrieval: first find relevant documents,
+    then search within those documents for specific chunks.
+    """
+    if not query_emb:
+        return []
+
+    session = get_session()
+    t0 = time.monotonic()
+    try:
+        from app.store.db import DocEmbedding, Document
+        q = session.query(
+            DocEmbedding.document_id,
+            DocEmbedding.embedding,
+        )
+        if kb_ids:
+            q = q.join(Document, DocEmbedding.document_id == Document.document_id).filter(
+                Document.kb_id.in_(kb_ids)
+            )
+        rows = q.all()
+
+        if not rows:
+            return []
+
+        query_arr = np.array(query_emb, dtype=np.float64)
+        query_norm = np.linalg.norm(query_arr)
+        if query_norm == 0:
+            return []
+
+        scored_docs: list[tuple[str, float]] = []
+        for doc_id, doc_emb in rows:
+            if doc_emb is None:
+                continue
+            doc_arr = np.array(doc_emb, dtype=np.float64)
+            doc_norm = np.linalg.norm(doc_arr)
+            if doc_norm == 0:
+                continue
+            cosine = float(np.dot(query_arr, doc_arr) / (query_norm * doc_norm))
+            if cosine >= threshold:
+                scored_docs.append((doc_id, cosine))
+
+        # Sort by cosine descending
+        scored_docs.sort(key=lambda x: x[1], reverse=True)
+        result = [doc_id for doc_id, _ in scored_docs[:top_k]]
+
+        logger.debug(
+            "pre_retrieve_documents query_dim=%d candidates=%d above_threshold=%d "
+            "returned=%d elapsed_ms=%.1f",
+            len(query_emb), len(rows), len(scored_docs), len(result),
+            (time.monotonic() - t0) * 1000,
+        )
+        return result
     finally:
         session.close()

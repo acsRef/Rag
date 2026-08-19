@@ -10,7 +10,8 @@
 | 前端 | Vue 3 + Vite + TypeScript |
 | 数据库 | PostgreSQL 15 + pgvector 0.8 |
 | 认证 | JWT + bcrypt（RBAC，8 项权限） |
-| 对话 | MiniMax M3 |
+| 对话 | SiliconFlow (DeepSeek-V3) |
+| 视觉 | SiliconFlow (Qwen2.5-VL-7B-Instruct) |
 | 向量 | Qwen3-VL-Embedding-8B（4096d）|
 | 重排 | BAAI/bge-reranker-v2-m3 |
 
@@ -35,7 +36,7 @@
 
 ## 功能
 
-- **文件解析**：PDF/DOCX/PPTX/XLSX/HTML/TXT/MD/图片（Docling + MiniMax Vision）
+- **文件解析**：PDF/DOCX/PPTX/XLSX/HTML/TXT/MD/图片（Docling + Qwen2.5-VL）
 - **智能切分**：结构感知递归切分，原子块保护（代码/表格/图片），重叠窗口
 - **混合检索**：向量语义检索 + BM25 关键词检索（jieba 分词）+ RRF 融合
 - **多路召回**：摄入期 LLM 生成候选问题 → 独立 embedding 通道 → 三路 (vector + BM25 + question) RRF 融合，低权重防噪声
@@ -110,7 +111,8 @@ RAGENT_LIVE_LLM=1 D:/miniConda/envs/rag/python.exe -m pytest tests/integration/t
 │   │   └── kb.py               # 知识库 CRUD
 │   ├── core/                   # 核心管线
 │   │   ├── pipeline.py         # RAG 主流程（意图 → 检索 → 生成）
-│   │   ├── retrieval.py        # 混合检索 + MMR 多样性
+│   │   ├── retrieval.py        # 混合检索 + MMR 多样性 + 权威表格补充
+│   │   ├── evidence.py         # 证据整理层（子问题追踪 + 冲突检测）
 │   │   ├── doc_relation.py     # 跨文档关联检索（三通道跳转 + 关系矩阵）
 │   │   ├── mmr.py              # MMR 算法（归一化 + 文档惩罚）
 │   │   ├── memory.py           # 长对话记忆管理
@@ -126,10 +128,10 @@ RAGENT_LIVE_LLM=1 D:/miniConda/envs/rag/python.exe -m pytest tests/integration/t
 │   │   ├── indexer.py          # 索引（含增量更新 + PII 过滤）
 │   │   └── pipeline.py         # 编排
 │   ├── llm/                    # LLM 客户端
-│   │   ├── chat.py             # MiniMax M3 对话
+│   │   ├── chat.py             # SiliconFlow 对话 (DeepSeek-V3)
 │   │   ├── embedding.py        # SiliconFlow embedding
 │   │   ├── rerank.py           # 跨编码器重排
-│   │   └── vision.py           # 图片理解
+│   │   └── vision.py           # 图片理解 (Qwen2.5-VL)
 │   ├── middleware/auth.py      # JWT 认证中间件
 │   ├── models/schemas.py       # Pydantic 数据模型
 │   └── store/                  # 数据访问层
@@ -140,11 +142,18 @@ RAGENT_LIVE_LLM=1 D:/miniConda/envs/rag/python.exe -m pytest tests/integration/t
 │   └── src/                    # Vue 3 SPA
 ├── tests/
 │   ├── conftest.py             # 凭据哨兵化护栏（unit 永不触真实服务）
-│   ├── unit/                   # 离线单测（熔断器/MMR/记忆/PII 规则等）
+│   ├── unit/                   # 离线单测（熔断器/MMR/记忆/PII 规则/证据整理层等）
 │   ├── integration/            # ragent_test 库上的摄入/跨文档/检索/安全链路测试
 │   └── fixtures/docs/          # 自制跨文档场景 fixture 文档
+├── eval/                       # 评测系统
+│   ├── eval_sany.py            # 全量评测脚本（65 题）
+│   ├── eval_detail.py          # 详细评测脚本（按类别测试）
+│   ├── eval_single.py          # 逐个测试脚本（带重试）
+│   ├── rejudge.py              # 重评未评分的题目
+│   └── sany_annual_reports/    # 三一重工年报评测数据集
 ├── docs/
-│   └── plans/                  # 计划索引与实施计划（入口 docs/plans/README.md）
+│   ├── plans/                  # 计划索引与实施计划（入口 docs/plans/README.md）
+│   └── TODO.md                 # 待办事项清单
 ├── docker/
 │   └── Dockerfile              # postgres:15 + pgvector
 ├── docker-compose.yml
@@ -152,12 +161,31 @@ RAGENT_LIVE_LLM=1 D:/miniConda/envs/rag/python.exe -m pytest tests/integration/t
 └── requirements-dev.txt        # 测试依赖（pytest / pytest-asyncio）
 ```
 
+## 评测系统
+
+针对三一重工年报的 65 题评测集，支持按类别详细评测：
+
+```bash
+# 全量评测（65 题，约 15 分钟）
+D:/miniConda/envs/rag/python.exe eval/eval_single.py
+
+# 按类别评测（如只测 A 类）
+D:/miniConda/envs/rag/python.exe eval/eval_detail.py --category A --limit 10
+
+# 支持的类别：A（单文档事实）、B（表格理解）、C（跨文档对比）、D（计算推理）、
+# E（时序追溯）、F（口径辨析）、G（实体消歧）、H（错误前提）、I（拒答边界）、J（细节脚注）
+```
+
+评测结果输出到 `eval/sany_annual_reports/eval_detail_report.md`，包含每题的详细分析。
+
 ## 关键配置
 
 参见 `app/config.py`，包含：
 
+- **LLM 供应商**：SiliconFlow（DeepSeek-V3 对话 + Qwen2.5-VL 视觉）
 - **PII**：开关、缓存 TTL、加密密钥
 - **混合检索**：开关、单路候选数、RRF 常数
 - **多路召回**：开关、question 通道权重、每路候选数
+- **权威表格补充**：财务关键词触发，定向检索权威 section（主要会计数据、利润表等）
 - **MMR**：开关、λ 值、候选数、每文档上限、惩罚系数
 - **对话**：轮数上限、摘要触发轮数、最大 token 数

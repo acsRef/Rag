@@ -15,7 +15,7 @@ async def test_collect_results_runs_kbs_concurrently(monkeypatch):
     N = 3
     barrier = threading.Barrier(N)
 
-    def fake_search(kb_id, query_emb, query, user_role_ids, can_read_all, top_k, user_id=""):
+    def fake_search(kb_id, query_emb, query, user_role_ids, can_read_all, top_k, user_id="", document_ids=None):
         barrier.wait(timeout=5)   # 三个检索必须同时到达
         return [{"chunk_id": f"{kb_id}-0", "score": 0.5, "text": "x"}]
 
@@ -31,7 +31,7 @@ async def test_collect_results_runs_kbs_concurrently(monkeypatch):
 
 async def test_collect_results_dedups_across_kbs(monkeypatch):
     """同一 chunk_id 出现在多个 KB 结果里时只保留一次，且归属首个出现的 KB。"""
-    def fake_search(kb_id, query_emb, query, user_role_ids, can_read_all, top_k, user_id=""):
+    def fake_search(kb_id, query_emb, query, user_role_ids, can_read_all, top_k, user_id="", document_ids=None):
         return [{"chunk_id": "shared-0", "score": 0.5, "text": "x"}]
 
     monkeypatch.setattr(retrieval_mod, "_search_kb", fake_search)

@@ -206,31 +206,32 @@ def live_env():
     vals = dotenv_values(".env")
     mm_key = (vals.get("MINIMAX_API_KEY") or "").strip()
     sf_key = (vals.get("SILICONFLOW_API_KEY") or "").strip()
-    if not mm_key or not sf_key:
-        pytest.skip(".env 缺少 MINIMAX_API_KEY / SILICONFLOW_API_KEY")
+    if not sf_key:
+        pytest.skip(".env 缺少 SILICONFLOW_API_KEY")
 
     from app.llm.chat import minimax_client
     from app.llm.embedding import sf_embedding
-    # live 模型切换：RAGENT_LIVE_MODEL 指定（如 MiniMax-M2.7-highspeed，快得多）；
-    # 注意 minimax_client.model 在 __init__ 时固化，必须同步覆盖
+    # live 模型切换：RAGENT_LIVE_MODEL 指定（如 deepseek-ai/DeepSeek-V3）
     live_model = os.environ.get("RAGENT_LIVE_MODEL", "").strip()
     saved = (
         settings.minimax_api_key, settings.siliconflow_api_key,
+        settings.chat_model, settings.minimax_model,
         minimax_client._client, minimax_client._client_loop_id,
+        minimax_client._active_provider,
         sf_embedding._client, sf_embedding._client_loop_id,
-        settings.minimax_model, minimax_client.model,
     )
     settings.minimax_api_key = mm_key
     settings.siliconflow_api_key = sf_key
     if live_model:
-        settings.minimax_model = live_model
-        minimax_client.model = live_model
+        settings.chat_model = live_model
     minimax_client._client = None
     minimax_client._client_loop_id = None
+    minimax_client._active_provider = None
     sf_embedding._client = None
     sf_embedding._client_loop_id = None
     yield
     (settings.minimax_api_key, settings.siliconflow_api_key,
+     settings.chat_model, settings.minimax_model,
      minimax_client._client, minimax_client._client_loop_id,
-     sf_embedding._client, sf_embedding._client_loop_id,
-     settings.minimax_model, minimax_client.model) = saved
+     minimax_client._active_provider,
+     sf_embedding._client, sf_embedding._client_loop_id) = saved

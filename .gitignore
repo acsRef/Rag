@@ -37,3 +37,10 @@ frontend/dist/
 frontend/src/**/*.js
 frontend/vite.config.js
 frontend/*.tsbuildinfo
+
+# MineRU temporary files
+mineru_models/
+mineru_temp/
+
+# MCP server (experimental)
+mcp_server/

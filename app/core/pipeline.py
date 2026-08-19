@@ -3,6 +3,7 @@ from app.core.rewrite import query_rewrite_service
 from app.core.intent import intent_classifier
 from app.core.retrieval import retrieval_engine
 from app.core.prompt import prompt_builder
+from app.core.evidence import evidence_organizer
 from app.core.diagnostics import DiagContext
 from app.llm.chat import minimax_client
 from app.llm.base import CircuitOpenError, provider_health
@@ -77,6 +78,39 @@ def _norm(text: str) -> str:
     # Collapse blank lines between consecutive list items
     text = re.sub(r'(\n\s*(?:[-*]|\d+\.)\s.+\n)\n+(?=\s*(?:[-*]|\d+\.)\s)', r'\1', text)
     return text.strip()
+def _truncate_with_doc_diversity(chunks: list, max_total: int) -> list:
+    """截断 chunk 列表但保证文档多样性。
+
+    策略：每个 document_id 至少保留 1 个 chunk（最高分），
+    剩余名额按分数填充，总数不超过 max_total。
+
+    旧实现直接 `chunks[:rerank_top_k]` 按分数截断，
+    跨文档/跨年份对比时，低分年份的 chunk 可能被高分年份全部挤掉。
+    """
+    if not chunks or max_total <= 0:
+        return chunks[:max_total] if max_total > 0 else []
+
+    doc_ids_seen: set[str] = set()
+    diverse: list = []
+    remaining: list = []
+
+    for c in chunks:
+        doc_id = getattr(c, "document_id", "") or ""
+        if doc_id and doc_id not in doc_ids_seen:
+            doc_ids_seen.add(doc_id)
+            diverse.append(c)
+        else:
+            remaining.append(c)
+
+    # 每个文档至少 1 条后，按分数填充剩余名额
+    for c in remaining:
+        if len(diverse) >= max_total:
+            break
+        diverse.append(c)
+
+    return diverse
+
+
 def _needs_decomposition(query: str) -> bool:
     """Return True if query needs sub-question decomposition and KB routing.
 
@@ -85,6 +119,8 @@ def _needs_decomposition(query: str) -> bool:
       2. Multiple explicitly named entities (quoted terms)
       3. Reasoning / aggregation / multi-hop markers
       4. Anaphoric pronouns that need resolution
+      5. Year range / temporal patterns (2023-2025年, 近三年, etc.)
+      6. Potential false premise patterns (为什么X增长, X增加了多少)
     """
     # Rule 1: comparison / contrast
     if re.search(r"(对比|比较|区别|差异|不同|哪个好|哪个更|vs\.?|versus)", query, re.IGNORECASE):
@@ -111,6 +147,18 @@ def _needs_decomposition(query: str) -> bool:
     # 设计审查 P2-15：`(?<!其)它` 排除 `其它`（其+它 的它非代词）；`他们` 等
     # 多字代词不受影响，`其他` 的 他 无裸 他 规则故天然不命中。
     if re.search(r"((?<!其)它|他们|她们|它们|这个|那个|这些|那些|这位|那位|上述|前面|上文)", query):
+        return True
+
+    # Rule 5: year range / temporal patterns
+    # "2023-2025年", "2023至2025", "近三年", "连续三年", "这几年"
+    if re.search(r"\d{4}[-–—至到]\d{4}", query):
+        return True
+    if re.search(r"(近\d+年|连续\d+年|这几年|历年|各年|每一年|分别)", query):
+        return True
+
+    # Rule 6: potential false premise patterns
+    # "为什么X增长了", "X增加了多少", "X扩大了多少" — might be wrong premise
+    if re.search(r"为什么.{2,20}(增长|增加|扩大|提升|上升|加大|提高)", query):
         return True
 
     return False
@@ -188,6 +236,7 @@ class RAGPipeline:
             # Fast path: no LLM rewrite/intent, search all KBs directly
             sub_queries = [req.query]
             rewritten_query = req.query
+            query_complexity = "complex"  # fast path 默认复杂
         else:
             rewrite_result = await query_rewrite_service.rewrite(req.query, history, summary, ctx=ctx)
             if ctx:
@@ -195,15 +244,21 @@ class RAGPipeline:
                     original=req.query,
                     rewritten=rewrite_result.rewritten_query,
                     sub_questions=rewrite_result.sub_questions,
+                    sub_dependencies=rewrite_result.sub_dependencies,
+                    complexity=rewrite_result.complexity,
                 )
             sub_queries = rewrite_result.sub_questions
             rewritten_query = rewrite_result.rewritten_query or req.query
+            # 复杂度分类（控制 CoT 触发）：默认 complex（保守触发 CoT）
+            query_complexity = rewrite_result.complexity
 
         # --- Retrieve ---
         yield "event: status\ndata: {\"phase\":\"retrieving\",\"message\":\"正在检索知识库...\"}\n\n"
         all_chunks: list[RetrievedChunk] = []
+        # 保留子问题→chunks 映射（供证据整理层使用）
+        sub_question_chunks: dict[str, list[RetrievedChunk]] = {}
 
-        async def _retrieve_one(sub_q: str) -> list[RetrievedChunk]:
+        async def _retrieve_one(sub_q: str) -> tuple[str, list[RetrievedChunk]]:
             intent = None
             if needs_decomp:
                 try:
@@ -223,16 +278,17 @@ class RAGPipeline:
                         "intent_type": intent.intent_type,
                     })
             try:
-                return await retrieval_engine.retrieve(
+                chunks = await retrieval_engine.retrieve(
                     sub_q, intent,
                     user_role_ids=user_role_ids,
                     can_read_all=can_read_all,
                     ctx=ctx,
                     user_id=user_id,
                 )
+                return sub_q, chunks
             except Exception:
                 logging.getLogger(__name__).exception("retrieve.sub_query_failed q=%s", sub_q[:40])
-                return []
+                return sub_q, []
 
         # 单条状态提示：gather 真正并行前发一次即可，
         # 旧实现按子问题循环发「正在检索子问题 (i/N)」纯误导——
@@ -244,7 +300,8 @@ class RAGPipeline:
             results_list = await asyncio.gather(*[_retrieve_one(q) for q in sub_queries])
         else:
             results_list = [await _retrieve_one(sub_queries[0])]
-        for chunks in results_list:
+        for sub_q, chunks in results_list:
+            sub_question_chunks[sub_q] = chunks
             all_chunks.extend(chunks)
 
         if not all_chunks:
@@ -260,6 +317,7 @@ class RAGPipeline:
             except Exception:
                 chunks = []
             all_chunks.extend(chunks)
+            sub_question_chunks[rewritten_query] = chunks
 
         # Dedup + sort
         seen = set()
@@ -269,7 +327,32 @@ class RAGPipeline:
                 seen.add(c.chunk_id)
                 unique_chunks.append(c)
         unique_chunks.sort(key=lambda x: x.score, reverse=True)
-        unique_chunks = unique_chunks[:settings.rerank_top_k]
+
+        # 文档多样性保证：确保每个文档至少有 1 个 chunk 进入最终 prompt
+        # 跨文档/跨年份对比时，避免某个文档的 chunks 被全部挤掉
+        # 多子查询场景：放宽截断，保留更多 chunks 让多文档数据都能进 prompt
+        top_k_limit = settings.rerank_top_k
+        if len(sub_queries) > 1:
+            top_k_limit = settings.complex_rerank_top_k  # 多文档场景放大到 10
+
+        unique_chunks = _truncate_with_doc_diversity(unique_chunks, top_k_limit)
+
+        # 验证性子问题优先（H 类：错误前提纠偏）
+        # 当 chunks 中包含纠正性证据（如"减少"、"下降"等与实际趋势相反的词）时，
+        # 确保这些 chunks 不被截断，帮助模型识别并纠正错误前提
+        if len(sub_queries) > 1 and len(unique_chunks) > 3:
+            correction_keywords = {"减少", "下降", "降低", "下滑", "萎缩", "收缩", "实际", "趋势", "变化"}
+            correction_chunks = []
+            other_chunks = []
+            for c in unique_chunks:
+                text_snippet = c.text[:500]  # 只检查前 500 字（标题/开头更可能含纠正信息）
+                if any(kw in text_snippet for kw in correction_keywords):
+                    correction_chunks.append(c)
+                else:
+                    other_chunks.append(c)
+            # 保留前 2 个纠正性 chunk + 其他 chunks
+            if correction_chunks:
+                unique_chunks = correction_chunks[:2] + other_chunks[:top_k_limit - 2]
 
         # Context expansion: for each selected chunk, fetch ±N neighbor chunks
         # to provide surrounding context before feeding to LLM.
@@ -335,6 +418,7 @@ class RAGPipeline:
             history=history,
             summary=summary,
             retrieved_chunks=unique_chunks,
+            complexity=query_complexity,
         )
 
         if ctx:

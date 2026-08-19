@@ -2,20 +2,22 @@ from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
-    # MiniMax M3
-    minimax_api_key: str = ""
-    minimax_base_url: str = "https://api.minimaxi.com/v1"
-    minimax_model: str = "MiniMax-M3"
-    # 视觉理解固定用多模态模型：文本对话可切 highspeed 变体（如 MiniMax-M2.7-highspeed），
-    # 但图片描述必须走多模态模型，否则 vision 调用失败
-    vision_model: str = "MiniMax-M3"
+    # LLM chat provider: "siliconflow" (default) or "minimax"
+    chat_provider: str = "siliconflow"
 
-    # SiliconFlow (Embedding + Rerank)
+    # SiliconFlow (Chat + Vision + Embedding + Rerank)
     siliconflow_api_key: str = ""
     siliconflow_base_url: str = "https://api.siliconflow.cn/v1"
+    chat_model: str = "deepseek-ai/DeepSeek-V3"
+    vision_model: str = "Qwen/Qwen2.5-VL-7B-Instruct"  # 硅基流动视觉模型
     embedding_model: str = "Qwen/Qwen3-VL-Embedding-8B"
     embedding_dimension: int = 4096
     rerank_model: str = "BAAI/bge-reranker-v2-m3"
+
+    # MiniMax (备选，chat_provider="minimax" 时启用)
+    minimax_api_key: str = ""
+    minimax_base_url: str = "https://api.minimaxi.com/v1"
+    minimax_model: str = "MiniMax-M3"
 
     # PostgreSQL
     database_url: str = "postgresql://ragent:ragent@localhost:5432/ragent"
@@ -32,6 +34,8 @@ class Settings(BaseSettings):
     # RAG params
     vector_search_top_k: int = 10
     rerank_top_k: int = 5
+    # 复杂查询（多文档/多年度）放宽检索数量：让多个年份的 chunks 都能进入 prompt
+    complex_rerank_top_k: int = 10
     intent_min_score: float = 0.35
     max_intent_count: int = 3
     max_sub_questions: int = 4   # rewrite 拆题上限（防 LLM 无限展开 + 重排/嵌入并发雪崩）

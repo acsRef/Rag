@@ -1,4 +1,8 @@
-"""MiniMax M3 chat client with circuit breaker — async."""
+"""LLM chat client with circuit breaker — async.
+
+Supports multiple providers (SiliconFlow, MiniMax) via OpenAI-compatible API.
+Provider selection is controlled by `settings.chat_provider`.
+"""
 
 import asyncio
 import logging
@@ -11,14 +15,30 @@ from app.llm.base import CircuitOpenError, PermanentError, RateLimitError, class
 
 logger = logging.getLogger(__name__)
 
+# Provider registry: name → (api_key, base_url, model)
+_PROVIDER_CONFIGS = {
+    "siliconflow": lambda: (settings.siliconflow_api_key, settings.siliconflow_base_url, settings.chat_model),
+    "minimax": lambda: (settings.minimax_api_key, settings.minimax_base_url, settings.minimax_model),
+}
 
-class MiniMaxClient:
-    provider = "minimax"
+
+class LLMClient:
+    """Generic LLM client — provider selected via settings.chat_provider."""
 
     def __init__(self):
         self._client: AsyncOpenAI | None = None
         self._client_loop_id: int | None = None
-        self.model = settings.minimax_model
+        self._active_provider: str | None = None
+
+    @property
+    def provider(self) -> str:
+        return settings.chat_provider
+
+    @property
+    def model(self) -> str:
+        """Current model name (for diagnostics / override)."""
+        _, _, model = _PROVIDER_CONFIGS[self.provider]()
+        return model
 
     @property
     def client(self) -> AsyncOpenAI:
@@ -29,13 +49,18 @@ class MiniMaxClient:
             current_loop = None
             current_id = -1
 
+        # Rebuild only when no client exists or loop changed.
+        # Tests inject a fake _client + _client_loop_id; we respect that.
+        # Provider switches require setting _client = None to take effect.
         if self._client is None or self._client_loop_id != current_id:
+            api_key, base_url, _ = _PROVIDER_CONFIGS[self.provider]()
             self._client = AsyncOpenAI(
-                api_key=settings.minimax_api_key,
-                base_url=settings.minimax_base_url,
+                api_key=api_key,
+                base_url=base_url,
                 timeout=90.0,
             )
             self._client_loop_id = current_id
+            self._active_provider = self.provider
         return self._client
 
     # ------------------------------------------------------------------
@@ -47,7 +72,7 @@ class MiniMaxClient:
             return
         breaker = provider_health.get(self.provider)
         if not breaker.allow_request():
-            raise CircuitOpenError("MiniMax circuit breaker is open")
+            raise CircuitOpenError(f"{self.provider} circuit breaker is open")
 
     def _on_success(self) -> None:
         if settings.circuit_breaker_enabled:
@@ -71,7 +96,7 @@ class MiniMaxClient:
         self._check_breaker()
         try:
             response = await self.client.chat.completions.create(
-                model=self.model,  # 流式只用于文本对话；vision 走 chat(model=...)
+                model=self.model,
                 messages=messages,
                 stream=True,
                 temperature=temperature,
@@ -105,15 +130,12 @@ class MiniMaxClient:
     ) -> str:
         """Single-attempt chat — 重试策略统一由 call_llm_with_retry 负责。
 
-        本方法只做：单次调用 + 熔断记账 + 错误分类抛出。
-        `model` 覆盖默认模型：图片理解必须用多模态模型（settings.vision_model），
-        即使文本对话模型切成了非多模态的 highspeed 变体。
-        （旧版自带重试循环，与 call_llm_with_retry 叠加会放大到 9 次。）
+        `model` 覆盖默认模型：图片理解可用多模态模型（如 Qwen2.5-VL-7B-Instruct）。
         """
         self._check_breaker()
         try:
             response = await self.client.chat.completions.create(
-                model=model or self.model,  # vision 调用经 model= 固定走多模态模型
+                model=model or self.model,
                 messages=messages,
                 stream=False,
                 temperature=0.7,
@@ -135,4 +157,7 @@ class MiniMaxClient:
             raise typed
 
 
-minimax_client = MiniMaxClient()
+llm_client = LLMClient()
+
+# Backward compatibility alias — all existing imports use minimax_client
+minimax_client = llm_client

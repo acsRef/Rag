@@ -35,8 +35,8 @@ Edit `.env` in the project root (`.env` is gitignored — never commit it):
 
 | Variable | Required | Notes |
 | ------- | -------- | ----- |
-| `MINIMAX_API_KEY` | Yes | Chat + Vision LLM |
-| `SILICONFLOW_API_KEY` | Yes | Embedding + Rerank |
+| `SILICONFLOW_API_KEY` | **Yes** | Chat (DeepSeek-V3) + Vision (Qwen2.5-VL) + Embedding + Rerank |
+| `MINIMAX_API_KEY` | No | Optional fallback provider |
 | `JWT_SECRET` | **Hard requirement** | Startup crashes if default |
 | `PII_ENCRYPTION_KEY` | **Hard requirement** | Startup crashes if default |
 
@@ -71,7 +71,7 @@ Live real-API tests (`live_llm` marker, skipped unless enabled):
 
 ```bash
 RAGENT_LIVE_LLM=1 D:/miniConda/envs/rag/python.exe -m pytest tests/integration -m live_llm -v
-# 可选加速：RAGENT_LIVE_MODEL=MiniMax-M2.7-highspeed（仅文本对话；
+# 可选加速：RAGENT_LIVE_MODEL=deepseek-ai/DeepSeek-V3（仅文本对话；
 # 图片理解固定走 settings.vision_model 的多模态模型，不受该开关影响）
 ```
 
@@ -85,16 +85,50 @@ For runtime verification, start the app and exercise the affected endpoint.
 cd frontend && npm run build   # runs vue-tsc -b && vite build
 ```
 
+## Session workflow
+
+**每次任务完成后，必须留下下一步计划**：
+
+1. 在 `docs/plans/` 目录下创建新的计划文档（如 `YYYY-MM-DD-next-steps.md`）
+2. 内容包括：
+   - 本次完成的工作总结
+   - 当前状态和分数（如果是优化任务）
+   - 下一步具体行动计划
+   - 优先级排序
+3. 更新 `TODO.md`（如果存在）
+4. 确保下一个会话可以直接从计划继续
+
+**原因**：避免每次都要重新了解上下文和重复说明目标。
+
+**示例**：
+```markdown
+# 下一步计划 (2026-08-20)
+
+## 本次完成
+- LLM 切换到 SiliconFlow (DeepSeek-V3)
+- 检索层优化：权威表格补充检索
+- A类: 56.7% → 83.3%, B类: 61.1% → 94.4%
+
+## 下一步
+1. H类改进（前提纠偏）- 2-3天
+2. I类改进（拒答边界）- 1-2天
+3. C类继续优化 - 2-3天
+
+## 目标
+- 整体分数从 71.8% 提升到 80%+
+```
+
 ## Architecture snapshot
 
 **Stack**: FastAPI (Python 3.11) + Vue 3/Vite/TypeScript + PostgreSQL 15 + pgvector 0.8
 
-**LLM providers**: MiniMax M3 (chat/vision) + SiliconFlow (embedding Qwen3-VL-Embedding-8B 4096d + rerank BAAI/bge-reranker-v2-m3)
+**LLM providers**: SiliconFlow (chat: DeepSeek-V3, vision: Qwen2.5-VL-7B-Instruct, embedding: Qwen3-VL-Embedding-8B 4096d, rerank: BAAI/bge-reranker-v2-m3)
 
 **RAG pipeline** (see [app/core/pipeline.py:118](app/core/pipeline.py#L118) `RAGPipeline.execute`):
 ```
 QueryRewrite → IntentClassify (route to 1-3 KBs) → Hybrid Search (vector cosine + BM25 ts_rank + question-vector
 channel, RRF merge; relaxed-BM25 fallback when < top_k)
+→ Section-aware Supplement (ensures authoritative financial tables are retrieved — see [app/core/retrieval.py](app/core/retrieval.py) `_supplement_authoritative_sections`)
 → Cross-doc Relation (3-channel: TF-IDF edges / query keyword recall / doc-level embedding — see [app/core/doc_relation.py](app/core/doc_relation.py))
 → Cross-encoder Rerank → MMR diversity (λ=0.7, ≤2 per doc) → TopK → Prompt injection → SSE stream
 ```
@@ -190,7 +224,8 @@ D:/miniConda/envs/rag/python.exe -c "import app.main"
 │   │   └── diagnostics.py     # RAG pipeline telemetry API
 │   ├── core/                  # RAG pipeline core logic
 │   │   ├── pipeline.py        # RAGPipeline.execute (main flow)
-│   │   ├── retrieval.py       # Hybrid search + MMR
+│   │   ├── retrieval.py       # Hybrid search + section-aware supplement + MMR
+│   │   ├── evidence.py        # Evidence organization layer (sub-question tracking + conflict detection)
 │   │   ├── mmr.py             # MMR diversity algorithm
 │   │   ├── memory.py          # Token-budget conversation memory
 │   │   ├── rewrite.py         # Query rewrite + anaphora resolution
@@ -210,10 +245,10 @@ D:/miniConda/envs/rag/python.exe -c "import app.main"
 │   │   └── pipeline.py        # IngestionPipeline orchestrator
 │   ├── llm/                   # Async LLM clients (OpenAI-compatible)
 │   │   ├── base.py            # AsyncOpenAI wrapper + circuit breaker
-│   │   ├── chat.py            # MiniMax M3 chat completions
+│   │   ├── chat.py            # SiliconFlow chat (DeepSeek-V3)
 │   │   ├── embedding.py       # SiliconFlow embeddings
 │   │   ├── rerank.py          # Cross-encoder reranking
-│   │   └── vision.py          # Image understanding (LRU cache)
+│   │   └── vision.py          # Image understanding (Qwen2.5-VL, LRU cache)
 │   ├── middleware/auth.py     # JWT + RBAC middleware
 │   ├── models/schemas.py      # Pydantic request/response models
 │   └── store/
@@ -237,7 +272,15 @@ D:/miniConda/envs/rag/python.exe -c "import app.main"
 │   ├── unit/                  # offline unit tests
 │   ├── integration/           # link tests on the ragent_test DB (never writes the dev DB / real LLM)
 │   └── fixtures/docs/         # crafted cross-document fixture docs
+├── eval/                      # Evaluation system
+│   ├── eval_sany.py           # Full evaluation script (65 questions)
+│   ├── eval_detail.py         # Detailed evaluation by category
+│   ├── eval_single.py         # Single-question evaluation with retry
+│   ├── rejudge.py             # Re-judge unanswered questions
+│   └── sany_annual_reports/   # Sany annual reports evaluation dataset
 ├── docs/
+│   ├── plans/                 # Implementation plans
+│   └── TODO.md                # Task list
 │   └── plans/                 # plan index + implementation plans (entry: docs/plans/README.md)
 ├── docker/
 │   └── Dockerfile             # postgres:15 + pgvector
