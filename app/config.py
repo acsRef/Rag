@@ -10,7 +10,7 @@ class Settings(BaseSettings):
     siliconflow_base_url: str = "https://api.siliconflow.cn/v1"
     chat_model: str = "deepseek-ai/DeepSeek-V3"
     intent_model: str = "deepseek-ai/DeepSeek-R1-0528-Qwen3-8B"  # 意图路由（推理模型，切分较慢但路由更稳）
-    vision_model: str = "deepseek-ai/DeepSeek-OCR"  # 硅基流动视觉模型（OCR）
+    vision_model: str = "Qwen/Qwen3-VL-8B-Instruct"  # 图片理解（多模态 Qwen-VL 8B，遵守[类型]分类约定；原 Qwen2.5-VL-7B 已在硅基流动下架）
     embedding_model: str = "Qwen/Qwen3-VL-Embedding-8B"
     embedding_dimension: int = 4096
     rerank_model: str = "BAAI/bge-reranker-v2-m3"

@@ -114,11 +114,11 @@ class ImageDescriber:
         try:
             from app.config import settings as _settings
             # 固定走多模态模型：文本模型可能是非多模态的 highspeed 变体。
-            # OCR 模型（DeepSeek-OCR）对 system 角色支持不一，把系统指令并进 user 消息最稳妥。
-            user_text = "你是一个图片分析助手，擅长识别图片类型并提取关键信息。\n\n" + IMAGE_DESCRIBE_PROMPT
+            # Qwen2.5-VL 支持 system 角色（DeepSeek-OCR 曾因不支持才并入 user，已回退）。
             resp = await minimax_client.chat([
+                {"role": "system", "content": "你是一个图片分析助手，擅长识别图片类型并提取关键信息。"},
                 {"role": "user", "content": [
-                    {"type": "text", "text": user_text},
+                    {"type": "text", "text": IMAGE_DESCRIBE_PROMPT},
                     {"type": "image_url", "image_url": {"url": data_url}},
                 ]},
             ], model=_settings.vision_model)
