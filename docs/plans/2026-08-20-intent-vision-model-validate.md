@@ -1,5 +1,7 @@
 # 意图 + 视觉模型切换验证与加固 Implementation Plan
 
+> **状态：已完成 2026-08-20。** 实测定论 + 最终架构见 `docs/plans/2026-08-20-intent-vision-model-switch.md`「当前状态」与「风险点定论」。核心结论：**意图路由回退 V3；R1 挪到复杂查询规划；视觉用 Qwen3-VL-8B**。commit：`9bdfdac`、vision-revert、`0d1d25a`。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** 用真实 API 验证 DeepSeek-R1 意图路由 + DeepSeek-OCR 视觉两项切换是否可用，暴露/修复 R1 推理 token 截断与 OCR 输出格式风险，最后复跑全量评测确认无回归并回填计划。
