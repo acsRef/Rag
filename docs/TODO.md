@@ -2,13 +2,21 @@
 
 ## 最近改动（2026-08-20）
 
-- 模型切换 + 实测后的**最终定论**（见 docs/plans/2026-08-20-intent-vision-model-validate.md）：
-  - **意图路由** → 回退 `DeepSeek-V3`（R1 拿来做简单路由是误用，已实测 3/3 不吐 JSON）
-  - **复杂查询规划（rewrite 子问题拆解/依赖）** → `DeepSeek-R1-0528-Qwen3-8B`（仅复杂查询动用，`_is_complex_query` 关键词预分类）
-  - **视觉** → `Qwen/Qwen3-VL-8B-Instruct`（DeepSeek-OCR 实测输出垃圾；原 Qwen2.5-VL-7B 已在硅基流动下架）
-- 新增锁定测试：`tests/unit/test_rewrite_complexity.py`、`test_vision_prompt.py`、`test_intent_tokens.py`
-- 注意：`tests/unit/test_chunker.py::test_oversized_section_packs_on_element_boundaries` **是既有失败**（与本次改动无关，未标记 xfail，待排查）
-- **评测（65 题）部分跑过，评分阶段未完成**——按用户要求不再每次全量跑，改用分块/C类别的定向测试
+### 模型架构（已完成，实测定论）
+- **意图路由** → DeepSeek-V3（回退，R1 不适合第一层轻量分类）
+- **复杂查询规划** → R1（仅在 query 被判定复杂时用于 rewrite 拆题/依赖规划）
+- **视觉** → Qwen3-VL-8B-Instruct（DeepSeek-OCR 输出垃圾，原 Qwen2.5-VL-7B 已下架）
+
+### H/I/C 类改进现状
+- **I 类（拒答边界）**：66.7% → 73.3%（有改善但波动大，prompt 层已到瓶颈）
+- **H 类（错误前提纠偏）**：53.3% 不变（prompt 已尽力，Q51 能纠偏证明机制有效，但 Q50/Q54 需要"反面证据检索"）
+- **C 类（跨文档对比）**：62.5% → 50%（prompt 反而伤害，根因是**检索层每年内抓错 chunk**，非缺年）
+  - 已提交"年份覆盖补充检索"代码（基础层），但核心问题需要"按年定向语义检索"更深改动
+
+### 下一步
+1. C 类：检索层重新设计（每个年份按 query 语义定向抓正确 chunk，不是补救式兜底）
+2. H 类：配合 C 类检索改进，可能顺带解决（反面数据到位就能纠偏）
+3. I 类：当前 73% 比初始有改善，但波动大，可考虑加稳定化措施
 
 ## 高优先级（影响核心功能）
 
