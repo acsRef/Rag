@@ -35,7 +35,7 @@ Edit `.env` in the project root (`.env` is gitignored — never commit it):
 
 | Variable | Required | Notes |
 | ------- | -------- | ----- |
-| `SILICONFLOW_API_KEY` | **Yes** | Chat (DeepSeek-V3) + Vision (Qwen2.5-VL) + Embedding + Rerank |
+| `SILICONFLOW_API_KEY` | **Yes** | Chat (DeepSeek-V3) + Vision/OCR (DeepSeek-OCR) + Intent (DeepSeek-R1-0528-Qwen3-8B) + Embedding + Rerank |
 | `MINIMAX_API_KEY` | No | Optional fallback provider |
 | `JWT_SECRET` | **Hard requirement** | Startup crashes if default |
 | `PII_ENCRYPTION_KEY` | **Hard requirement** | Startup crashes if default |
@@ -122,7 +122,7 @@ cd frontend && npm run build   # runs vue-tsc -b && vite build
 
 **Stack**: FastAPI (Python 3.11) + Vue 3/Vite/TypeScript + PostgreSQL 15 + pgvector 0.8
 
-**LLM providers**: SiliconFlow (chat: DeepSeek-V3, vision: Qwen2.5-VL-7B-Instruct, embedding: Qwen3-VL-Embedding-8B 4096d, rerank: BAAI/bge-reranker-v2-m3)
+**LLM providers**: SiliconFlow (chat: DeepSeek-V3, intent: DeepSeek-R1-0528-Qwen3-8B, vision/OCR: DeepSeek-OCR, embedding: Qwen3-VL-Embedding-8B 4096d, rerank: BAAI/bge-reranker-v2-m3)
 
 **RAG pipeline** (see [app/core/pipeline.py:118](app/core/pipeline.py#L118) `RAGPipeline.execute`):
 ```
@@ -248,7 +248,7 @@ D:/miniConda/envs/rag/python.exe -c "import app.main"
 │   │   ├── chat.py            # SiliconFlow chat (DeepSeek-V3)
 │   │   ├── embedding.py       # SiliconFlow embeddings
 │   │   ├── rerank.py          # Cross-encoder reranking
-│   │   └── vision.py          # Image understanding (Qwen2.5-VL, LRU cache)
+│   │   └── vision.py          # Image understanding (DeepSeek-OCR, LRU cache)
 │   ├── middleware/auth.py     # JWT + RBAC middleware
 │   ├── models/schemas.py      # Pydantic request/response models
 │   └── store/

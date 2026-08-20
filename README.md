@@ -11,7 +11,8 @@
 | 数据库 | PostgreSQL 15 + pgvector 0.8 |
 | 认证 | JWT + bcrypt（RBAC，8 项权限） |
 | 对话 | SiliconFlow (DeepSeek-V3) |
-| 视觉 | SiliconFlow (Qwen2.5-VL-7B-Instruct) |
+| 视觉/OCR | SiliconFlow (DeepSeek-OCR) |
+| 意图路由 | SiliconFlow (DeepSeek-R1-0528-Qwen3-8B) |
 | 向量 | Qwen3-VL-Embedding-8B（4096d）|
 | 重排 | BAAI/bge-reranker-v2-m3 |
 
@@ -36,7 +37,7 @@
 
 ## 功能
 
-- **文件解析**：PDF/DOCX/PPTX/XLSX/HTML/TXT/MD/图片（Docling + Qwen2.5-VL）
+- **文件解析**：PDF/DOCX/PPTX/XLSX/HTML/TXT/MD/图片（Docling + DeepSeek-OCR）
 - **智能切分**：结构感知递归切分，原子块保护（代码/表格/图片），重叠窗口
 - **混合检索**：向量语义检索 + BM25 关键词检索（jieba 分词）+ RRF 融合
 - **多路召回**：摄入期 LLM 生成候选问题 → 独立 embedding 通道 → 三路 (vector + BM25 + question) RRF 融合，低权重防噪声
@@ -131,7 +132,7 @@ RAGENT_LIVE_LLM=1 D:/miniConda/envs/rag/python.exe -m pytest tests/integration/t
 │   │   ├── chat.py             # SiliconFlow 对话 (DeepSeek-V3)
 │   │   ├── embedding.py        # SiliconFlow embedding
 │   │   ├── rerank.py           # 跨编码器重排
-│   │   └── vision.py           # 图片理解 (Qwen2.5-VL)
+│   │   └── vision.py           # 图片理解 (DeepSeek-OCR)
 │   ├── middleware/auth.py      # JWT 认证中间件
 │   ├── models/schemas.py       # Pydantic 数据模型
 │   └── store/                  # 数据访问层
@@ -182,7 +183,7 @@ D:/miniConda/envs/rag/python.exe eval/eval_detail.py --category A --limit 10
 
 参见 `app/config.py`，包含：
 
-- **LLM 供应商**：SiliconFlow（DeepSeek-V3 对话 + Qwen2.5-VL 视觉）
+- **LLM 供应商**：SiliconFlow（DeepSeek-V3 对话 + DeepSeek-R1 意图路由 + DeepSeek-OCR 视觉）
 - **PII**：开关、缓存 TTL、加密密钥
 - **混合检索**：开关、单路候选数、RRF 常数
 - **多路召回**：开关、question 通道权重、每路候选数

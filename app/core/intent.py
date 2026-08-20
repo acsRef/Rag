@@ -143,6 +143,7 @@ class IntentClassifier:
                 [{"role": "user", "content": prompt}],
                 tag="intent",
                 max_retries=1,
+                model=settings.intent_model,
             )
         except (CircuitOpenError, PermanentError, TemporaryError) as e:
             logger.warning("Intent LLM call failed (%s): %s", type(e).__name__, e)

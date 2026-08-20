@@ -1,5 +1,10 @@
 # RAG 系统待办事项
 
+## 最近改动（2026-08-20）
+
+- 意图路由 → `deepseek-ai/DeepSeek-R1-0528-Qwen3-8B`；视觉 → `deepseek-ai/DeepSeek-OCR`（见 docs/plans/2026-08-20-intent-vision-model-switch.md）
+- 待实测：真实 API 验证 + 复跑评测
+
 ## 高优先级（影响核心功能）
 
 ### 1. H类（错误前提纠偏）改进

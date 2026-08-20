@@ -130,7 +130,7 @@ class LLMClient:
     ) -> str:
         """Single-attempt chat — 重试策略统一由 call_llm_with_retry 负责。
 
-        `model` 覆盖默认模型：图片理解可用多模态模型（如 Qwen2.5-VL-7B-Instruct）。
+        `model` 覆盖默认模型：图片理解可用多模态模型（如 deepseek-ai/DeepSeek-OCR）。
         """
         self._check_breaker()
         try:
