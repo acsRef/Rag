@@ -18,6 +18,35 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+# 复杂查询关键词：命中任一即判定为 complex，动用推理模型（R1）做子问题拆解/依赖规划。
+# 与 REWRITE_PROMPT「难度分类」段的判据对齐，避免高频简单查询被 R1 拖慢。
+_COMPLEX_HINTS = (
+    "为什么", "判断", "是否成立", "趋势", "变化", "对比", "区别",
+    "原因", "解释", "如何", "多少倍", "差异", "增长", "下降",
+    "分别是", "按照", "来龙去脉",
+)
+
+
+def _is_complex_query(question: str) -> bool:
+    """廉价预判查询是否复杂，决定 rewrite 是否动用推理模型（R1）。
+
+    选择题：避免在关键路径上先做一次 LLM 预分类（额外延迟+成本），
+    用与 prompt 难度判据一致的关键词启发式即可满足绝大多数情况。
+    """
+    q = question.strip()
+    if not q:
+        return False
+    if any(h in q for h in _COMPLEX_HINTS):
+        return True
+    # 疑似跨年/跨实体（出现年份跨度或两个名词并列对比）
+    if "-" in q or "～" in q or "~" in q or "近三年" in q:
+        return True
+    # 出现两个及以上 "和/与/分别" 分隔的列举，倾向复杂
+    if q.count("和") >= 2 or q.count("与") >= 2 or "分别" in q:
+        return True
+    return False
+
+
 REWRITE_PROMPT = """你是一个查询改写助手。你的任务是将用户问题改写成自包含的检索查询，消除代词指代，必要时拆分子问题。
 
 # 核心规则
@@ -154,12 +183,16 @@ class QueryRewriteService:
         summary_str = summary if summary else "暂无对话摘要"
         history_str = "\n".join(f"{m['role']}: {m['content']}" for m in history[-4:]) if history else "暂无最近对话"
         prompt = REWRITE_PROMPT.format(summary=summary_str, history=history_str, question=question)
+        # 复杂查询才动用推理模型（R1）做精细拆题/依赖规划；简单查询走默认 V3 快路径。
+        # 意图路由已是 V3（第一层轻量分类），这里的 R1 仅作「复杂查询规划」第二层。
+        model = settings.rewrite_model if _is_complex_query(question) else None
         try:
             result = await call_llm_with_retry(
                 minimax_client.chat,
                 [{"role": "user", "content": prompt}],
                 tag="rewrite",
                 max_retries=1,
+                model=model,
             )
         except (CircuitOpenError, PermanentError, TemporaryError) as e:
             logger.warning("Rewrite LLM call failed (%s): %s", type(e).__name__, e)

@@ -295,14 +295,14 @@ git add app/core/intent.py tests/unit/test_intent_guard.py
 git commit -m "fix(intent): strengthen R1 prompt to force strict JSON-only routing output"
 ```
 
-### Task 4: 回退 OCR 到 Qwen2.5-VL（用户决策：DeepSeek-OCR 输出垃圾，放弃）
+### Task 4: 回退 OCR 到 Qwen-VL（用户决策：DeepSeek-OCR 输出垃圾，放弃；已完成）
 
 **Files:**
 - Modify: `app/config.py`（`vision_model` 回退）
 - Modify: `app/llm/vision.py`（恢复 system 指令角色）
 - Test: `tests/unit/test_vision_prompt.py`
 
-> **背景**（烟测实锤）：`DeepSeek-OCR` 对白底黑字图输出一串 `}` 垃圾字符，且不遵循 `[类型]` 前缀、丢关键数字。用户决策**回退到 Qwen2.5-VL**（通用多模态，能遵守分类约定）。本任务本质是**回滚**模型切换的视觉部分，顺带恢复原 system 角色调用。
+> **背景**（烟测实锤）：`DeepSeek-OCR` 对白底黑字图输出一串 `}` 垃圾字符，且不遵循 `[类型]` 前缀、丢关键数字。用户决策回退到 Qwen-VL。**关键发现：原计划回退目标 `Qwen/Qwen2.5-VL-7B-Instruct` 已在硅基流动下架（实测 400 `Model does not exist`）**，改选可用的 `Qwen/Qwen3-VL-8B-Instruct`，真实 API 实测通过：延迟 8.6s、`[文档]` 前缀 ✓、数字 `732.22` 原文保留 ✓。**已完成并提交。**
 
 - [ ] **Step 1: 回退 config.py 的 vision_model**
 
@@ -465,9 +465,18 @@ Expected: 全部 PASS（模型切换前后单测全绿）。
 
 **用户决策（2026-08-20）：**
 - 意图路由：**保留 R1，调 prompt** 救（本 plan Task 3 从「加 max_tokens」改为「强化 prompt + 禁思考」；若实测仍失败，带数据回来改回退决策）
-- 视觉：**回退到 Qwen2.5-VL**（Task 4 从「改 prompt」改为「回滚 vision_model + 恢复 system 指令」）
+- 视觉：**回退 Qwen-VL**（Task 4 已完成：DeepSeek-OCR 输出垃圾 + Qwen2.5-VL-7B 已下架 → 改用 Qwen3-VL-8B-Instruct，实测通过）
 
-⇒ 触发加固：Task 3（R1 prompt 强化）/ Task 4（OCR 回退 Qwen2.5-VL）
+⇒ 触发加固：Task 3（R1 prompt 强化，**已完成**）/ Task 4（OCR 回退，**已完成**）
+
+**Task 3 实测结果（2026-08-20）：** 强化 prompt 后 R1 从"3/3 不吐 JSON"变为**稳定吐 JSON**：
+- Q1(三一营收) → `matches=[docs-a 0.9]` ✓，延迟 7.0s
+- Q2(科创板无关) → `matches=[docs-a 0.9]` ⚠（弱语义测试环境下误路由；真实 KB 名称场景待评测验证）
+- Q3(2024vs2025对比) → `matches=[docs-a 0.85]` ✓，延迟 16.7s
+- 延迟 25-30s → 7-17s，可接受
+- **重点：格式问题已解决，但"无关即空数组"的语义判断需在真实 KB 名称下用全量评测复核。**
+
+**Task 4 实测结果（2026-08-20）：** Qwen3-VL-8B-Instruct 延迟 8.6s、`[文档]` 前缀 ✓、数字 `732.22` 原文保留 ✓。
 
 ---
 
