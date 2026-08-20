@@ -22,7 +22,15 @@ import logging
 logger = logging.getLogger(__name__)
 
 
-INTENT_CLASSIFIER_PROMPT = """你是一个知识库路由分类器。你的任务是将用户问题匹配到最相关的知识库。
+INTENT_CLASSIFIER_PROMPT = """你是一个知识库路由分类器，只做一件事：把用户问题映射到最相关的知识库 id。
+
+【最高优先级 - 输出形态】
+不要在内部思考，不要写任何思考过程、推理、解释、开场白或结束语。
+你的【整个回复】只能是一个 JSON 对象，直接以 {{ 开头并以 }} 结束，前后没有任何其他字符。
+任何解释、markdown 代码块、或"好的，让我..."之类的话都是错误。
+
+正确示例（唯一允许的输出形态）：
+{{"intent_type": "KB", "matches": [{{"kb_id": "docs-a", "score": 0.9}}]}}
 
 # 核心规则
 
@@ -67,8 +75,8 @@ INTENT_CLASSIFIER_PROMPT = """你是一个知识库路由分类器。你的任�
 输出：{{"intent_type": "KB", "matches": [{{"kb_id": "安全指南", "score": 0.92}}, {{"kb_id": "开发规范", "score": 0.65}}]}}
 
 # 输出前确认
+□ 我的回复是否【只】是那个 JSON 对象、无任何其他字符？
 □ 所有 KB ID 都来自输入列表？
-□ JSON 格式正确，无多余文本？
 □ 不相关的已返回空数组？
 □ score 是否反映了真实相关度？"""
 
