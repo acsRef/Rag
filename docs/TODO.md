@@ -2,8 +2,13 @@
 
 ## 最近改动（2026-08-20）
 
-- 意图路由 → `deepseek-ai/DeepSeek-R1-0528-Qwen3-8B`；视觉 → `deepseek-ai/DeepSeek-OCR`（见 docs/plans/2026-08-20-intent-vision-model-switch.md）
-- 待实测：真实 API 验证 + 复跑评测
+- 模型切换 + 实测后的**最终定论**（见 docs/plans/2026-08-20-intent-vision-model-validate.md）：
+  - **意图路由** → 回退 `DeepSeek-V3`（R1 拿来做简单路由是误用，已实测 3/3 不吐 JSON）
+  - **复杂查询规划（rewrite 子问题拆解/依赖）** → `DeepSeek-R1-0528-Qwen3-8B`（仅复杂查询动用，`_is_complex_query` 关键词预分类）
+  - **视觉** → `Qwen/Qwen3-VL-8B-Instruct`（DeepSeek-OCR 实测输出垃圾；原 Qwen2.5-VL-7B 已在硅基流动下架）
+- 新增锁定测试：`tests/unit/test_rewrite_complexity.py`、`test_vision_prompt.py`、`test_intent_tokens.py`
+- 注意：`tests/unit/test_chunker.py::test_oversized_section_packs_on_element_boundaries` **是既有失败**（与本次改动无关，未标记 xfail，待排查）
+- **评测（65 题）部分跑过，评分阶段未完成**——按用户要求不再每次全量跑，改用分块/C类别的定向测试
 
 ## 高优先级（影响核心功能）
 
