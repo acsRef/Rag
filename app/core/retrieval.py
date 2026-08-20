@@ -367,6 +367,125 @@ def _supplement_authoritative_sections(
     return results
 
 
+# ── 跨年覆盖补充（C类：跨文档对比的年份对齐）──────────────
+
+_CROSS_YEAR_HINTS = ("近三年", "近两", "分别", "对比", "相比", "变化", "-", "～", "~")
+
+
+def _query_years(query: str) -> list[str]:
+    """提取 query 中的年份 tokens（"2023年"），去重保序。"""
+    import re as _re
+    seen: set[str] = set()
+    out: list[str] = []
+    for m in _re.findall(r"(?:19|20)\d{2}", query):
+        y = f"{m}年"
+        if y not in seen:
+            seen.add(y)
+            out.append(y)
+    return out
+
+
+def _is_cross_year_query(query: str) -> bool:
+    """query 是否有跨年/对比意图（即便没有显式年份，如"近三年"）。"""
+    return any(h in query for h in _CROSS_YEAR_HINTS)
+
+
+def _supplement_missing_years(
+    results: list[dict],
+    query: str,
+    kb_ids: list[str],
+    user_role_ids: list[int] | None,
+    can_read_all: bool,
+    user_id: str,
+) -> list[dict]:
+    """C类：确保 query 涉及的所有年份都有 chunk 进入最终上下文。
+
+    问题：hybrid/rerank/MMR 后，某些年份（如 2023）可能被挤出 top-K，
+    跨年对比时该年数据缺失 → 张冠李戴或"找不到某年数据"。
+    本函数在年份注入之后检测缺失年份，定向补充检索。
+
+    触发条件：query 含显式年份（2023-2025/2023年）或跨年意图（近三年/分别/对比）。
+    每个缺失年份补充 1 条最高分 chunk，挂在末尾（保证进最终上下文）。
+    所有 DB/搜索异常一律降级返回原 results，不阻断主流程。
+    """
+    if not results or not query:
+        return results
+
+    referenced = _query_years(query)
+    cross_year = _is_cross_year_query(query)
+    # 精确单点查询（无年份无跨年意图）→ 无需强制覆盖
+    if not referenced and not cross_year:
+        return results
+
+    present = {r.get("year", "") for r in results if r.get("year")}
+
+    # query 无显式年份但跨年（如"近三年"）→ 目标是知识库中存在且结果里应覆盖的年份
+    if cross_year and not referenced:
+        referenced = [y for y in present if y]
+    if not referenced:
+        return results
+
+    missing = [y for y in referenced if y not in present]
+    if not missing:
+        return results
+
+    # 查每个缺失年份的 document_ids（按 kb 过滤）
+    try:
+        from app.store.db import get_db_ctx, Document
+        from app.ingestion.indexer import _extract_year_from_filename
+        year_docs: dict[str, list[str]] = {}
+        with get_db_ctx() as session:
+            rows = session.query(Document.document_id, Document.filename).filter(
+                Document.kb_id.in_(kb_ids)).all()
+            for doc_id, filename in rows:
+                yr = _extract_year_from_filename(filename)
+                if yr:
+                    year_docs.setdefault(yr, []).append(doc_id)
+    except Exception:
+        logger.exception("year_coverage.doc_lookup_failed")
+        return results
+
+    existing_ids = {r["chunk_id"] for r in results}
+    added: list[dict] = []
+    for yr in missing:
+        doc_ids = year_docs.get(yr, [])
+        if not doc_ids:
+            continue
+        try:
+            from app.store.pgvector_store import bm25_search
+            rows = bm25_search(
+                kb_ids=kb_ids,
+                query=query,
+                user_role_ids=user_role_ids,
+                can_read_all=can_read_all,
+                top_k=3,
+                user_id=user_id,
+                document_ids=doc_ids,
+            )
+        except Exception:
+            logger.exception("year_coverage.search_failed year=%s", yr)
+            continue
+        for r in rows:
+            if r["chunk_id"] in existing_ids:
+                continue
+            r["year"] = yr
+            r["kb_id"] = kb_ids[0] if kb_ids else ""
+            existing_ids.add(r["chunk_id"])
+            added.append(r)
+            break  # 每个缺失年份补 1 条
+
+    if added:
+        # 补的 chunk 给不低于现有最低分的分数，保证不被后续处理裁掉
+        min_existing = min((r.get("score", 0) for r in results), default=0.3)
+        for r in added:
+            r["score"] = max(r.get("score", 0), min_existing)
+        results.extend(added)
+        logger.info("year_coverage added=%d missing_years=%s query=%s",
+                    len(added), missing, query[:40])
+
+    return results
+
+
 class RetrievalEngine:
     async def retrieve(
         self,
@@ -657,6 +776,13 @@ class RetrievalEngine:
                 logger.exception("year_enrichment_failed")
         for r in results:
             r["year"] = year_map.get(r["document_id"], "")
+
+        # C类跨年覆盖补充：query 涉及多年度/跨年时，确保每年都有 chunk
+        # （放在 rerank/MMR 之后、最终返回前，保证缺失年份数据不被挤出）
+        results = _supplement_missing_years(
+            results, query, target_kb_ids,
+            user_role_ids, can_read_all, user_id,
+        )
 
         # Section-aware boost: 根据 query 关键词给特定 section 的 chunks 加分
         results = _boost_by_section_type(results, query)

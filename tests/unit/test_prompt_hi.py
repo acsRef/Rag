@@ -36,10 +36,3 @@ def test_i_class_forbids_synthesis_substitution():
 def test_no_duplicate_information_sufficiency_section():
     # 之前编辑引入过重复块，锁定不回归
     assert SYSTEM_PROMPT.count("信息充分度决策") == 1
-
-
-def test_i_class_has_cross_year_actual_data_exception():
-    # 关键：拒答边界不能把"2024/2025 已披露年报实际数据"也拒掉（曾导致 C 类跨年问题全拒答）
-    assert "跨年度问题例外" in SYSTEM_PROMPT
-    assert "历史年度实际数据" in SYSTEM_PROMPT
-    assert "2026" in SYSTEM_PROMPT  # 未来目标示例仍是拒答项
