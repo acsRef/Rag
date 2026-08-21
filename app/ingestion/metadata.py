@@ -2,9 +2,6 @@
 
 Uses a single MiniMax API call to generate title / summary / questions
 for ALL chunks in one batch, then writes results back into the Chunk objects.
-
-Also provides embedding_text enhancement using a small model (Qwen2.5-7B-Instruct)
-to improve retrieval quality for financial data queries.
 """
 
 import asyncio
@@ -94,35 +91,3 @@ class ChunkMetadataGenerator:
 
 
 chunk_metadata_generator = ChunkMetadataGenerator()
-
-
-# ── Embedding Text Enhancement ──────────────────────────────────────────────
-
-_EMBEDDING_TEXT_PROMPT = """你是一个用于 RAG 检索的文本增强器。
-
-任务：从文档 chunk 中提取关键信息，生成一段高信息密度的检索文本。
-
-【严格要求】
-1. 所有数字必须**逐字复制**原文，不要计算、不要四舍五入、不要估算
-2. 百分比必须**逐字复制**原文（如"5.08%"不能改成"5%"）
-3. 必须包含所有年份信息（如"2024年""2023年"）
-4. 保持原始数据的对应关系（哪个指标对应哪个数值）
-
-【输出格式】
-用自然语言描述，包含：指标名称、年份、数值、单位、同比变化（如有）
-例如："三一重工2024年营业收入777.73亿元，2023年740.19亿元，同比增长5.08%"
-
-【禁止】
-- 不要重新组织或重新计算数据
-- 不要添加原文没有的信息
-- 不要解释，不要 markdown，不要 JSON
-
-原始 chunk：
-{content}
-
-输出："""
-
-
-# Day 2 上午：EmbeddingTextEnhancer 已弃用 — 详见 docs/plans/2026-08-22-rag-decomposition.md §一.3 + §九 Day 2 上午。
-
-
