@@ -118,22 +118,20 @@ evidence_gate_should_refuse(result, threshold) → True/False
 
 ## 5. B1 — Evidence Gate 价值验证
 
-### 5.1 Stage 1: Technical smoke test (10-15 题)
+### 5.1 Stage 1: Technical smoke test (10-15 个技术场景 / assertion)
 
-**目的不是判断 Gate 有没有价值**——只验证 Gate 能正常工作。
+**核心：构造确定性的固定场景，不是跑自然语言题。**
 
-| 验证项 | 通过标准 |
+| 验收场景 | 通过标准 |
 | --- | --- |
-| Gate 在 `evidence_gate_enabled=True` 时被触发 | pipeline.py:435 路径被执行 |
-| 真的产生 `evidence_refused` SSE 状态事件 | SSE 流出现 `evidence_refused` |
-| `degraded` 事件 payload 正确 | `reason="evidence_gate_refused"` |
-| `threshold` 参数真的生效 | 不同 threshold 下覆盖率拒绝结果不同 |
-| `coverage` 计算正确 | smoke 测试题手工核对 coverage 值 |
-| `temporal_consistent` 计算正确 | 同一题两块相互冲突的数据产生 conflicts |
-| refuse 路径不抛异常 | 全程无 traceback |
-| fallback 路径正常（gate 异常时降级） | 强制 mock 异常确认 `evidence_gate.failed_falling_through` log 出现 |
+| 正常通过 | coverage 高且无 conflict → 不拒答，正常生成 |
+| 低 coverage → refuse | 构造一个空 sub_question_chunks → 触发 `evidence_refused` SSE |
+| temporal conflict → refuse | 构造跨文档冲突数据 → conflicts 字段非空 → gate refuse |
+| threshold 边界 | threshold=0.99 vs 0.01 对比同一题 refusal 差异符合预期 |
+| gate exception → fallback | mock evidence_organizer 抛异常 → `evidence_gate.failed_falling_through` log 出现，pipeline 继续 |
+| SSE event sequence | 拒绝路径事件顺序固定为 `status(evidence_refused) → degraded(reason=evidence_gate_refused) → done` |
 
-**通过 Stage 1 后才进入 Stage 2**。
+**Stage 1 不消耗 LLM API、不受模型随机性影响**——所有场景在测试 fixture 内确定性构造。通过 Stage 1 后才进入 Stage 2。
 
 ### 5.2 Stage 2: Value ablation (65 题全集)
 
@@ -175,6 +173,40 @@ evidence_gate_should_refuse(result, threshold) → True/False
 
 > **DELETE 是合理结局**——不要默认"现成能力必须启用"。4 个阈值都证伪时，删除就是最理性的工程决定。
 
+### 5.5 最小可接受收益门槛（执行 Stage 2 前必须明确）
+
+> **accuracy 提升不自动等于 Evidence Gate 值得保留。**
+
+例如可能出现的 ambiguous 结果：
+
+```
+gate off:           accuracy = 73.3%
+gate on (0.7):      accuracy = 74.1%   ← +0.8pp
+                    false_refusal = 6%
+                    latency +35%
+```
+
+这不能简单结论为 `ENABLE`。必须用以下三轴联合判断：
+
+| 维度 | 必须满足（待定具体数字） | 目的 |
+| --- | --- | --- |
+| accuracy improvement | 必须达到可测的有意义阈值（不能只是随机波动） | 排除噪声型提升 |
+| false refusal rate | 必须维持在可接受上限内 | 拒绝代价控制 |
+| latency overhead | p95 延迟增加必须在可接受范围内 | 性能代价控制 |
+
+**正式 Stage 2 前必须把这三个具体数字定下来**——否则实验报告会变成"这个数字比那个数字大，所以启用"，不严谨。
+
+**当前建议起点**（待 Stage 1 后确认）：
+- accuracy improvement ≥ 2pp（绝对值）
+- false refusal rate ≤ 3%
+- latency p95 增加 ≤ 20%
+
+**具体数字在 Stage 2 执行前的 plan doc 里确定**，本 recon doc 不锁具体阈值。
+
+### 5.6 Gate ablation 的最终判定原则
+
+**单一指标改善不构成 ENABLE 理由**。三轴全过才考虑 ENABLE；任一轴失败则回到 §5.4 outcome 矩阵相应分支（KEEP + 调参 / KEEP + 自适应阈值 / DELETE）。
+
 ## 6. B2 — `query_type` 清理
 
 ### 6.1 三层分级删除判断
@@ -200,13 +232,25 @@ evidence_gate_should_refuse(result, threshold) → True/False
 
 ### 6.3 Validation (执行 B2 时)
 
+**两阶段 grep 协议**（防 Phase 1 那种"死东西删了但文档/注释残留"复现）：
+
 ```bash
-# Baseline
+# ── Phase A: 删除前 baseline ──
+# 记录所有命中点（file:line + 类型：field / parameter / code / doc / comment）
 grep -rn "query_type\|compute_chunk_importance\|rerank_chunks" app/ tests/ tools/ eval/
 
-# 删除后必须 0 命中（除 history plan 文档与本 decision doc）：
-grep -rn "EvidenceTable.query_type\|compute_chunk_importance" app/
+# ── Phase B: 删除后精确校验 ──
+# 必须 0 命中（app/ + tests/ + tools/ + eval/ 四个目录内）
+grep -rn "query_type\|compute_chunk_importance\|rerank_chunks" app/ tests/ tools/ eval/
 
+# ── Phase C: 文档允许上下文校验 ──
+# docs/plans/ 中允许出现 query_type（作为历史 plan / decision doc 记录）；
+# 但应用代码 + 测试 + 工具中必须 0 命中——"注释里还出现 query_type"不算成功。
+```
+
+**注释也算残留**——Phase 1 已经治过这类，Phase 2 不应退步。
+
+```bash
 # 运行时验证
 pytest -q  # 维持 459 passed / 6 failed / 13 skipped
 ruff check  # 退出 0
