@@ -1,4 +1,4 @@
-# Phase 2 B 类侦察决策 (2026-08-22)
+# Phase 2 B 类侦察决策 (2026-08-21)
 
 > **Scope**: Phase 2 B 类——Evidence Gate 价值验证 + `query_type` 字段/参数清理
 >

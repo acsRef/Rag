@@ -1,4 +1,4 @@
-# Phase 2 Contract Decisions (2026-08-22)
+# Phase 2 Contract Decisions (2026-08-21)
 
 > **Scope**：Phase 2 A 类数据契约决策——对 `RewriteResult.complexity` / `sub_dependencies` / `query_type` 等字段的去留与伴随 contract 变化做决议。
 >
