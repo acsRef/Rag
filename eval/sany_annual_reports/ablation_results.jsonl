@@ -1,0 +1,8 @@
+{"name": "Baseline", "env": "all off", "metrics": {"hit@5": 0.95, "hit@10": 1.0, "recall@5": 0.9, "recall@10": 1.0, "mrr": 0.8416666666666668}, "n": 20, "avg_latency_ms": 669.5}
+{"name": "All Retrieval ON", "env": "5 strategies all on", "metrics": {"hit@5": 0.95, "hit@10": 1.0, "recall@5": 0.925, "recall@10": 1.0, "mrr": 0.85}, "n": 20, "avg_latency_ms": 579.7}
+{"name": "+ Cross-doc", "env": "CROSS_DOC_ENABLED=true", "metrics": {"hit@5": 0.95, "hit@10": 1.0, "recall@5": 0.9, "recall@10": 1.0, "mrr": 0.85}, "n": 20, "avg_latency_ms": 567.1}
+{"name": "+ Section Boost", "env": "SECTION_BOOST_ENABLED=true", "metrics": {"hit@5": 0.95, "hit@10": 1.0, "recall@5": 0.925, "recall@10": 1.0, "mrr": 0.85}, "n": 20, "avg_latency_ms": 569.5}
+{"name": "+ Section Supp", "env": "SECTION_SUPPLEMENT_ENABLED=true", "metrics": {"hit@5": 0.95, "hit@10": 1.0, "recall@5": 0.9, "recall@10": 1.0, "mrr": 0.85}, "n": 20, "avg_latency_ms": 568.0}
+{"name": "+ Year Supp", "env": "YEAR_SUPPLEMENT_ENABLED=true", "metrics": {"hit@5": 0.95, "hit@10": 1.0, "recall@5": 0.925, "recall@10": 1.0, "mrr": 0.85}, "n": 20, "avg_latency_ms": 660.2}
+{"name": "+ Evidence Gate .7", "env": "EVIDENCE_GATE_ENABLED=true min_coverage=0.7", "metrics": {"hit@5": 0.95, "hit@10": 1.0, "recall@5": 0.925, "recall@10": 1.0, "mrr": 0.85}, "n": 20, "avg_latency_ms": 596.1, "note": "gate is in /chat/stream, retrieval layer unchanged"}
+{"name": "+ Evidence Gate .5", "env": "EVIDENCE_GATE_ENABLED=true min_coverage=0.5", "metrics": {"hit@5": 0.95, "hit@10": 1.0, "recall@5": 0.925, "recall@10": 1.0, "mrr": 0.85}, "n": 20, "avg_latency_ms": 589.1, "note": "gate is in /chat/stream, retrieval layer unchanged"}
