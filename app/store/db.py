@@ -37,6 +37,9 @@ def init_db():
                 text("ALTER TABLE chunks ADD COLUMN IF NOT EXISTS search_text TEXT DEFAULT ''")
             )
             conn.execute(
+                text("ALTER TABLE chunks ADD COLUMN IF NOT EXISTS embedding_text TEXT")
+            )
+            conn.execute(
                 text("CREATE INDEX IF NOT EXISTS idx_chunks_search_text ON chunks "
                      "USING GIN (to_tsvector('simple', search_text))")
             )
@@ -67,6 +70,16 @@ def init_db():
             conn.execute(
                 text("ALTER TABLE messages ADD COLUMN IF NOT EXISTS status VARCHAR(16) DEFAULT 'completed'")
             )
+            # ── Day 2 上午 chunks 新增列（plan §一.1）──
+            conn.execute(text("ALTER TABLE chunks ADD COLUMN IF NOT EXISTS year INTEGER"))
+            conn.execute(text("ALTER TABLE chunks ADD COLUMN IF NOT EXISTS page_start INTEGER"))
+            conn.execute(text("ALTER TABLE chunks ADD COLUMN IF NOT EXISTS page_end INTEGER"))
+            conn.execute(text("ALTER TABLE chunks ADD COLUMN IF NOT EXISTS embedding_version INTEGER DEFAULT 1"))
+            conn.execute(text("ALTER TABLE chunks ADD COLUMN IF NOT EXISTS table_title TEXT"))
+            conn.execute(text("ALTER TABLE chunks ADD COLUMN IF NOT EXISTS figure_title TEXT"))
+            # 索引：year + embedding_version 检索时 WHERE 过滤用
+            conn.execute(text("CREATE INDEX IF NOT EXISTS idx_chunks_year ON chunks (year)"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS idx_chunks_embedding_version ON chunks (embedding_version)"))
             conn.execute(
                 text("CREATE INDEX IF NOT EXISTS idx_doc_entities_doc ON doc_entities (document_id)")
             )
@@ -226,6 +239,7 @@ class Chunk(Base):
     document_id = Column(String(64), ForeignKey("documents.document_id"), nullable=False, index=True)
     kb_id = Column(String(64), ForeignKey("knowledge_bases.id"), nullable=False, index=True)
     text = Column(Text, nullable=False)
+    embedding_text = Column(Text, nullable=True)  # 增强文本：build_embedding_text() 输出
     embedding = Column(Vector(4096))
     title = Column(String(256), default="")
     summary = Column(Text, default="")
@@ -236,6 +250,17 @@ class Chunk(Base):
     visibility = Column(String(16), default="public")
     allowed_roles = Column(ARRAY(Integer), default=list)
     created_at = Column(DateTime, default=utc_now)
+    # ── Day 2 上午新增列（plan §一.1） ──
+    # year：用于 SQL WHERE year IN (...) 过滤；当前 indexer 不写入，reembed_v2 也不写
+    # （indexer 没有 document.year 解析能力，留给 ingestion 后续 enrich_chunk_metadata）
+    year = Column(Integer, nullable=True, index=True)
+    page_start = Column(Integer, nullable=True)
+    page_end = Column(Integer, nullable=True)
+    # embedding_version：build_embedding_text() 重 embed 的 chunk 标 2；hybrid_search
+    # 加 AND embedding_version = settings.current_embedding_version 隔离新旧 embedding
+    embedding_version = Column(Integer, default=1, nullable=False, index=True)
+    table_title = Column(Text, nullable=True)
+    figure_title = Column(Text, nullable=True)
 
 
 # ── Conversation ────────────────────────────────────────

@@ -19,6 +19,7 @@ from app.ingestion.chunker import text_chunker, Chunk
 from app.ingestion.cleaner import document_cleaner
 from app.ingestion.structurer import document_structurer
 from app.ingestion.metadata import chunk_metadata_generator
+from app.ingestion.embedding_text import build_embedding_text  # noqa: F401  # 保留供 ablation
 from app.store.db import get_db_ctx, get_session, Document, new_id, utc_now
 from app.store.pgvector_store import tokenize
 from app.config import settings
@@ -279,9 +280,15 @@ class DocumentIndexer:
             _meta_fut = _INDEX_POOL.submit(
                 chunk_metadata_generator.generate, new_chunks
             )
+            # 生产路径：embed(c.text)——保留 build_embedding_text 工具但当前不启用。
+            # 历史：Day 2 上午尝试 build_embedding_text(c, doc) 加 document/section 前缀，
+            # 实证 recall@10 1.000 → 0.984 / MRR 0.876 → 0.824 (baseline-ablation 见
+            # docs/plans/2026-08-23-day2-morning-done.md)；回滚到 chunk-only embedding。
+            # build_embedding_text + EMBEDDING_TEXT_VERSION 保留供未来 ablation 重新启用。
+            _embed_inputs = [c.text for c in new_chunks]
             _embed_fut = _INDEX_POOL.submit(
                 lambda: asyncio.run(
-                    sf_embedding.embed_with_fallback([c.text for c in new_chunks])
+                    sf_embedding.embed_with_fallback(_embed_inputs)
                 )
             )
             new_chunks, embed_results = _collect_future_pair(_meta_fut, _embed_fut)
@@ -332,6 +339,11 @@ class DocumentIndexer:
                 "kb_id": kb_id,
                 "text": c.text,
                 "embedding": embedding,
+                # embedding_text 字段保留（schema 已加列）——当前存 c.text 作为
+                # "实际用于 embedding 的输入"的 audit。Day 2 上午 ablation 验证
+                # build_embedding_text() 加 prefix 反而恶化指标，所以 production 走 c.text。
+                "embedding_text": c.text,
+                "embedding_version": 1,
                 # 复用 chunk 优先保留旧 LLM 元数据（chunker 的 section 标题不得覆盖之）
                 "title": (is_reused and old.get("title")) or c.title or "",
                 "summary": (is_reused and old.get("summary")) or c.summary or "",

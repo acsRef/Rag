@@ -123,6 +123,7 @@ def search(
             FROM chunks
             WHERE kb_id = ANY(:kb_ids)
               {doc_filter}
+              AND embedding_version = :ev
               AND (:can_read_all = TRUE
                    OR visibility = 'public'
                    OR (visibility IN ('internal', 'restricted')
@@ -137,6 +138,7 @@ def search(
         params = {
             "query": embedding,
             "kb_ids": kb_ids,
+            "ev": settings.current_embedding_version,
             "can_read_all": can_read_all,
             "user_roles": user_role_ids or [],
             "top_k": top_k,
@@ -242,6 +244,7 @@ def bm25_search(
             FROM chunks
             WHERE kb_id = ANY(:kb_ids)
               {doc_filter}
+              AND embedding_version = :ev
               AND (:can_read_all = TRUE
                    OR visibility = 'public'
                    OR (visibility IN ('internal', 'restricted')
@@ -257,6 +260,7 @@ def bm25_search(
         params = {
             "or_query": or_query,
             "kb_ids": kb_ids,
+            "ev": settings.current_embedding_version,
             "can_read_all": can_read_all,
             "user_roles": user_role_ids or [],
             "top_k": top_k,
@@ -351,6 +355,7 @@ def question_vector_search(
             JOIN chunks c ON c.chunk_id = q.chunk_id
             WHERE c.kb_id = ANY(:kb_ids)
               {doc_filter}
+              AND c.embedding_version = :ev
               AND (:can_read_all = TRUE
                    OR c.visibility = 'public'
                    OR (c.visibility IN ('internal', 'restricted')
@@ -367,6 +372,7 @@ def question_vector_search(
         params = {
             "query": query_emb,
             "kb_ids": kb_ids,
+            "ev": settings.current_embedding_version,
             "can_read_all": can_read_all,
             "user_roles": user_role_ids or [],
             "top_k": top_k,
@@ -543,6 +549,14 @@ def replace_chunks(document_id: str, chunks_data: list[dict]):
                 visibility=c.get("visibility", "public"),
                 allowed_roles=c.get("allowed_roles", []),
                 created_at=ts,
+                # Day 2 上午：embedding_text 写入 + embedding_version（默认 1，build 后 v2）
+                embedding_text=c.get("embedding_text"),
+                embedding_version=c.get("embedding_version", 1),
+                year=c.get("year"),
+                page_start=c.get("page_start"),
+                page_end=c.get("page_end"),
+                table_title=c.get("table_title"),
+                figure_title=c.get("figure_title"),
             )
             if c["chunk_id"] in existing_ids:
                 session.query(Chunk).filter(Chunk.chunk_id == c["chunk_id"]).update(

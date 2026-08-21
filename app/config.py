@@ -83,6 +83,16 @@ class Settings(BaseSettings):
     # Embedding cache (Day 1 上午；app/core/cache.py::EmbeddingCache)
     embedding_cache_enabled: bool = True     # env: EMBEDDING_CACHE_ENABLED
 
+    # Current embedding version (Day 2 上午)
+    # 1 = 老 embedding（indexer 写 c.text 时计算）
+    # 2 = build_embedding_text() 重 embed 后的版本
+    # hybrid_search 加 AND embedding_version = :v 过滤；老 chunk 标 1，新 ingest + reembed_v2 标 2
+    # 当前激活版本（Day 2 上午）。2026-08-21：reembed_v2.py 重跑（默认 chunk-only 模式）
+    # 已把 1381 chunks 重建为 v1；切到 1 启用 chunk-only retrieval（baseline 验证：见
+    # docs/plans/2026-08-23-day2-morning-done.md）。如需重做 v2 ablation，把环境变量
+    # CURRENT_EMBEDDING_VERSION=2 + 跑 tools/reembed_v2.py --use-build-embedding-text --target-version 2。
+    current_embedding_version: int = 1      # env: CURRENT_EMBEDDING_VERSION
+
     # Retrieval cache (Day 1 上午；app/core/cache.py::RetrievalCache)
     retrieval_cache_enabled: bool = True     # env: RETRIEVAL_CACHE_ENABLED
 
