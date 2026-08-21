@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Literal, Optional
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -98,9 +98,9 @@ class DocumentStatusResponse(BaseModel):
 # ── Chat ────────────────────────────────────────────────
 
 class ChatRequest(BaseModel):
-    conversation_id: Optional[str] = None
+    conversation_id: str | None = None
     query: str = Field(min_length=1, max_length=4096)
-    knowledge_base_ids: Optional[list[str]] = None
+    knowledge_base_ids: list[str] | None = None
     temperature: float = Field(default=0.7, ge=0.0, le=2.0)
     top_p: float = Field(default=0.9, ge=0.0, le=1.0)
 

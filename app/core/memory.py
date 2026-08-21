@@ -363,7 +363,7 @@ def _capped_conversation_text(items: list[tuple[int, str, str]]) -> str:
     return "（更早 %d 条消息已省略）\n%s" % (dropped, "\n".join(reversed(kept)))
 
 
-def _acquire_lock(conversation_id: str) -> Optional[threading.Lock]:
+def _acquire_lock(conversation_id: str) -> Optional[threading.Lock]:  # noqa: UP045 — threading.Lock is not a type; `|` invalid at runtime
     with _locks_guard:
         if conversation_id not in _summary_locks:
             _summary_locks[conversation_id] = threading.Lock()

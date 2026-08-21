@@ -42,7 +42,6 @@ from sqlalchemy import select, update
 from app.llm.embedding import sf_embedding
 from app.store.db import Chunk, Document, get_db_ctx
 
-
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
@@ -76,6 +75,7 @@ def _build_text(chunk, filename: str, use_build: bool) -> str:
     if not use_build:
         return chunk.text or ""
     from types import SimpleNamespace
+
     from app.ingestion.embedding_text import build_embedding_text
     doc = SimpleNamespace(filename=filename)
     return build_embedding_text(chunk, doc)

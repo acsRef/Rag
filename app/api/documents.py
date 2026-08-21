@@ -4,7 +4,6 @@ import json
 import logging
 import threading
 from collections.abc import AsyncIterator
-from typing import Optional
 
 from fastapi import (
     APIRouter,
@@ -43,7 +42,7 @@ router = APIRouter(prefix="/api/v1/documents", tags=["Documents"])
 # uvicorn 单 worker 够用,多 worker 需要 Redis 之类共享
 _doc_event_subscribers: list[dict] = []
 _subscribers_lock = asyncio.Lock()
-_main_loop: Optional[asyncio.AbstractEventLoop] = None
+_main_loop: asyncio.AbstractEventLoop | None = None
 _main_loop_lock = threading.Lock()
 
 

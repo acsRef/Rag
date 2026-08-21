@@ -13,7 +13,6 @@ import re
 import sys
 import time
 from pathlib import Path
-from typing import Optional
 
 import requests
 
@@ -35,7 +34,7 @@ def login() -> str:
 
 # ── SSE stream parser ─────────────────────────────────────
 
-def call_rag(query: str, token: str, kb_id: str, conversation_id: Optional[str] = None) -> dict:
+def call_rag(query: str, token: str, kb_id: str, conversation_id: str | None = None) -> dict:
     """Call the chat/stream endpoint and collect the full response.
 
     Returns dict with: answer, thinking, sources, conversation_id, error.
@@ -217,7 +216,7 @@ def judge_answer(question_data: dict, rag_answer: str, api_key: str, base_url: s
 
 # ── Main evaluation loop ──────────────────────────────────
 
-def run_eval(limit: Optional[int] = None, skip_judge: bool = False, resume: bool = True):
+def run_eval(limit: int | None = None, skip_judge: bool = False, resume: bool = True):
     token = login()
 
     # Find the KB

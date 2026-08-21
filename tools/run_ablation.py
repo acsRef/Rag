@@ -195,7 +195,7 @@ def main():
         )
         print(f"  started PID {proc.pid}")
         if not _wait_backend():
-            print(f"  ✗ backend failed to start within 20s")
+            print("  ✗ backend failed to start within 20s")
             proc.kill()
             continue
 

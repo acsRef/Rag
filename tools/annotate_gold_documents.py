@@ -18,7 +18,6 @@ from __future__ import annotations
 import argparse
 import json
 import re
-import sys
 from pathlib import Path
 
 # DB 一次查到的映射（来自 Document 表）；硬编码避免每次重跑连 DB

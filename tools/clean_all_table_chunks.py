@@ -12,9 +12,9 @@ import logging
 
 from sqlalchemy import text
 
+from app.ingestion.chunker import _clean_table_text as _table_cleaner
 from app.store.db import get_session
 from app.store.pgvector_store import tokenize
-from app.ingestion.chunker import _clean_table_text as _table_cleaner
 
 logger = logging.getLogger(__name__)
 
@@ -123,6 +123,7 @@ def clean_all_table_chunks(batch_size: int = 20) -> int:
 
 if __name__ == "__main__":
     import sys
+
     from app.core.logging import setup_logging
     setup_logging()
     batch = int(sys.argv[1]) if len(sys.argv) > 1 else 20
