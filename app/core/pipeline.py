@@ -2,6 +2,8 @@
 from app.core.rewrite import query_rewrite_service
 from app.core.intent import intent_classifier
 from app.core.retrieval import retrieval_engine
+from app.core.retrieval_filter import RetrievalFilter
+from app.core.query_parser import parse_query
 from app.core.prompt import prompt_builder
 from app.core.evidence import evidence_organizer
 from app.core.diagnostics import DiagContext
@@ -10,6 +12,7 @@ from app.llm.base import CircuitOpenError, provider_health
 from app.core.doc_relation import cross_doc_synthesizer
 from app.core.tag_parser import TagStreamParser
 from app.store import pgvector_store
+from app.store.db import Document
 from app.models.schemas import ChatRequest, RetrievedChunk, SourceInfo
 from app.config import settings
 from typing import AsyncGenerator
@@ -111,6 +114,42 @@ def _truncate_with_doc_diversity(chunks: list, max_total: int) -> list:
     return diverse
 
 
+def resolve_doc_ids_by_years(
+    years: list[int] | None,
+    kb_ids: list[str],
+    session,
+) -> list[str]:
+    """根据年份查 KB 范围内匹配的 document_id（Day 1 晚上 year→doc_id 桥接）。
+
+    用途：query_parser 提取 years 后，pipeline 在 retrieve 之前查 Document.filename
+    包含年份的 doc，把 doc_id 塞进 RetrievalFilter.document_ids——使 hybrid_search
+    直接 SQL 过滤掉其他年份的 chunks（不等 chunks.year 列，corpus-specific 但立即可用）。
+
+    同步调用；pipeline 必须 to_thread。
+
+    Args:
+        years: query_parser.years；空/None → 返回 []
+        kb_ids: 候选 KB id 列表；空列表 → 返回 []
+        session: SQLAlchemy Session（同步）
+    """
+    if not years or not kb_ids:
+        return []
+    try:
+        # 简单策略：filename LIKE '%2024%' OR '%2025%' ...；不依赖 _extract_year_from_filename
+        from sqlalchemy import or_
+        conditions = [Document.filename.like(f"%{y}%") for y in years]
+        rows = (
+            session.query(Document.document_id)
+            .filter(Document.kb_id.in_(kb_ids))
+            .filter(or_(*conditions))
+            .all()
+        )
+        return [r[0] for r in rows]
+    except Exception:
+        logging.getLogger(__name__).exception("resolve_doc_ids_by_years.failed years=%s", years)
+        return []
+
+
 def _needs_decomposition(query: str) -> bool:
     """Return True if query needs sub-question decomposition and KB routing.
 
@@ -183,6 +222,23 @@ class RAGPipeline:
             ctx = DiagContext(query=req.query)
             ctx.conversation_id = conv_id
 
+        # ── Query Parser（Day 1 晚上）──
+        # 提前解析用户 query 的年份/指标 → diag 日志 + 后续 RetrievalFilter 字段
+        # 当前**不**做 year→doc_id 桥接（中文歧义：2023年X 可能指 X 的 2023 披露 vs 2023 事件
+        # 的支付/调整在 2024 年报里；激进过滤会误杀 E 类题）；Day 2 上午 chunks.year 列加好后
+        # 由 hybrid_search 直接 SQL 过滤更准确。
+        parsed_query = parse_query(req.query)
+        if ctx:
+            ctx.append("query_parse", {
+                "raw": parsed_query.raw,
+                "years": parsed_query.years,
+                "intent_metric": parsed_query.intent_metric,
+            })
+        logging.getLogger(__name__).info(
+            "query.parse raw=%r years=%s metric=%s",
+            parsed_query.raw[:60], parsed_query.years, parsed_query.intent_metric,
+        )
+
         if settings.pii_enabled:
             from app.core.pii_scanner import scan_and_reject
             rejects = scan_and_reject(req.query)
@@ -231,7 +287,8 @@ class RAGPipeline:
                     "DB 知识库列表拉取失败（DB-2 穿透兜底）：意图分类短路到无 KB")
                 all_kb_ids = []
 
-        needs_decomp = _needs_decomposition(req.query)
+        # Strategy guard (Day 1 下午)：关掉时强制 needs_decomp=False，跳过 rewrite/intent 走 fast path
+        needs_decomp = settings.query_decomposition_enabled and _needs_decomposition(req.query)
         if not needs_decomp:
             # Fast path: no LLM rewrite/intent, search all KBs directly
             sub_queries = [req.query]
@@ -284,6 +341,7 @@ class RAGPipeline:
                     can_read_all=can_read_all,
                     ctx=ctx,
                     user_id=user_id,
+                    filters=parsed_query.filters,
                 )
                 return sub_q, chunks
             except Exception:
@@ -313,6 +371,7 @@ class RAGPipeline:
                     can_read_all=can_read_all,
                     ctx=ctx,
                     user_id=user_id,
+                    filters=parsed_query.filters,
                 )
             except Exception:
                 chunks = []
@@ -354,24 +413,11 @@ class RAGPipeline:
             if correction_chunks:
                 unique_chunks = correction_chunks[:2] + other_chunks[:top_k_limit - 2]
 
-        # Context expansion: for each selected chunk, fetch ±N neighbor chunks
-        # to provide surrounding context before feeding to LLM.
-        _EXPAND_N = 2  # number of neighbors on each side
-        anchors = [(c.document_id, c.chunk_id) for c in unique_chunks if c.document_id]
-        if anchors:
-            from app.store.pgvector_store import get_neighbor_chunks
-            # 同步 DB 调用，必须 to_thread，否则阻塞事件循环
-            neighbors = await asyncio.to_thread(get_neighbor_chunks, anchors, _EXPAND_N)
-            for c in unique_chunks:
-                nb = neighbors.get(c.chunk_id)
-                if nb:
-                    parts = []
-                    if nb["before"]:
-                        parts.append(nb["before"])
-                    parts.append(c.text)
-                    if nb["after"]:
-                        parts.append(nb["after"])
-                    c.text = "\n".join(parts)
+        # Context expansion 已禁用：邻居 chunks 经常跨 section 边界
+        # （如"合并资产负债表"在"合并利润表"前面），拼接后 c.text 被邻居覆盖，
+        # 导致原始 chunk 自身的关键数字（如营业收入）被推到拼接文本的中后段，
+        # LLM 在截断后看不到核心数据，反而被邻居内容误导。
+        # 数据库里的 chunk 本身已经是结构化好的数据，直接保留原文即可。
 
         # 先解析文件名；sources 事件延迟到跨文档合并去重之后发出，
         # 否则按文档合并会使 [Source N] 编号整体位移，与 UI 来源卡片对不上
