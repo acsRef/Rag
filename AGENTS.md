@@ -70,7 +70,7 @@ from app.config import settings              # local
 from app.store.db import get_session
 ```
 
-**格式化**:4 空格缩进,行宽≈100。无 ruff/black/flake8 配置,**保持与周围代码一致**。
+**格式化**:4 空格缩进,行宽=100。lint/format 统一用 ruff(配置见 ruff.toml;运行 `D:/miniConda/envs/rag/python.exe -m ruff check .`)。
 
 **类型标注**:优先 Python 3.10+ 语法(`X | None`, `list[dict]`)。注意 `threading.Lock | None` 等非 type 对象不能用 `|` — 改 `Optional[X]`。函数签名加返回类型:
 
@@ -150,8 +150,10 @@ Parser(多格式→Markdown) → Cleaner → Structurer → Chunker
 ```
 
 ### LLM 栈
-- **MiniMax M3**:对话 + 视觉(图片描述)。AsyncOpenAI 兼容接口,支持 SSE streaming
-- **SiliconFlow**:Embedding `Qwen3-VL-Embedding-8B`(4096d) + Rerank `BAAI/bge-reranker-v2-m3`
+- **SiliconFlow**:chat 默认 `deepseek-ai/DeepSeek-V3`;意图路由 V3;复杂查询拆解
+  `DeepSeek-R1-0528-Qwen3-8B`;视觉 `Qwen/Qwen3-VL-8B-Instruct`;
+  Embedding `Qwen3-VL-Embedding-8B`(4096d);Rerank `BAAI/bge-reranker-v2-m3`
+- **MiniMax M3**:备选 provider(`chat_provider="minimax"` 时启用)+ metadata 批量生成
 - **熔断器**:按 provider 隔离,5xx/超时/连接错才计失败,4xx 永久错误不计
 
 ### SSE 流式对话
@@ -166,21 +168,23 @@ Parser(多格式→Markdown) → Cleaner → Structurer → Chunker
 
 ## 5. 关键文件锚点
 
+行号易漂移,此处只列文件 + 符号名(避免每改一次代码就过时)。
+
 | 关注点 | 位置 |
 |--------|------|
-| RAG 主流程 | `app/core/pipeline.py:89` `RAGPipeline.execute` |
-| 混合检索 RRF | `app/store/pgvector_store.py:196` `hybrid_search` |
+| RAG 主流程 | `app/core/pipeline.py` `RAGPipeline.execute` |
+| 混合检索 RRF | `app/store/pgvector_store.py` `hybrid_search` |
 | 跨文档关联检索 | `app/core/doc_relation.py` `cross_doc_retriever` |
-| MMR 算法 | `app/core/mmr.py:25` `mmr_select` |
-| PII 三层防御 | `app/core/pii_scanner.py:116` `scan` |
-| 增量 hash 复用 | `app/ingestion/indexer.py:100` |
-| JWT 中间件 | `app/middleware/auth.py:56` `get_current_user` |
-| SSE 流式端点 | `app/api/chat.py:12` `stream_chat` |
-| 摄取主流程 | `app/ingestion/indexer.py:29` `DocumentIndexer.index` |
-| 文档解析 | `app/ingestion/parser.py:47` `DocumentParser.parse_bytes` |
-| 对话记忆管理 | `app/core/memory.py:69` `ConversationMemory` |
+| MMR 算法 | `app/core/mmr.py` `mmr_select` |
+| PII 三层防御 | `app/core/pii_scanner.py` `scan` |
+| 增量 hash 复用 | `app/ingestion/indexer.py` `existing.content_hash == doc_hash` |
+| JWT 中间件 | `app/middleware/auth.py` `get_current_user` |
+| SSE 流式端点 | `app/api/chat.py` `stream_chat` |
+| 摄取主流程 | `app/ingestion/indexer.py` `DocumentIndexer.index` |
+| 文档解析 | `app/ingestion/parser.py` `DocumentParser.parse_bytes` |
+| 对话记忆管理 | `app/core/memory.py` `ConversationMemory` |
 | 诊断记录器 | `app/core/diagnostics.py` `DiagContext` |
-| 前端 SSE 解析 | `frontend/src/api/chat.ts:38` `streamChat` |
+| 前端 SSE 解析 | `frontend/src/api/chat.ts` `streamChat` |
 | 配置中心 | `app/config.py` `Settings` |
 
 ---
@@ -228,13 +232,7 @@ if isinstance(typed, PermanentError):
 
 ---
 
-## 9. Git LFS
-
-所有 `.py` 源文件通过 Git LFS 存储。克隆后: `git lfs install && git lfs pull`。否则 `.py` 是 LFS 指针文件,import 会失败。
-
----
-
-## 10. 关键设计决策
+## 9. 关键设计决策
 
 | 决策 | 理由 |
 |------|------|

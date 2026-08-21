@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **Stale AGENTS.md items — this file wins:**
 - "本仓库没有 pytest/tests/ 目录，不要创建" (§2/§6/§10) — outdated. `tests/` + `pytest.ini` now exist; see "Verify code changes" below.
-- "Git LFS" (§9) — outdated. No `.gitattributes`, no LFS-tracked files; `.py` files are plain text and no `git lfs pull` is needed after cloning.
+- "Git LFS" (§9) — outdated and removed in Phase 1. No `.gitattributes`, no LFS-tracked files; `.py` files are plain text and no `git lfs pull` is needed after cloning.
 
 ## Start the app
 
@@ -35,7 +35,7 @@ Edit `.env` in the project root (`.env` is gitignored — never commit it):
 
 | Variable | Required | Notes |
 | ------- | -------- | ----- |
-| `SILICONFLOW_API_KEY` | **Yes** | Chat (DeepSeek-V3) + Vision/OCR (DeepSeek-OCR) + Intent (DeepSeek-R1-0528-Qwen3-8B) + Embedding + Rerank |
+| `SILICONFLOW_API_KEY` | **Yes** | Chat (DeepSeek-V3) + Intent (DeepSeek-V3) + Complex-Query Rewrite (DeepSeek-R1-0528-Qwen3-8B) + Vision (Qwen3-VL-8B-Instruct) + Embedding + Rerank |
 | `MINIMAX_API_KEY` | No | Optional fallback provider |
 | `JWT_SECRET` | **Hard requirement** | Startup crashes if default |
 | `PII_ENCRYPTION_KEY` | **Hard requirement** | Startup crashes if default |
@@ -122,15 +122,21 @@ cd frontend && npm run build   # runs vue-tsc -b && vite build
 
 **Stack**: FastAPI (Python 3.11) + Vue 3/Vite/TypeScript + PostgreSQL 15 + pgvector 0.8
 
-**LLM providers**: SiliconFlow (chat: DeepSeek-V3, intent: DeepSeek-R1-0528-Qwen3-8B, vision/OCR: DeepSeek-OCR, embedding: Qwen3-VL-Embedding-8B 4096d, rerank: BAAI/bge-reranker-v2-m3)
+**LLM providers**: SiliconFlow (chat: DeepSeek-V3, intent: DeepSeek-V3, complex-query rewrite: DeepSeek-R1-0528-Qwen3-8B, vision: Qwen/Qwen3-VL-8B-Instruct, embedding: Qwen3-VL-Embedding-8B 4096d, rerank: BAAI/bge-reranker-v2-m3). MiniMax M3 available as fallback provider via `chat_provider="minimax"`.
 
 **RAG pipeline** (see [app/core/pipeline.py:118](app/core/pipeline.py#L118) `RAGPipeline.execute`):
 ```
-QueryRewrite → IntentClassify (route to 1-3 KBs) → Hybrid Search (vector cosine + BM25 ts_rank + question-vector
-channel, RRF merge; relaxed-BM25 fallback when < top_k)
-→ Section-aware Supplement (ensures authoritative financial tables are retrieved — see [app/core/retrieval.py](app/core/retrieval.py) `_supplement_authoritative_sections`)
-→ Cross-doc Relation (3-channel: TF-IDF edges / query keyword recall / doc-level embedding — see [app/core/doc_relation.py](app/core/doc_relation.py))
-→ Cross-encoder Rerank → MMR diversity (λ=0.7, ≤2 per doc) → TopK → Prompt injection → SSE stream
+# Default runtime (strategy flags off unless noted; see app/config.py)
+QueryRewrite → IntentClassify (DeepSeek-V3; route to 1-3 KBs) → Hybrid Search
+(vector cosine + BM25 ts_rank + question-vector channel, RRF merge; relaxed-BM25
+fallback when < top_k)
+→ Cross-encoder Rerank → MMR diversity (λ=0.7, ≤2 per doc) → TopK
+→ Prompt injection → SSE stream (TagStreamParser)
+
+# Optional strategies (code exists, default OFF, env-togglable — 8-group ablation
+# showed no recall gain on the Sany corpus, docs/plans/2026-08-23-ablation-report.md):
+# cross_doc / section_boost / section_supplement / year_supplement /
+# query_decomposition / evidence_gate
 ```
 The question channel is on by default (`question_channel_enabled`, RRF weight 0.15): at ingest time the LLM generates candidate questions per chunk into `chunk_questions`, embedded separately. Streaming output passes through `TagStreamParser` ([app/core/tag_parser.py](app/core/tag_parser.py)) so SSE display and DB persistence share one think/answer event stream.
 
@@ -248,7 +254,7 @@ D:/miniConda/envs/rag/python.exe -c "import app.main"
 │   │   ├── chat.py            # SiliconFlow chat (DeepSeek-V3)
 │   │   ├── embedding.py       # SiliconFlow embeddings
 │   │   ├── rerank.py          # Cross-encoder reranking
-│   │   └── vision.py          # Image understanding (DeepSeek-OCR, LRU cache)
+│   │   └── vision.py          # Image understanding (Qwen3-VL-8B-Instruct, LRU cache)
 │   ├── middleware/auth.py     # JWT + RBAC middleware
 │   ├── models/schemas.py      # Pydantic request/response models
 │   └── store/
@@ -299,7 +305,7 @@ D:/miniConda/envs/rag/python.exe -c "import app.main"
 
 Zero LLM/embedding cost at query time — all relations are precomputed during ingestion. Results are tagged with `cross_doc=True` and the source document for provenance.
 
-Note: The most recent cross-doc design (`9db350d`) supersedes the earlier single-channel approach. See `app/core/retrieval.py` `_search_kb` for the integration point.
+Note: The most recent cross-doc design supersedes the earlier single-channel approach; see `app/core/retrieval.py` `_search_kb` for the integration point. Cross-doc retrieval is an opt-in strategy (see Optional Strategies above).
 
 ## Diagnostics subsystem
 

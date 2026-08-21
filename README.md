@@ -11,8 +11,8 @@
 | 数据库 | PostgreSQL 15 + pgvector 0.8 |
 | 认证 | JWT + bcrypt（RBAC，8 项权限） |
 | 对话 | SiliconFlow (DeepSeek-V3) |
-| 视觉/OCR | SiliconFlow (DeepSeek-OCR) |
-| 意图路由 | SiliconFlow (DeepSeek-R1-0528-Qwen3-8B) |
+| 视觉理解 | SiliconFlow (Qwen3-VL-8B-Instruct) |
+| 意图路由 | SiliconFlow (DeepSeek-V3)；复杂查询拆解 DeepSeek-R1-0528-Qwen3-8B |
 | 向量 | Qwen3-VL-Embedding-8B（4096d）|
 | 重排 | BAAI/bge-reranker-v2-m3 |
 
@@ -28,7 +28,10 @@
 
 检索管线：
 意图识别 → 查询改写 → 混合检索(向量+BM25+question 三路) → RRF 合并
- → 跨文档关联跳转(三通道) → 跨编码器重排 → MMR 多样性(λ=0.7, 每文档≤2) → TopK
+ → 跨编码器重排 → MMR 多样性(λ=0.7, 每文档≤2) → TopK
+
+（跨文档关联为可选策略，默认关闭——ablation 显示对当前语料无 recall 收益；
+env CROSS_DOC_ENABLED=true 可开启。其余可选策略见 app/config.py）
 
 多路召回（方案 B）：
 摄入期 LLM 为每个 chunk 生成 4-5 条候选问题 → 独立 embedding → 查询时三路
@@ -37,11 +40,11 @@
 
 ## 功能
 
-- **文件解析**：PDF/DOCX/PPTX/XLSX/HTML/TXT/MD/图片（Docling + DeepSeek-OCR）
+- **文件解析**：PDF/DOCX/PPTX/XLSX/HTML/TXT/MD/图片（Docling + Qwen3-VL-8B-Instruct）
 - **智能切分**：结构感知递归切分，原子块保护（代码/表格/图片），重叠窗口
 - **混合检索**：向量语义检索 + BM25 关键词检索（jieba 分词）+ RRF 融合
 - **多路召回**：摄入期 LLM 生成候选问题 → 独立 embedding 通道 → 三路 (vector + BM25 + question) RRF 融合，低权重防噪声
-- **跨文档关联检索**：三通道跳转（TF-IDF 关系边 / query 关键词召回 / 文档级 embedding 语义），摄入期预构建关系矩阵，查询期零 LLM/embedding 成本，跨文档综合按来源标注
+- **跨文档关联检索**（默认关闭，可配开关）：三通道跳转（TF-IDF 关系边 / query 关键词召回 / 文档级 embedding 语义），摄入期预构建关系矩阵，查询期零 LLM/embedding 成本，跨文档综合按来源标注
 - **MMR 多样性**：最大边际相关性重排，跨文档语义去重，每文档软约束
 - **长对话记忆**：Token 预算制窗口 + 自动摘要压缩，支持思考和回答分离
 - **思考过程流式推送**：模型 CoT 推理实时推送给前端，支持中断恢复
@@ -132,7 +135,7 @@ RAGENT_LIVE_LLM=1 D:/miniConda/envs/rag/python.exe -m pytest tests/integration/t
 │   │   ├── chat.py             # SiliconFlow 对话 (DeepSeek-V3)
 │   │   ├── embedding.py        # SiliconFlow embedding
 │   │   ├── rerank.py           # 跨编码器重排
-│   │   └── vision.py           # 图片理解 (DeepSeek-OCR)
+│   │   └── vision.py           # 图片理解 (Qwen3-VL-8B-Instruct)
 │   ├── middleware/auth.py      # JWT 认证中间件
 │   ├── models/schemas.py       # Pydantic 数据模型
 │   └── store/                  # 数据访问层
@@ -183,7 +186,7 @@ D:/miniConda/envs/rag/python.exe eval/eval_detail.py --category A --limit 10
 
 参见 `app/config.py`，包含：
 
-- **LLM 供应商**：SiliconFlow（DeepSeek-V3 对话 + DeepSeek-R1 意图路由 + DeepSeek-OCR 视觉）
+- **LLM 供应商**：SiliconFlow（DeepSeek-V3 对话 + 意图路由 + 视觉；R1-0528-Qwen3-8B 复杂查询拆解）
 - **PII**：开关、缓存 TTL、加密密钥
 - **混合检索**：开关、单路候选数、RRF 常数
 - **多路召回**：开关、question 通道权重、每路候选数
