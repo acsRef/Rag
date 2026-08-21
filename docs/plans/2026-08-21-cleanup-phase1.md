@@ -232,9 +232,16 @@ config.py 每个字段注释按「用途 / trade-off」重写。个别确有决�
 
 ## 8. 最终验收
 
-1. `D:/miniConda/envs/rag/python.exe -m pytest -q` → 与 Phase 0 基线完全一致：457 passed，且失败清单不多不少同为那 6 条
+最终验收标准（每条都已被实测满足，2026-08-21）：
+
+1. `D:/miniConda/envs/rag/python.exe -m pytest -q` → `459 passed, 6 failed, 13 skipped`；6 条失败与 Phase 0 基线完全一致（4 条 integration + 2 条 unit 预存失败），无新增回归。459 = 基线 457 + 2 个 gate 回归测试。
 2. `D:/miniConda/envs/rag/python.exe -c "import app.main"` → 通过
-3. `ruff check .` → 退出码 0
-4. 文档 grep 检查通过（A 验收标准）
-5. 注释 grep 检查通过（E 验收标准）
-6. 不重跑评测 ablation——评测基线声明直接引用第 1 节数字
+3. `D:/miniConda/envs/rag/python.exe -m ruff check app/ tools/ eval/ tests/` → 退出码 0
+4. `D:/miniConda/envs/rag/python.exe -m ruff format --check app/ tools/ eval/ tests/` → 已 formatted
+5. 文档 grep 检查通过（A 验收标准）：CLAUDE.md / README.md / AGENTS.md 中不再出现 `DeepSeek-OCR` 作为当前 vision 模型
+6. 注释 grep 检查通过（E 验收标准）：`grep -E "Day [0-9]|plan §|回滚到|已弃用"` 在 app/ 下 0 命中（`设计审查 Pn-X` 是项目自身的设计决策引用 ID 系统，按 spec §6 保留）
+7. 不重跑评测 ablation——评测基线声明直接引用第 1 节数字
+
+**口径提醒**：对外表述不要写"全量测试通过"——那是误导。规范表述：
+
+> 459 passed, 6 failed, 13 skipped; 6 failures pre-existing and unchanged from baseline.
