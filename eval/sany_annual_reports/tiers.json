@@ -1,0 +1,24 @@
+{
+  "_说明": "三一重工年报 RAG 测试集 tier 配置（Day 1 上午新增）。smoke 跑通 retriever 即可，regression 每类≥2 题用于 ablation，full = 全部 65 题。引用 Q-ID 来自 eval/sany_annual_reports/rag_testset.json。",
+  "smoke": [
+    "Q17",
+    "Q18",
+    "Q20",
+    "Q22",
+    "Q27",
+    "Q02",
+    "Q03",
+    "Q11",
+    "Q44",
+    "Q57"
+  ],
+  "regression": [
+    "Q01", "Q02", "Q03", "Q05", "Q08",
+    "Q11", "Q13", "Q15",
+    "Q17", "Q19", "Q21", "Q24",
+    "Q25", "Q27", "Q28",
+    "Q29", "Q31", "Q33",
+    "Q35", "Q37"
+  ],
+  "full": "all"
+}
