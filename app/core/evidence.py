@@ -10,6 +10,11 @@
 - 纯逻辑模块，不依赖 DB / LLM / 网络
 - 失败时降级为原有散装 chunks 格式
 - 通用设计，不依赖特定文档类型（年报/合同/手册均可）
+
+Day 2 下午（plan §五）：
+- 新增 EvidenceResult dataclass（不替代 EvidenceTable，只包装暴露 plan §五.1 的 5 字段）
+- 新增 build_evidence_result(table) 转换
+- 新增 evidence_gate_should_refuse(result, threshold) 给 pipeline.py:300 evidence_gate 用
 """
 
 from __future__ import annotations
@@ -22,6 +27,100 @@ from typing import Any
 from app.models.schemas import RetrievedChunk
 
 logger = logging.getLogger(__name__)
+
+
+# ── Day 2 下午新增：EvidenceResult 包装 ────────────────────────────────────────
+
+
+@dataclass
+class EvidenceResult:
+    """plan §五.1 暴露给 pipeline 的扁平视图。
+
+    EvidenceTable 仍然存在（314 行活代码不动）；EvidenceResult 是 pipeline 关心的
+    5 字段包装——coverage / temporal_consistent / conflicts / sources / coverage_by_year。
+
+    注意：
+    - coverage 在 build_evidence_result 中 clip 到 [0, 1]（避免下游误读）
+    - sources 是 [{chunk_id, document_id}] 列表（pipeline 用 chunk_id 查 source）
+    - coverage_by_year 默认 {}：RetrievedChunk.year 字段未填时不下结论
+    """
+
+    coverage: float
+    temporal_consistent: bool
+    conflicts: list[Any]
+    sources: list[dict]
+    coverage_by_year: dict[str, float] = field(default_factory=dict)
+
+
+def build_evidence_result(table: "EvidenceTable") -> EvidenceResult:
+    """EvidenceTable → EvidenceResult 转换。
+
+    字段语义：
+    - coverage = covered_slots / total_slots，clip 到 [0, 1]
+    - temporal_consistent = (len(conflicts) == 0)——plan §五.1 把"无冲突"视为时序一致
+    - sources = [{chunk_id, document_id}] 列表，覆盖所有 slot 的去重 chunk
+    - coverage_by_year：每个年份覆盖的 slot 比例；RetrievedChunk.year 为空时不下结论（默认 {}）
+    """
+    total_slots = len(table.slots)
+    if total_slots == 0:
+        return EvidenceResult(
+            coverage=0.0,
+            temporal_consistent=True,
+            conflicts=list(table.conflicts),
+            sources=[],
+            coverage_by_year={},
+        )
+
+    covered = sum(1 for s in table.slots if s.covered)
+    coverage = max(0.0, min(1.0, covered / total_slots))
+
+    sources: list[dict] = []
+    seen: set[str] = set()
+    for slot in table.slots:
+        for chunk in slot.chunks:
+            if chunk.chunk_id in seen:
+                continue
+            seen.add(chunk.chunk_id)
+            sources.append({"chunk_id": chunk.chunk_id, "document_id": chunk.document_id})
+
+    # coverage_by_year：按年份统计该年 chunk 覆盖了多少 slot
+    coverage_by_year: dict[str, float] = {}
+    year_to_slots: dict[str, set[int]] = {}
+    for i, slot in enumerate(table.slots):
+        for chunk in slot.chunks:
+            year = (chunk.year or "").strip()
+            if not year:
+                continue
+            year_to_slots.setdefault(year, set()).add(i)
+    for year, slot_idxs in year_to_slots.items():
+        coverage_by_year[year] = len(slot_idxs) / total_slots
+
+    return EvidenceResult(
+        coverage=coverage,
+        temporal_consistent=(len(table.conflicts) == 0),
+        conflicts=list(table.conflicts),
+        sources=sources,
+        coverage_by_year=coverage_by_year,
+    )
+
+
+def evidence_gate_should_refuse(result: EvidenceResult, threshold: float) -> bool:
+    """plan §五.2 evidence_gate 决策：是否拒答/追问。
+
+    拒答条件（任一）：
+    1. coverage < threshold（证据不足）
+    2. temporal_consistent is False（有冲突，需追问确认）
+
+    返回 True 表示应拒答；False 表示证据充分可生成。
+    threshold=0 时永远不拒答（边界情况，用于禁用 gate）。
+    """
+    if threshold <= 0:
+        return False
+    if not result.temporal_consistent:
+        return True
+    if result.coverage < threshold:
+        return True
+    return False
 
 
 # ── Data Models ─────────────────────────────────────────────────────────

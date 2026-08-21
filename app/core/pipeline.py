@@ -5,7 +5,7 @@ from app.core.retrieval import retrieval_engine
 from app.core.retrieval_filter import RetrievalFilter
 from app.core.query_parser import parse_query
 from app.core.prompt import prompt_builder
-from app.core.evidence import evidence_organizer
+from app.core.evidence import evidence_organizer, build_evidence_result, evidence_gate_should_refuse
 from app.core.diagnostics import DiagContext
 from app.llm.chat import minimax_client
 from app.llm.base import CircuitOpenError, provider_health
@@ -395,6 +395,58 @@ class RAGPipeline:
             top_k_limit = settings.complex_rerank_top_k  # 多文档场景放大到 10
 
         unique_chunks = _truncate_with_doc_diversity(unique_chunks, top_k_limit)
+
+        # ── Evidence Layer (Day 2 下午，plan §五) ──
+        # 在 cross-doc synthesis 之前 gate：避免对注定拒答的 query 浪费 cross_doc 工作
+        # evidence_gate_enabled 默认 False（保留向后兼容）；启用时：
+        #   - coverage < evidence_min_coverage → 拒答/追问
+        #   - temporal_consistent=False（有冲突）→ 拒答/追问
+        # 注：plan §十 风险 §7 要求不重新设计 EvidenceTable，仅暴露 EvidenceResult 包装。
+        if unique_chunks and settings.evidence_gate_enabled:
+            try:
+                evidence_table = evidence_organizer.organize(
+                    query=req.query,
+                    sub_question_chunks=sub_question_chunks,
+                    query_type="complex" if len(sub_queries) > 1 else "simple",
+                )
+                evidence_result = build_evidence_result(evidence_table)
+                if ctx:
+                    ctx.append("evidence", {
+                        "coverage": evidence_result.coverage,
+                        "temporal_consistent": evidence_result.temporal_consistent,
+                        "conflicts_count": len(evidence_result.conflicts),
+                        "sources_count": len(evidence_result.sources),
+                        "coverage_by_year": evidence_result.coverage_by_year,
+                    })
+                if evidence_gate_should_refuse(evidence_result, settings.evidence_min_coverage):
+                    logger.warning(
+                        "evidence.gate.refuse coverage=%.2f threshold=%.2f temporal_consistent=%s",
+                        evidence_result.coverage, settings.evidence_min_coverage,
+                        evidence_result.temporal_consistent,
+                    )
+                    reason = (
+                        f"证据不足（覆盖度 {evidence_result.coverage:.0%} < 阈值 "
+                        f"{settings.evidence_min_coverage:.0%}）"
+                    )
+                    if not evidence_result.temporal_consistent:
+                        reason = f"检测到跨文档/跨年份冲突，需要进一步确认；{reason}"
+                    payload = json.dumps({
+                        "phase": "evidence_refused",
+                        "reason": reason,
+                        "coverage": evidence_result.coverage,
+                        "min_coverage": settings.evidence_min_coverage,
+                        "temporal_consistent": evidence_result.temporal_consistent,
+                    }, ensure_ascii=False)
+                    yield f"event: status\ndata: {payload}\n\n"
+                    yield "event: degraded\ndata: " + json.dumps({
+                        "reason": "evidence_gate_refused",
+                        "message": reason,
+                    }, ensure_ascii=False) + "\n\n"
+                    yield "event: done\ndata: {}\n\n"
+                    return
+            except Exception:
+                logger.exception("evidence_gate.failed_falling_through")
+                # gate 失败不应阻断主流程——降级继续
 
         # 验证性子问题优先（H 类：错误前提纠偏）
         # 当 chunks 中包含纠正性证据（如"减少"、"下降"等与实际趋势相反的词）时，
