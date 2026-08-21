@@ -14,7 +14,6 @@ benchmark questions。Stage 1 通过后才进入 Stage 2（65 题价值 ablation
 6. SSE event sequence — refuse 路径事件顺序固定
 """
 
-
 from app.core import evidence as ev_mod
 
 # ── 单元测试：直接验证 gate 决策函数 ──────────────────────────────
@@ -111,11 +110,7 @@ class _FakeResultTemporalConflict:
 async def _fake_retrieve(*args, **kwargs):
     from app.models.schemas import RetrievedChunk
 
-    return [
-        RetrievedChunk(
-            chunk_id="c1", document_id="d1", text="证据文本", score=0.9
-        )
-    ]
+    return [RetrievedChunk(chunk_id="c1", document_id="d1", text="证据文本", score=0.9)]
 
 
 def _collect_events(pipeline_mod, *, fake_result):
@@ -146,33 +141,19 @@ def _apply_base_mocks(pipeline_mod, monkeypatch, *, fake_result):
         "get_or_create_conversation",
         lambda conv_id, user_id: "conv-1",
     )
-    monkeypatch.setattr(
-        pipeline_mod.conversation_memory, "get_history", lambda cid: []
-    )
-    monkeypatch.setattr(
-        pipeline_mod.conversation_memory, "get_summary", lambda cid: ""
-    )
-    monkeypatch.setattr(
-        pipeline_mod.retrieval_engine, "retrieve", _fake_retrieve
-    )
-    monkeypatch.setattr(
-        pipeline_mod.evidence_organizer, "organize", lambda **kw: None
-    )
-    monkeypatch.setattr(
-        pipeline_mod, "build_evidence_result", lambda table: fake_result
-    )
+    monkeypatch.setattr(pipeline_mod.conversation_memory, "get_history", lambda cid: [])
+    monkeypatch.setattr(pipeline_mod.conversation_memory, "get_summary", lambda cid: "")
+    monkeypatch.setattr(pipeline_mod.retrieval_engine, "retrieve", _fake_retrieve)
+    monkeypatch.setattr(pipeline_mod.evidence_organizer, "organize", lambda **kw: None)
+    monkeypatch.setattr(pipeline_mod, "build_evidence_result", lambda table: fake_result)
 
 
 async def test_pipeline_low_coverage_emits_refused_sse(monkeypatch):
     """场景 2/6 集成验证：低 coverage → SSE 包含 evidence_refused 状态事件。"""
     from app.core import pipeline as pipeline_mod
 
-    _apply_base_mocks(
-        pipeline_mod, monkeypatch, fake_result=_FakeResultLowCoverage()
-    )
-    events = await _collect_events(
-        pipeline_mod, fake_result=_FakeResultLowCoverage()
-    )()
+    _apply_base_mocks(pipeline_mod, monkeypatch, fake_result=_FakeResultLowCoverage())
+    events = await _collect_events(pipeline_mod, fake_result=_FakeResultLowCoverage())()
 
     joined = "".join(events)
     assert "evidence_gate_refused" in joined
@@ -204,6 +185,7 @@ async def test_pipeline_gate_exception_falls_through(monkeypatch, caplog):
         monkeypatch,
         fake_result=_FakeResultLowCoverage(),
     )
+
     # 替换 organizer 为抛异常的 stub
     def _raise(**kw):
         raise RuntimeError("simulated organizer failure")
@@ -215,9 +197,7 @@ async def test_pipeline_gate_exception_falls_through(monkeypatch, caplog):
         # 用 try/except 兜底下游可能的失败（gate 异常不应阻断主流程，
         # 但下游其他阶段可能因测试 fixture 不全而崩）
         try:
-            events = await _collect_events(
-                pipeline_mod, fake_result=_FakeResultLowCoverage()
-            )()
+            events = await _collect_events(pipeline_mod, fake_result=_FakeResultLowCoverage())()
         except Exception:
             events = []
 
@@ -235,12 +215,8 @@ async def test_pipeline_refuse_event_order_status_degraded_done(monkeypatch):
     """场景 6 集成验证：refuse 路径事件顺序固定 status → degraded → done。"""
     from app.core import pipeline as pipeline_mod
 
-    _apply_base_mocks(
-        pipeline_mod, monkeypatch, fake_result=_FakeResultLowCoverage()
-    )
-    events = await _collect_events(
-        pipeline_mod, fake_result=_FakeResultLowCoverage()
-    )()
+    _apply_base_mocks(pipeline_mod, monkeypatch, fake_result=_FakeResultLowCoverage())
+    events = await _collect_events(pipeline_mod, fake_result=_FakeResultLowCoverage())()
 
     # 提取事件类型序列（status / degraded / done）
     import re
@@ -249,11 +225,7 @@ async def test_pipeline_refuse_event_order_status_degraded_done(monkeypatch):
 
     # 定位 evidence_refused 状态事件位置
     try:
-        idx_refused = next(
-            i
-            for i, e in enumerate(events)
-            if "evidence_refused" in e
-        )
+        idx_refused = next(i for i, e in enumerate(events) if "evidence_refused" in e)
     except StopIteration:
         raise AssertionError("未找到 evidence_refused 状态事件")
 
@@ -263,13 +235,8 @@ async def test_pipeline_refuse_event_order_status_degraded_done(monkeypatch):
     assert "evidence_refused" in events[idx_refused]
 
     # degraded 必须在 status 之后、done 之前
-    idx_degraded = next(
-        i for i, e in enumerate(events) if e.startswith("event: degraded")
-    )
-    idx_done = next(
-        i for i, e in enumerate(events) if e.startswith("event: done")
-    )
+    idx_degraded = next(i for i, e in enumerate(events) if e.startswith("event: degraded"))
+    idx_done = next(i for i, e in enumerate(events) if e.startswith("event: done"))
     assert idx_refused < idx_degraded < idx_done, (
-        f"事件顺序错乱: refused={idx_refused}, degraded={idx_degraded}, "
-        f"done={idx_done}"
+        f"事件顺序错乱: refused={idx_refused}, degraded={idx_degraded}, done={idx_done}"
     )
