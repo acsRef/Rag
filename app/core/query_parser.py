@@ -1,4 +1,4 @@
-"""Query Parser（Day 1 晚上）。
+"""Query Parser。
 
 前置检索：纯规则解析 query 中的年份 + 指标关键词，避免每个 helper 各扫一遍 regex。
 - 年份：4 位数字限定 2020–2029（避免 "4,527,498" / "P5" 等误匹配）
@@ -126,7 +126,7 @@ def extract_metric(query: str) -> str | None:
 
 @dataclass
 class ParsedQuery:
-    """前置检索的查询意图快照（Day 1 晚上）。
+    """前置检索的查询意图快照。
 
     字段：
     - raw：原始 query 字符串（保留供下游 logger / 调试）

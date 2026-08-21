@@ -121,7 +121,7 @@ def resolve_doc_ids_by_years(
     kb_ids: list[str],
     session,
 ) -> list[str]:
-    """根据年份查 KB 范围内匹配的 document_id（Day 1 晚上 year→doc_id 桥接）。
+    """根据年份查 KB 范围内匹配的 document_id（year→doc_id 桥接）。
 
     用途：query_parser 提取 years 后，pipeline 在 retrieve 之前查 Document.filename
     包含年份的 doc，把 doc_id 塞进 RetrievalFilter.document_ids——使 hybrid_search
@@ -221,11 +221,10 @@ class RAGPipeline:
             ctx = DiagContext(query=req.query)
             ctx.conversation_id = conv_id
 
-        # ── Query Parser（Day 1 晚上）──
-        # 提前解析用户 query 的年份/指标 → diag 日志 + 后续 RetrievalFilter 字段
+        # 提前解析用户 query 的年份/指标 → diag 日志 + 后续 RetrievalFilter 字段。
         # 当前**不**做 year→doc_id 桥接（中文歧义：2023年X 可能指 X 的 2023 披露 vs 2023 事件
-        # 的支付/调整在 2024 年报里；激进过滤会误杀 E 类题）；Day 2 上午 chunks.year 列加好后
-        # 由 hybrid_search 直接 SQL 过滤更准确。
+        # 的支付/调整在 2024 年报里；激进过滤会误杀 E 类题）；依赖 chunks.year 列
+        # 由 hybrid_search 直接 SQL 过滤。
         parsed_query = parse_query(req.query)
         if ctx:
             ctx.append("query_parse", {
@@ -286,7 +285,7 @@ class RAGPipeline:
                     "DB 知识库列表拉取失败（DB-2 穿透兜底）：意图分类短路到无 KB")
                 all_kb_ids = []
 
-        # Strategy guard (Day 1 下午)：关掉时强制 needs_decomp=False，跳过 rewrite/intent 走 fast path
+        # Strategy guard：关掉时强制 needs_decomp=False，跳过 rewrite/intent 走 fast path
         needs_decomp = settings.query_decomposition_enabled and _needs_decomposition(req.query)
         if not needs_decomp:
             # Fast path: no LLM rewrite/intent, search all KBs directly
@@ -395,12 +394,12 @@ class RAGPipeline:
 
         unique_chunks = _truncate_with_doc_diversity(unique_chunks, top_k_limit)
 
-        # ── Evidence Layer (Day 2 下午，plan §五) ──
-        # 在 cross-doc synthesis 之前 gate：避免对注定拒答的 query 浪费 cross_doc 工作
+        # ── Evidence Layer ──
+        # 在 cross-doc synthesis 之前 gate：避免对注定拒答的 query 浪费 cross_doc 工作。
         # evidence_gate_enabled 默认 False（保留向后兼容）；启用时：
         #   - coverage < evidence_min_coverage → 拒答/追问
         #   - temporal_consistent=False（有冲突）→ 拒答/追问
-        # 注：plan §十 风险 §7 要求不重新设计 EvidenceTable，仅暴露 EvidenceResult 包装。
+        # 只暴露 EvidenceResult 包装，不重设计 EvidenceTable。
         if unique_chunks and settings.evidence_gate_enabled:
             try:
                 evidence_table = evidence_organizer.organize(

@@ -1,4 +1,4 @@
-"""检索层过滤器（Day 1 下午）。
+"""检索层过滤器。
 
 所有"散装过滤"统一收口：
 - 检索层 / pipeline 内部不再用裸 list[document_ids] / if year == ... 这类零散判断
@@ -6,10 +6,8 @@
 - frozen=True 强调"查询意图快照，构造后不可改"——可作为 cache key、可哈希
 - 全部 Optional + None：未设 = 不限（None 语义与空集合语义不同：None 不构造任何限制）
 
-对应列尚未全部就绪：
-- year / table_title / figure_title 列在 Day 2 上午随 chunk 字段一起加
-- 本 dataclass 先稳定契约；hybrid_search 当下只翻译 document_ids 与 kb_ids
-  字段（这俩已经能命中 SQL）；years/section_names/source_types 留好接口待 Day 2 接通
+hybrid_search 当前翻译 document_ids 与 kb_ids；years/section_names/source_types
+接口已留好，依赖 chunks 上的对应列就绪后接通。
 """
 from __future__ import annotations
 

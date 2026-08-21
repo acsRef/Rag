@@ -11,10 +11,9 @@
 - 失败时降级为原有散装 chunks 格式
 - 通用设计，不依赖特定文档类型（年报/合同/手册均可）
 
-Day 2 下午（plan §五）：
-- 新增 EvidenceResult dataclass（不替代 EvidenceTable，只包装暴露 plan §五.1 的 5 字段）
-- 新增 build_evidence_result(table) 转换
-- 新增 evidence_gate_should_refuse(result, threshold) 给 pipeline.py:300 evidence_gate 用
+Evidence 层的扁平视图契约（EvidenceResult + build_evidence_result + gate
+决策）供 pipeline 在 cross-doc 之前用做 early refuse gate，避免浪费 cross_doc
+工作。EvidenceTable 仍承载完整结构，本模块只暴露 pipeline 关心的 5 字段。
 """
 
 from __future__ import annotations
@@ -29,15 +28,15 @@ from app.models.schemas import RetrievedChunk
 logger = logging.getLogger(__name__)
 
 
-# ── Day 2 下午新增：EvidenceResult 包装 ────────────────────────────────────────
+# ── EvidenceResult 包装（pipeline 关心的扁平视图） ────────────────────────────
 
 
 @dataclass
 class EvidenceResult:
-    """plan §五.1 暴露给 pipeline 的扁平视图。
+    """EvidenceTable 的扁平视图。
 
-    EvidenceTable 仍然存在（314 行活代码不动）；EvidenceResult 是 pipeline 关心的
-    5 字段包装——coverage / temporal_consistent / conflicts / sources / coverage_by_year。
+    EvidenceTable 仍承载完整结构；EvidenceResult 只暴露 pipeline 关心的
+    5 字段——coverage / temporal_consistent / conflicts / sources / coverage_by_year。
 
     注意：
     - coverage 在 build_evidence_result 中 clip 到 [0, 1]（避免下游误读）
@@ -57,7 +56,7 @@ def build_evidence_result(table: EvidenceTable) -> EvidenceResult:
 
     字段语义：
     - coverage = covered_slots / total_slots，clip 到 [0, 1]
-    - temporal_consistent = (len(conflicts) == 0)——plan §五.1 把"无冲突"视为时序一致
+    - temporal_consistent = (len(conflicts) == 0)——把"无冲突"视为时序一致
     - sources = [{chunk_id, document_id}] 列表，覆盖所有 slot 的去重 chunk
     - coverage_by_year：每个年份覆盖的 slot 比例；RetrievedChunk.year 为空时不下结论（默认 {}）
     """
@@ -105,7 +104,7 @@ def build_evidence_result(table: EvidenceTable) -> EvidenceResult:
 
 
 def evidence_gate_should_refuse(result: EvidenceResult, threshold: float) -> bool:
-    """plan §五.2 evidence_gate 决策：是否拒答/追问。
+    """evidence_gate 决策：是否拒答/追问。
 
     拒答条件（任一）：
     1. coverage < threshold（证据不足）

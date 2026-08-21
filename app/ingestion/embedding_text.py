@@ -1,12 +1,10 @@
 """build_embedding_text() — 纯函数，把 chunk + document 元数据拼成 embedding 输入。
 
-激活 `chunks.embedding_text` 死字段（plan §一.3 / §九 Day 2 上午）：
-旧实现只 `embed(c.text)`；新实现把 doc.title / section_path / table_title /
-figure_title 加到正文前面，让 embedding 知道"这段话来自哪份文档哪个章节"——
-对 C 类跨文档检索 / E 类时序题 都有用（query 提到"2024年报"时 embedding
-能匹配到正确 section）。
+把 doc.title / section_path / table_title / figure_title 加到正文前面，让
+embedding 知道"这段话来自哪份文档哪个章节"——对 C 类跨文档检索 / E 类时序题
+都有用（query 提到"2024年报"时 embedding 能匹配到正确 section）。
 
-设计原则（plan §一.3）：
+设计原则：
 - 顺序：文档 > 章节 > 表格 > 图表 > 正文
 - 缺字段就跳过该行（不留空 "文档：")
 - 不调 LLM，纯字符串拼装；可缓存可测试
@@ -50,12 +48,12 @@ def build_embedding_text(chunk: Chunk, doc: Document) -> str:
     if section_path:
         parts.append(f"章节：{section_path}")
 
-    # 3) 表格（Chunk.table_title，Day 2 接入——可能为空）
+    # 3) 表格（Chunk.table_title，可能为空）
     table_title = getattr(chunk, "table_title", None) or ""
     if table_title:
         parts.append(f"表格：{table_title}")
 
-    # 4) 图表（Chunk.figure_title，Day 2 接入——可能为空）
+    # 4) 图表（Chunk.figure_title，可能为空）
     figure_title = getattr(chunk, "figure_title", None) or ""
     if figure_title:
         parts.append(f"图表：{figure_title}")

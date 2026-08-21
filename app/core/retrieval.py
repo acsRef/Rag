@@ -218,8 +218,8 @@ _SECTION_RULES = [
 def _boost_by_section_type(results: list[dict], query: str) -> list[dict]:
     """根据 query 关键词给权威 section 的 chunks 大幅加分。
 
-    Strategy guard (Day 1 下午)：settings.section_boost_enabled=False 时直接
-    返回 results，不做加分/重排——便于 ablation 验证该策略贡献。
+    Strategy guard：settings.section_boost_enabled=False 时直接返回 results，
+    不做加分/重排——便于 ablation 验证该策略贡献。
 
     匹配 section_path 的最后一级（叶子节点），避免父级路径误匹配。
     多规则叠加：如果一个 chunk 匹配多个规则，boost 倍数累积。
@@ -282,8 +282,8 @@ def _supplement_authoritative_sections(
 ) -> list[dict]:
     """补充检索：确保权威 section 的正确 chunks 在候选中。
 
-    Strategy guard (Day 1 下午)：settings.section_supplement_enabled=False 时
-    直接返回 results，不发起补充检索——便于 ablation 验证该策略贡献。
+    Strategy guard：settings.section_supplement_enabled=False 时直接返回
+    results，不发起补充检索——便于 ablation 验证该策略贡献。
 
     问题：
     1. BM25 ts_rank 偏向叙述性文本，表格数据（如"主要会计数据"）经常被挤出 top-K
@@ -417,8 +417,8 @@ def _supplement_missing_years(
 ) -> list[dict]:
     """C类：确保 query 涉及的所有年份都有 chunk 进入最终上下文。
 
-    Strategy guard (Day 1 下午)：settings.year_supplement_enabled=False 时
-    直接返回 results，不做年份覆盖补充——便于 ablation 验证该策略贡献。
+    Strategy guard：settings.year_supplement_enabled=False 时直接返回 results，
+    不做年份覆盖补充——便于 ablation 验证该策略贡献。
 
     问题：hybrid/rerank/MMR 后，某些年份（如 2023）可能被挤出 top-K，
     跨年对比时该年数据缺失 → 张冠李戴或"找不到某年数据"。
@@ -519,10 +519,10 @@ async def _cross_doc_extra(
     can_read_all: bool,
     user_id: str,
 ) -> tuple[list[dict], int]:
-    """跨文档额外 chunks（Day 1 下午抽出，便于 guard + 测试）。
+    """跨文档额外 chunks（抽出便于 guard + 测试）。
 
-    Strategy guard (Day 1 下午)：settings.cross_doc_enabled=False 时直接返回
-    ([], 0)，不触发 cross_doc_retriever.retrieve_sync——便于 ablation 验证贡献。
+    Strategy guard：settings.cross_doc_enabled=False 时直接返回 ([], 0)，
+    不触发 cross_doc_retriever.retrieve_sync——便于 ablation 验证贡献。
 
     返回 (extra_chunks, count)：
     - extra_chunks：cross_doc 召回的 chunks；空 list 表示没召回或被关掉
@@ -675,7 +675,7 @@ class RetrievalEngine:
 
         # -- Cross-doc retrieval (three-channel jump) --
         cross_doc_extra_count = 0
-        # Strategy guard (Day 1 下午)：关掉时 _cross_doc_extra 直接返回 ([], 0)
+        # Strategy guard：关掉时 _cross_doc_extra 直接返回 ([], 0)
         extra, cross_doc_extra_count = await _cross_doc_extra(
             query, query_emb, target_kb_ids, results,
             user_role_ids, can_read_all, user_id,

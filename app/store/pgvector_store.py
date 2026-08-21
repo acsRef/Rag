@@ -423,18 +423,17 @@ def hybrid_search(
     k defaults to 60 (smooth long-tail ranks).
 
     document_ids: if provided, restrict all channels to chunks in these documents only.
-    filters (Day 1 下午)：检索层统一过滤器。当前实现只翻译 document_ids 字段
-    （chunk 表 year/section_name 等列在 Day 2 上午加上后逐步接通）。
+    filters: 检索层统一过滤器。当前实现只翻译 document_ids 字段
+    （其他字段依赖 chunks 上对应列就绪后逐步接通）。
     filters.document_ids 优先于旧 document_ids 参数——同时传时以 filters 为准。
     """
-    # ── Filter merge (Day 1 下午) ──
     # filters 优先于旧 document_ids；空过滤器或 None 时回落到旧参数
     effective_doc_ids: list[str] | None = document_ids
     if filters is not None and not filters.is_empty():
         if filters.document_ids:
             effective_doc_ids = list(filters.document_ids)
-        # 注：filters.years / filters.section_names / filters.source_types / filters.kb_ids
-        # 暂不翻译；待 Day 2 上午 chunks 表加 year 列等再接通。当前不影响正确性。
+        # filters.years / filters.section_names / filters.source_types / filters.kb_ids
+        # 暂不翻译；依赖 chunks 表对应列就绪后接通。当前不影响正确性。
 
     t0 = time.monotonic()
     vector_results = search(
@@ -551,7 +550,7 @@ def replace_chunks(document_id: str, chunks_data: list[dict]):
                 visibility=c.get("visibility", "public"),
                 allowed_roles=c.get("allowed_roles", []),
                 created_at=ts,
-                # Day 2 上午：embedding_text 写入 + embedding_version（默认 1，build 后 v2）
+                # embedding_text 写入 + embedding_version（默认 1，build 后 v2）
                 embedding_text=c.get("embedding_text"),
                 embedding_version=c.get("embedding_version", 1),
                 year=c.get("year"),

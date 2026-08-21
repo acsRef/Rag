@@ -1,10 +1,9 @@
-"""In-process LRU caches (Day 1 上午)。
+"""In-process LRU caches。
 
 - `EmbeddingCache`：text → list[float]，sha256 key；用于 `SFEmbedding.embed` /
   `embed_single_chunk` 调用前去重。
 - `RetrievalCache`：(query + filters + top_k + config_version) → list[SearchHit]，
-  用 sha256 + JSON 序列化稳定 key。Day 1 暂不接入 retrieval（plan §六.6.2 明确先做
-  EmbeddingCache，RetrievalCache Day 1 上午先准备好 class 让 key 契约稳定）。
+  用 sha256 + JSON 序列化稳定 key。
 
 设计要点：
 - 进程内 OrderedDict LRU，不引入 Redis；ablation 后再决定是否升级

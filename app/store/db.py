@@ -83,7 +83,7 @@ def init_db():
             conn.execute(
                 text("ALTER TABLE messages ADD COLUMN IF NOT EXISTS status VARCHAR(16) DEFAULT 'completed'")
             )
-            # ── Day 2 上午 chunks 新增列（plan §一.1）──
+            # ── chunks 历史扩展列（year / page / embedding_version / table_title / figure_title）──
             conn.execute(text("ALTER TABLE chunks ADD COLUMN IF NOT EXISTS year INTEGER"))
             conn.execute(text("ALTER TABLE chunks ADD COLUMN IF NOT EXISTS page_start INTEGER"))
             conn.execute(text("ALTER TABLE chunks ADD COLUMN IF NOT EXISTS page_end INTEGER"))
@@ -263,7 +263,7 @@ class Chunk(Base):
     visibility = Column(String(16), default="public")
     allowed_roles = Column(ARRAY(Integer), default=list)
     created_at = Column(DateTime, default=utc_now)
-    # ── Day 2 上午新增列（plan §一.1） ──
+    # ── 历史扩展列 ──
     # year：用于 SQL WHERE year IN (...) 过滤；当前 indexer 不写入，reembed_v2 也不写
     # （indexer 没有 document.year 解析能力，留给 ingestion 后续 enrich_chunk_metadata）
     year = Column(Integer, nullable=True, index=True)
