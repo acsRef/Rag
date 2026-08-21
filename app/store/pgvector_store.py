@@ -407,6 +407,7 @@ def hybrid_search(
     enable_question_channel: bool = False,
     user_id: str = "",
     document_ids: list[str] | None = None,
+    filters: "RetrievalFilter | None" = None,
 ) -> list[dict]:
     """Hybrid vector + BM25 + optional question-vector search with RRF merge.
 
@@ -414,15 +415,27 @@ def hybrid_search(
     k defaults to 60 (smooth long-tail ranks).
 
     document_ids: if provided, restrict all channels to chunks in these documents only.
+    filters (Day 1 下午)：检索层统一过滤器。当前实现只翻译 document_ids 字段
+    （chunk 表 year/section_name 等列在 Day 2 上午加上后逐步接通）。
+    filters.document_ids 优先于旧 document_ids 参数——同时传时以 filters 为准。
     """
+    # ── Filter merge (Day 1 下午) ──
+    # filters 优先于旧 document_ids；空过滤器或 None 时回落到旧参数
+    effective_doc_ids: list[str] | None = document_ids
+    if filters is not None and not filters.is_empty():
+        if filters.document_ids:
+            effective_doc_ids = list(filters.document_ids)
+        # 注：filters.years / filters.section_names / filters.source_types / filters.kb_ids
+        # 暂不翻译；待 Day 2 上午 chunks 表加 year 列等再接通。当前不影响正确性。
+
     t0 = time.monotonic()
     vector_results = search(
         kb_ids, embedding, user_role_ids, can_read_all, top_k=fetch_k,
-        user_id=user_id, document_ids=document_ids,
+        user_id=user_id, document_ids=effective_doc_ids,
     )
     bm25_results = bm25_search(
         kb_ids, query, user_role_ids, can_read_all, top_k=fetch_k,
-        user_id=user_id, document_ids=document_ids,
+        user_id=user_id, document_ids=effective_doc_ids,
     )
 
     channel_weights: dict[str, float] = {}
@@ -442,7 +455,7 @@ def hybrid_search(
             kb_ids, embedding, user_role_ids, can_read_all,
             top_k=settings.question_channel_top_k,
             user_id=user_id,
-            document_ids=document_ids,
+            document_ids=effective_doc_ids,
         )
         _accumulate(question_results, "question",
                     weight=settings.question_channel_rrf_weight)
@@ -462,6 +475,7 @@ def hybrid_search(
         relaxed_bm25 = bm25_search(
             kb_ids, query, user_role_ids, can_read_all,
             top_k=fetch_k, stopwords=False, user_id=user_id,
+            document_ids=effective_doc_ids,
         )
         existing_ids = {r["chunk_id"] for r in ranked}
         new_from_bm25 = [r for r in relaxed_bm25 if r["chunk_id"] not in existing_ids]

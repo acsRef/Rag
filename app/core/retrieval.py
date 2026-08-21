@@ -60,6 +60,7 @@ def _search_kb(
     top_k: int,
     user_id: str = "",
     document_ids: list[str] | None = None,
+    filters: "RetrievalFilter | None" = None,
 ) -> list[dict]:
     fn = pgvector_store.hybrid_search if settings.hybrid_search_enabled else pgvector_store.search
     kwargs: dict = dict(
@@ -73,12 +74,14 @@ def _search_kb(
     if settings.hybrid_search_enabled:
         kwargs.update(query=query, fetch_k=settings.hybrid_search_top_k, rrf_k=settings.hybrid_rrf_k,
                        enable_question_channel=settings.question_channel_enabled)
-        if document_ids:
-            kwargs["document_ids"] = document_ids
+    # 优先用 filters（新），回落到旧 document_ids 参数（向后兼容）
+    if filters is not None and not filters.is_empty():
+        kwargs["filters"] = filters
+    elif document_ids:
+        kwargs["document_ids"] = document_ids
     else:
-        # Pure vector search also supports document_ids
-        if document_ids:
-            kwargs["document_ids"] = document_ids
+        # Pure vector path 仍要 document_ids 字段
+        kwargs["document_ids"] = None
     # DB 熔断入口闸门：postgres OPEN 时直接返回 []（不再撞库导致 SSE 挂起）
     if not provider_health.get("postgres").allow_request():
         return []
@@ -101,6 +104,7 @@ async def _collect_results(
     results: list[dict],
     user_id: str = "",
     document_ids: list[str] | None = None,
+    filters: "RetrievalFilter | None" = None,
 ):
     """设计审查 P1-7：并行检索各 KB，再在主协程归并去重。
 
@@ -116,7 +120,7 @@ async def _collect_results(
     per_kb = await asyncio.gather(
         *(asyncio.to_thread(
             _search_kb, kb_id, query_emb, query, user_role_ids, can_read_all, top_k,
-            user_id=user_id, document_ids=document_ids) for kb_id in kb_ids),
+            user_id=user_id, document_ids=document_ids, filters=filters) for kb_id in kb_ids),
         return_exceptions=True,
     )
     for kb_id, chunks in zip(kb_ids, per_kb):
@@ -214,9 +218,15 @@ _SECTION_RULES = [
 def _boost_by_section_type(results: list[dict], query: str) -> list[dict]:
     """根据 query 关键词给权威 section 的 chunks 大幅加分。
 
+    Strategy guard (Day 1 下午)：settings.section_boost_enabled=False 时直接
+    返回 results，不做加分/重排——便于 ablation 验证该策略贡献。
+
     匹配 section_path 的最后一级（叶子节点），避免父级路径误匹配。
     多规则叠加：如果一个 chunk 匹配多个规则，boost 倍数累积。
     """
+    # Strategy guard：先于结果/查询为空检查，避免不必要的处理
+    if not settings.section_boost_enabled:
+        return results
     if not results or not query:
         return results
 
@@ -272,6 +282,9 @@ def _supplement_authoritative_sections(
 ) -> list[dict]:
     """补充检索：确保权威 section 的正确 chunks 在候选中。
 
+    Strategy guard (Day 1 下午)：settings.section_supplement_enabled=False 时
+    直接返回 results，不发起补充检索——便于 ablation 验证该策略贡献。
+
     问题：
     1. BM25 ts_rank 偏向叙述性文本，表格数据（如"主要会计数据"）经常被挤出 top-K
     2. 同一 section path 下可能有多个 chunk（正确的表格 + 无关的文本），
@@ -280,6 +293,10 @@ def _supplement_authoritative_sections(
     解决：对财务类查询，定向 BM25 检索权威 section 的 chunks，
     确保最高分的正确 chunk 在候选中。
     """
+    # Strategy guard：先于一切业务逻辑，开关关时直接放行原 results
+    if not settings.section_supplement_enabled:
+        return results
+
     if not query:
         return results
 
@@ -400,6 +417,9 @@ def _supplement_missing_years(
 ) -> list[dict]:
     """C类：确保 query 涉及的所有年份都有 chunk 进入最终上下文。
 
+    Strategy guard (Day 1 下午)：settings.year_supplement_enabled=False 时
+    直接返回 results，不做年份覆盖补充——便于 ablation 验证该策略贡献。
+
     问题：hybrid/rerank/MMR 后，某些年份（如 2023）可能被挤出 top-K，
     跨年对比时该年数据缺失 → 张冠李戴或"找不到某年数据"。
     本函数在年份注入之后检测缺失年份，定向补充检索。
@@ -408,6 +428,10 @@ def _supplement_missing_years(
     每个缺失年份补充 1 条最高分 chunk，挂在末尾（保证进最终上下文）。
     所有 DB/搜索异常一律降级返回原 results，不阻断主流程。
     """
+    # Strategy guard：先于结果/查询检查
+    if not settings.year_supplement_enabled:
+        return results
+
     if not results or not query:
         return results
 
@@ -486,6 +510,41 @@ def _supplement_missing_years(
     return results
 
 
+async def _cross_doc_extra(
+    query: str,
+    query_emb: list[float],
+    target_kb_ids: list[str],
+    results: list[dict],
+    user_role_ids: list[int] | None,
+    can_read_all: bool,
+    user_id: str,
+) -> tuple[list[dict], int]:
+    """跨文档额外 chunks（Day 1 下午抽出，便于 guard + 测试）。
+
+    Strategy guard (Day 1 下午)：settings.cross_doc_enabled=False 时直接返回
+    ([], 0)，不触发 cross_doc_retriever.retrieve_sync——便于 ablation 验证贡献。
+
+    返回 (extra_chunks, count)：
+    - extra_chunks：cross_doc 召回的 chunks；空 list 表示没召回或被关掉
+    - count：与 extra_chunks 长度相同；调用方用于日志/diag
+
+    失败处理：retrieve_sync 任何异常都降级为空返回，不阻断主流程。
+    """
+    if not settings.cross_doc_enabled:
+        return [], 0
+    try:
+        # retrieve_sync 内部全同步 DB 调用，必须 to_thread，否则阻塞事件循环
+        extra = await asyncio.to_thread(
+            cross_doc_retriever.retrieve_sync,
+            query, query_emb, target_kb_ids,
+            results, user_role_ids, can_read_all, user_id,
+        )
+        return extra or [], len(extra) if extra else 0
+    except Exception:
+        logger.exception("cross_doc.retrieve_failed")
+        return [], 0
+
+
 class RetrievalEngine:
     async def retrieve(
         self,
@@ -496,6 +555,7 @@ class RetrievalEngine:
         ctx=None,  # DiagContext, injected from pipeline.py
         user_id: str = "",
         use_two_stage: bool = False,
+        filters: "RetrievalFilter | None" = None,
     ) -> list[RetrievedChunk]:
         top_k = settings.vector_search_top_k
         round_data: dict | None = None
@@ -572,7 +632,7 @@ class RetrievalEngine:
         await _collect_results(
             target_kb_ids, query_emb, query,
             user_role_ids, can_read_all, top_k, seen_ids, results,
-            user_id, document_ids=doc_filter,
+            user_id, document_ids=doc_filter, filters=filters,
         )
 
         if intent and intent.matches:
@@ -584,7 +644,7 @@ class RetrievalEngine:
                 await _collect_results(
                     fallback, query_emb, query,
                     user_role_ids, can_read_all, top_k, seen_ids, results,
-                    user_id, document_ids=doc_filter,
+                    user_id, document_ids=doc_filter, filters=filters,
                 )
 
         # 补充检索：确保权威 section 的 chunks 在候选中
@@ -615,31 +675,26 @@ class RetrievalEngine:
 
         # -- Cross-doc retrieval (three-channel jump) --
         cross_doc_extra_count = 0
-        try:
-            # retrieve_sync 内部全同步 DB 调用，必须 to_thread，否则阻塞事件循环
-            extra = await asyncio.to_thread(
-                cross_doc_retriever.retrieve_sync,
-                query, query_emb, target_kb_ids,
-                results, user_role_ids, can_read_all, user_id,
-            )
-            if extra:
-                cross_doc_extra_count = len(extra)
-                # 归一化映射：附加 chunk 落在最强直连分的 70%~100% 区间，
-                # 保留邻居间次序，最终位置交给 rerank/MMR 决定——
-                # 旧的 min(score, max_rrf) 把通道分（0–1）压到 RRF 量纲（~0.01），
-                # 候选截断后附加 chunk 全部沉底，三通道形同虚设
-                max_neighbor = max(c["score"] for c in extra)
-                max_original = max((r["score"] for r in results), default=0.3)
-                for c in extra:
-                    rel = c["score"] / max_neighbor if max_neighbor else 1.0
-                    c["score"] = max_original * (0.7 + 0.3 * rel)
-                results.extend(extra)
-                results.sort(key=lambda x: x["score"], reverse=True)
-                results = results[:candidate_k]
-                seen_ids.update(c["chunk_id"] for c in extra)
-                logger.info("cross_doc.extra_added count=%d", len(extra))
-        except Exception:
-            logger.exception("cross_doc.retrieve_failed")
+        # Strategy guard (Day 1 下午)：关掉时 _cross_doc_extra 直接返回 ([], 0)
+        extra, cross_doc_extra_count = await _cross_doc_extra(
+            query, query_emb, target_kb_ids, results,
+            user_role_ids, can_read_all, user_id,
+        )
+        if extra:
+            # 归一化映射：附加 chunk 落在最强直连分的 70%~100% 区间，
+            # 保留邻居间次序，最终位置交给 rerank/MMR 决定——
+            # 旧的 min(score, max_rrf) 把通道分（0–1）压到 RRF 量纲（~0.01），
+            # 候选截断后附加 chunk 全部沉底，三通道形同虚设
+            max_neighbor = max(c["score"] for c in extra)
+            max_original = max((r["score"] for r in results), default=0.3)
+            for c in extra:
+                rel = c["score"] / max_neighbor if max_neighbor else 1.0
+                c["score"] = max_original * (0.7 + 0.3 * rel)
+            results.extend(extra)
+            results.sort(key=lambda x: x["score"], reverse=True)
+            results = results[:candidate_k]
+            seen_ids.update(c["chunk_id"] for c in extra)
+            logger.info("cross_doc.extra_added count=%d", len(extra))
 
         if round_data is not None:
             round_data["cross_doc"] = {

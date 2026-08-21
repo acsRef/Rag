@@ -9,6 +9,7 @@ import time
 from openai import AsyncOpenAI, RateLimitError, APIStatusError
 
 from app.config import settings
+from app.core.cache import embedding_cache
 from app.llm.base import CircuitOpenError, PermanentError, RateLimitError, classify_llm_error, jittered_backoff, provider_health
 
 logger = logging.getLogger(__name__)
@@ -103,13 +104,22 @@ class SFEmbedding:
     # ------------------------------------------------------------------
 
     async def embed(self, text: str, max_retries: int = 1) -> list[float]:
+        # EmbeddingCache：cache hit 必须先于 rate limiter，避免重复文本消耗 token。
+        # 关掉时整段绕过（get 不命中，set 不写），与配置语义一致。
+        if settings.embedding_cache_enabled:
+            cached = embedding_cache.get(text)
+            if cached is not None:
+                return cached
         for attempt in range(max_retries + 1):
             self._check_breaker()
             await self.limiter.acquire()
             try:
                 resp = await self.client.embeddings.create(model=self.model, input=text)
                 self._on_success()
-                return resp.data[0].embedding
+                vec = resp.data[0].embedding
+                if settings.embedding_cache_enabled:
+                    embedding_cache.set(text, vec)
+                return vec
             except CircuitOpenError:
                 raise
             except Exception as e:
@@ -124,12 +134,22 @@ class SFEmbedding:
                 raise typed
 
     async def embed_single_chunk(self, text: str, attempt: int = 0) -> tuple[list[float] | None, str | None]:
+        # 单条路径与 embed() 共享同一个 cache：相同 text 不重复打 API。
+        # 注：此路径不走 rate limiter（旧设计），故 cache hit 无 token 节省，
+        # 但仍能避免重复网络往返 + provider_health 计数。
+        if settings.embedding_cache_enabled:
+            cached = embedding_cache.get(text)
+            if cached is not None:
+                return (cached, None)
         self._check_breaker()
         await self.limiter.acquire()
         try:
             resp = await self.client.embeddings.create(model=self.model, input=text)
             self._on_success()
-            return (resp.data[0].embedding, None)
+            vec = resp.data[0].embedding
+            if settings.embedding_cache_enabled:
+                embedding_cache.set(text, vec)
+            return (vec, None)
         except CircuitOpenError:
             raise
         except RateLimitError as e:

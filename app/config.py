@@ -80,6 +80,24 @@ class Settings(BaseSettings):
     circuit_breaker_threshold: int = 10      # consecutive failures before OPEN
     circuit_breaker_cooldown: float = 30.0   # seconds before HALF_OPEN probe
 
+    # Embedding cache (Day 1 上午；app/core/cache.py::EmbeddingCache)
+    embedding_cache_enabled: bool = True     # env: EMBEDDING_CACHE_ENABLED
+
+    # Retrieval cache (Day 1 上午；app/core/cache.py::RetrievalCache)
+    retrieval_cache_enabled: bool = True     # env: RETRIEVAL_CACHE_ENABLED
+
+    # Strategy flags (Day 1 下午；plan §四.1)
+    # 5 个检索层策略：Day 1 下午 baseline ablation（docs/plans/2026-08-23-baseline-ablation.md）
+    # 证明在三一年报语料 on vs off recall@10 同为 100%，MRR 反向 +1.1pp——
+    # 默认关掉，保留 env override 通道。需要时通过 CROSS_DOC_ENABLED=true 等单点打开。
+    cross_doc_enabled: bool = False          # env: CROSS_DOC_ENABLED
+    section_boost_enabled: bool = False      # env: SECTION_BOOST_ENABLED
+    section_supplement_enabled: bool = False # env: SECTION_SUPPLEMENT_ENABLED
+    year_supplement_enabled: bool = False    # env: YEAR_SUPPLEMENT_ENABLED
+    query_decomposition_enabled: bool = False # env: QUERY_DECOMPOSITION_ENABLED
+    evidence_gate_enabled: bool = False      # env: EVIDENCE_GATE_ENABLED (Day 2 接入)
+    evidence_min_coverage: float = 0.7       # env: EVIDENCE_MIN_COVERAGE
+
     # Multi-channel retrieval: question embedding channel
     question_channel_enabled: bool = True       # env: QUESTION_CHANNEL_ENABLED
     question_channel_top_k: int = 10           # per-question vector search top_k
