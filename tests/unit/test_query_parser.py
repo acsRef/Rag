@@ -7,10 +7,8 @@
 - 指标关键词：营业收入 / 净利润 / 归母净利润 / 研发投入 / 员工 / 专利 / 分红 等
 - ParsedQuery.filters 自动从 years/document_ids 构造 RetrievalFilter
 """
-import pytest
 
-from app.core.query_parser import ParsedQuery, parse_query
-
+from app.core.query_parser import parse_query
 
 # ── 年份提取 ──────────────────────────────────────────────
 

@@ -17,7 +17,7 @@ _TEST_USERS = ("hist-user", "empty-user", "loss-user", "async-user",
 @pytest.fixture(autouse=True)
 def _memory_users(integration_db):
     """conversations.user_id 有外键约束，先建好全部测试用户（只增不删）。"""
-    from app.store.db import get_db_ctx, User
+    from app.store.db import User, get_db_ctx
 
     with get_db_ctx() as session:
         for uid in _TEST_USERS:

@@ -106,6 +106,7 @@ async def test_retrieval_comparison_spans_regions(table_corpus):
 async def test_mmr_per_doc_soft_cap(table_corpus):
     """MMR 软约束抽查：单文档 chunk 不应霸榜（≤3）。"""
     from collections import Counter
+
     from app.core.retrieval import retrieval_engine
 
     results = await retrieval_engine.retrieve(

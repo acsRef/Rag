@@ -15,9 +15,11 @@ import time
 from datetime import timedelta
 
 import jieba
-from sqlalchemy import text, func
-from app.store.db import get_session, Chunk, ChunkQuestion, utc_now
+from sqlalchemy import func, text
+
 from app.config import settings
+from app.core.retrieval_filter import RetrievalFilter
+from app.store.db import Chunk, ChunkQuestion, get_session, utc_now
 
 logger = logging.getLogger(__name__)
 

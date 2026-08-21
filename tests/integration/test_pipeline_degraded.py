@@ -8,10 +8,10 @@
 async def test_circuit_open_streams_degraded_reply(
         integration_db, fake_llm_stack, ingest_docs, monkeypatch):
     from app.core.pipeline import rag_pipeline
-    from app.llm.chat import minimax_client
     from app.llm.base import CircuitOpenError
+    from app.llm.chat import minimax_client
     from app.models.schemas import ChatRequest
-    from app.store.db import get_db_ctx, Message
+    from app.store.db import Message, get_db_ctx
 
     async def open_circuit(*args, **kwargs):
         raise CircuitOpenError("breaker open")

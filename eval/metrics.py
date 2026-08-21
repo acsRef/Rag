@@ -7,7 +7,7 @@
 - 空 gold 视作"未标注"：指标返回 0/False，不抛错——smoke 阶段 testset 没标 gold 时
   也能跑出 retrieval_only 跑通证据（items 数 + top1 doc）
 """
-from typing import Sequence
+from collections.abc import Sequence
 
 
 def hit_at_k(retrieved_ids: Sequence[str], gold_ids: Sequence[str], k: int) -> bool:

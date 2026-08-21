@@ -6,8 +6,6 @@ asyncio.run 或测试）中调用会得到已绑死 loop 的 client、事件循�
 """
 import asyncio
 
-import pytest
-
 from app.llm.rerank import SFRerank
 
 

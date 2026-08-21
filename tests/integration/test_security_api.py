@@ -38,7 +38,7 @@ def test_diag_index_admin_ok(client, admin_token):
 
 
 def test_whitelist_does_not_pollute_rule_exclusions(client, admin_token, integration_db):
-    from app.store.db import get_db_ctx, PiiAlert, SensitiveRule
+    from app.store.db import PiiAlert, SensitiveRule, get_db_ctx
 
     headers = {"Authorization": f"Bearer {admin_token}"}
     with get_db_ctx() as session:

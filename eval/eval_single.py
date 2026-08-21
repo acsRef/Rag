@@ -147,7 +147,7 @@ def main():
         sys.exit(1)
 
     # Load test set
-    with open(TESTSET_PATH, "r", encoding="utf-8") as f:
+    with open(TESTSET_PATH, encoding="utf-8") as f:
         testset = json.load(f)
     questions = testset["题目"][args.offset:]
     if args.limit:
@@ -156,7 +156,7 @@ def main():
     # Load existing results
     results = {}
     if RESULT_PATH.exists():
-        with open(RESULT_PATH, "r", encoding="utf-8") as f:
+        with open(RESULT_PATH, encoding="utf-8") as f:
             results = json.load(f)
 
     # Count already done

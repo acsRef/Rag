@@ -19,8 +19,8 @@ async def test_retrieval_end_to_end_returns_ranked_chunks(ingest_docs):
 async def test_rerank_partial_return_keeps_all_candidates(ingest_docs, monkeypatch):
     """reranker 只返回部分索引时，未返回候选应追加而非消失。"""
     from app.config import settings as s
-    from app.llm.rerank import sf_rerank
     from app.core.retrieval import retrieval_engine
+    from app.llm.rerank import sf_rerank
 
     monkeypatch.setattr(s, "mmr_enabled", False)
     monkeypatch.setattr(s, "rerank_top_k", 20)
@@ -39,6 +39,7 @@ async def test_rerank_partial_return_keeps_all_candidates(ingest_docs, monkeypat
 async def test_retrieval_results_belong_to_corpus(ingest_docs):
     """检索结果的 document_id 必须全部来自库内已摄入的语料（含其他用例摄入的文档）。"""
     from sqlalchemy import text as sqlt
+
     from app.store.db import get_db_ctx
 
     with get_db_ctx() as session:

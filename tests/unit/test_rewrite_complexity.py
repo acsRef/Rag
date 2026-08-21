@@ -3,9 +3,8 @@
 背景：意图路由已回退 V3（第一层轻量分类），R1 改作「复杂查询规划」第二层。
 本测试锁定 _is_complex_query 的判据，并验证 rewrite 按复杂/简单选择 model。
 """
-from app.core.rewrite import _is_complex_query
 from app.config import settings
-
+from app.core.rewrite import _is_complex_query
 
 # ── _is_complex_query 判据 ─────────────────────────────────
 
@@ -40,8 +39,8 @@ def test_empty_or_blank_not_complex():
 # ── rewrite 模型选择 ───────────────────────────────────────
 
 async def test_rewrite_uses_r1_for_complex(monkeypatch):
-    from app.llm.chat import minimax_client
     from app.core.rewrite import query_rewrite_service
+    from app.llm.chat import minimax_client
 
     seen = {}
 
@@ -59,8 +58,8 @@ async def test_rewrite_uses_r1_for_complex(monkeypatch):
 
 
 async def test_rewrite_uses_default_v3_for_simple(monkeypatch):
-    from app.llm.chat import minimax_client
     from app.core.rewrite import query_rewrite_service
+    from app.llm.chat import minimax_client
 
     seen = {}
 

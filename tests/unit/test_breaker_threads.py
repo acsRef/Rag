@@ -6,11 +6,11 @@ self._probe_in_flight=False 并把它设 True，多次返回 True → 多 probe
 同时打穿半开闸门。ProviderHealth.get 多线程建 breaker 也存在竞态。
 """
 import threading
-import time
 
-from app.llm import base as llm_base
 from app.llm.base import (
-    CircuitBreaker, CircuitState, PermanentError, provider_health,
+    CircuitBreaker,
+    CircuitState,
+    provider_health,
 )
 
 

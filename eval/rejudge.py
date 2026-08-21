@@ -6,9 +6,9 @@ import os
 import re
 import time
 from pathlib import Path
-from dotenv import load_dotenv
 
 import requests
+from dotenv import load_dotenv
 
 load_dotenv(Path(__file__).parent / ".env")
 
@@ -66,9 +66,9 @@ RAG回答: {rag_answer[:800]}
 
 
 def main():
-    with open(RESULTS_PATH, "r", encoding="utf-8") as f:
+    with open(RESULTS_PATH, encoding="utf-8") as f:
         results = json.load(f)
-    with open(TESTSET_PATH, "r", encoding="utf-8") as f:
+    with open(TESTSET_PATH, encoding="utf-8") as f:
         testset = json.load(f)
     questions = {q["id"]: q for q in testset["题目"]}
 

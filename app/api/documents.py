@@ -3,16 +3,35 @@ import asyncio
 import json
 import logging
 import threading
-from typing import AsyncIterator, Optional
+from collections.abc import AsyncIterator
+from typing import Optional
 
-from app.ingestion.pipeline import ingestion_pipeline
-from app.store.db import get_db_ctx, Document, Chunk, DocRoleAccess, PiiAlert, PiiHold, new_id, utc_now
-from app.config import settings
-
-from app.models.schemas import DocumentUploadResponse, DocumentStatusResponse, DocumentListItem
-from app.middleware.auth import get_current_user, _get_admin_role_id
-from fastapi import APIRouter, UploadFile, File, Form, Depends, HTTPException, BackgroundTasks, Request
+from fastapi import (
+    APIRouter,
+    BackgroundTasks,
+    Depends,
+    File,
+    Form,
+    HTTPException,
+    Request,
+    UploadFile,
+)
 from fastapi.responses import StreamingResponse
+
+from app.config import settings
+from app.ingestion.pipeline import ingestion_pipeline
+from app.middleware.auth import _get_admin_role_id, get_current_user
+from app.models.schemas import DocumentListItem, DocumentStatusResponse, DocumentUploadResponse
+from app.store.db import (
+    Chunk,
+    DocRoleAccess,
+    Document,
+    PiiAlert,
+    PiiHold,
+    get_db_ctx,
+    new_id,
+    utc_now,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +53,7 @@ def _resolve_sse_user(request: Request) -> dict | None:
     EventSource 无法设置 Authorization header,故支持 token query param。
     """
     from app.middleware.auth import decode_token
-    from app.store.auth_store import get_user_by_id, get_user_role_ids, get_user_permissions
+    from app.store.auth_store import get_user_by_id, get_user_permissions, get_user_role_ids
 
     auth = request.headers.get("Authorization")
     token_str: str | None = None
@@ -140,7 +159,7 @@ def emit_doc_progress(event: dict) -> None:
 
 def _get_kb_visibility(kb_id: str) -> tuple[str, list[int]]:
     """Return (visibility, allowed_role_ids) for a KB."""
-    from app.store.db import KnowledgeBase, KBRoleAccess
+    from app.store.db import KBRoleAccess, KnowledgeBase
     with get_db_ctx() as session:
         kb = session.query(KnowledgeBase).filter(KnowledgeBase.id == kb_id).first()
         if not kb:
@@ -374,7 +393,7 @@ async def document_events(request: Request):
             while True:
                 try:
                     event = await asyncio.wait_for(queue.get(), timeout=30.0)
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     yield ": keepalive\n\n"
                     continue
                 yield f"event: doc_progress\ndata: {json.dumps(event, ensure_ascii=False)}\n\n"

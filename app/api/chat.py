@@ -2,14 +2,15 @@
 import asyncio
 import logging
 
-from app.core.pipeline import rag_pipeline
-from app.core.diagnostics import DiagContext
-from app.config import settings
-from app.core.memory import conversation_memory
-from app.models.schemas import ChatRequest, ConversationResponse
-from app.middleware.auth import get_current_user
-from app.store.db import get_db_ctx, Conversation
 from fastapi import APIRouter, Depends, HTTPException
+
+from app.config import settings
+from app.core.diagnostics import DiagContext
+from app.core.memory import conversation_memory
+from app.core.pipeline import rag_pipeline
+from app.middleware.auth import get_current_user
+from app.models.schemas import ChatRequest, ConversationResponse
+from app.store.db import Conversation, get_db_ctx
 
 router = APIRouter(prefix="/api/v1/chat", tags=["Chat"])
 
@@ -105,7 +106,7 @@ async def stream_chat(
                 if connected["value"]:
                     # 正常跑完：通知消费者收尾（1s 上限防关停时满队列阻塞）
                     await asyncio.wait_for(queue.put(_STREAM_END), timeout=1.0)
-            except (asyncio.TimeoutError, asyncio.CancelledError):
+            except (TimeoutError, asyncio.CancelledError):
                 pass  # 消费者已断开/关停：无需送达结束哨兵
             finally:
                 _release_in_flight(conv_id, asyncio.current_task())

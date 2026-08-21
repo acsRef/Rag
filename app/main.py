@@ -1,24 +1,25 @@
-from contextlib import asynccontextmanager
-from collections.abc import AsyncIterator
-
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
-from app.api.chat import router as chat_router
-from app.api.chat import shutdown_in_flight_generations
-from app.api.documents import router as documents_router
-from app.api.auth import router as auth_router
-from app.store.db import engine
-from app.api.admin import router as admin_router
-from app.api.kb import router as kb_router
-from app.api.diagnostics import router as diag_router
-from app.api.retrieve import router as retrieve_router
-from app.store.db import init_db, get_session, Document
-from app.store.auth_store import seed_defaults
-from app.core.pii_rules import seed_pii_rules
-from app.config import settings
 import asyncio
 import logging
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+
 import uvicorn
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+
+from app.api.admin import router as admin_router
+from app.api.auth import router as auth_router
+from app.api.chat import router as chat_router
+from app.api.chat import shutdown_in_flight_generations
+from app.api.diagnostics import router as diag_router
+from app.api.documents import router as documents_router
+from app.api.kb import router as kb_router
+from app.api.retrieve import router as retrieve_router
+from app.config import settings
+from app.core.pii_rules import seed_pii_rules
+from app.store.auth_store import seed_defaults
+from app.store.db import Document, engine, get_session, init_db
+
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:

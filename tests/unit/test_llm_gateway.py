@@ -33,8 +33,8 @@ async def test_rate_limiter_never_goes_negative_under_clock_skew(monkeypatch):
 
 
 async def test_rewrite_falls_back_when_sub_questions_empty(monkeypatch):
-    from app.llm.chat import minimax_client
     from app.core.rewrite import query_rewrite_service
+    from app.llm.chat import minimax_client
 
     async def fake_chat(messages, **kw):
         return '{"rewritten_query": "改写后的查询", "sub_questions": []}'
@@ -69,6 +69,7 @@ async def test_describe_skips_small_image_without_llm(monkeypatch):
 
 def test_describe_sync_uses_main_loop(monkeypatch):
     import threading
+
     import app.llm.base as base
     from app.llm.vision import image_describer
 

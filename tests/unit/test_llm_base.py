@@ -14,7 +14,6 @@ from app.llm.base import (
     robust_json_parse,
 )
 
-
 # ── 熔断器 ──────────────────────────────────────────────
 
 def test_breaker_closed_allows_requests():

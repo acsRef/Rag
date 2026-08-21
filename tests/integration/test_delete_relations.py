@@ -24,7 +24,7 @@ def admin_token(client):
 
 
 def _find_relations(doc_id: str) -> list:
-    from app.store.db import get_db_ctx, DocRelation
+    from app.store.db import DocRelation, get_db_ctx
     with get_db_ctx() as session:
         return session.query(DocRelation).filter(
             (DocRelation.source_doc == doc_id) | (DocRelation.target_doc == doc_id)
@@ -51,7 +51,13 @@ def test_delete_document_cleans_relation_edges(client, admin_token, ingest_docs)
 def test_delete_kb_cleans_relation_edges(client, admin_token, integration_db):
     """删除 KB 时，其下文档的入边/出边一并清理。"""
     from app.store.db import (
-        get_db_ctx, KnowledgeBase, Document, DocRelation, User, new_id, utc_now,
+        DocRelation,
+        Document,
+        KnowledgeBase,
+        User,
+        get_db_ctx,
+        new_id,
+        utc_now,
     )
 
     # admin 用户 id 是 UUID（seed_defaults 生成），需查询真实 id 满足 FK

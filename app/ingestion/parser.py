@@ -7,17 +7,16 @@ Dispatches by suffix to the right handler:
   - embedded images in Docling docs → extracted, described, replaced with text
 """
 
+import codecs
 import io
 import os
 import re
 import tempfile
-import codecs
 
 import chardet
 from docling.document_converter import DocumentConverter
 
 from app.llm.vision import image_describer
-
 
 FILE_TYPE_MAP = {
     ".pdf": "pdf",
@@ -88,16 +87,13 @@ class DocumentParser:
     def _to_tempfile(self, content: bytes, filename: str) -> str:
         """Write bytes to a temp file for Docling (needs filesystem path)."""
         suffix = os.path.splitext(filename)[1] or ".pdf"
-        tmp = tempfile.NamedTemporaryFile(suffix=suffix, delete=False)
-        try:
-            tmp.write(content)
-            return tmp.name
-        except Exception:
-            tmp.close()
-            os.unlink(tmp.name)
-            raise
-        finally:
-            tmp.close()
+        with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+            try:
+                tmp.write(content)
+                return tmp.name
+            except Exception:
+                os.unlink(tmp.name)
+                raise
 
     # ── Docling based parsing ─────────────────────────────
 
@@ -196,6 +192,7 @@ class DocumentParser:
         后处理：去除页眉页脚噪音（页码、重复的文档标题）。
         """
         import tempfile
+
         import pymupdf4llm
         try:
             # pymupdf4llm needs a file path, not bytes

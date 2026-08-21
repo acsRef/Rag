@@ -10,7 +10,6 @@ from fastapi.testclient import TestClient
 from app.api.retrieve import router
 from app.middleware.auth import get_current_user
 
-
 ADMIN = {"id": "u-admin", "is_admin": True, "permissions": ["doc.read_all"], "role_ids": []}
 USER = {"id": "u-1", "is_admin": False, "permissions": [], "role_ids": [2]}
 
@@ -112,8 +111,9 @@ def test_retrieve_hybrid_disabled_uses_pure_vector(client, monkeypatch, _stub_la
 
 @pytest.mark.parametrize("client", [USER], indirect=True)
 def test_retrieve_forbidden_kb(client, monkeypatch, _stub_layers):
-    import app.api.retrieve as mod
     from fastapi import HTTPException
+
+    import app.api.retrieve as mod
 
     def _deny(session, user, kb_ids):
         raise HTTPException(status_code=403, detail=f"无权读取知识库: {kb_ids[0]}")

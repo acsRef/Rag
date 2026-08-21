@@ -52,7 +52,7 @@ class EvidenceResult:
     coverage_by_year: dict[str, float] = field(default_factory=dict)
 
 
-def build_evidence_result(table: "EvidenceTable") -> EvidenceResult:
+def build_evidence_result(table: EvidenceTable) -> EvidenceResult:
     """EvidenceTable → EvidenceResult 转换。
 
     字段语义：
@@ -118,7 +118,7 @@ def evidence_gate_should_refuse(result: EvidenceResult, threshold: float) -> boo
         return False
     if not result.temporal_consistent:
         return True
-    if result.coverage < threshold:
+    if result.coverage < threshold:  # noqa: SIM103 — multi-branch gate; collapsing breaks temporal/coverage priority
         return True
     return False
 
@@ -596,7 +596,7 @@ class EvidenceOrganizer:
                 parts.append(f"- {label}\n  \"{text_preview}\"")
 
         # 覆盖度汇总
-        parts.append(f"\n### 覆盖度")
+        parts.append("\n### 覆盖度")
         covered_count = sum(1 for s in table.slots if s.covered)
         total_count = len(table.slots)
 
@@ -609,7 +609,7 @@ class EvidenceOrganizer:
             for m in missing:
                 parts.append(f"  - 缺失：{m}")
         else:
-            parts.append(f"❌ 未找到与问题相关的证据")
+            parts.append("❌ 未找到与问题相关的证据")
 
         # 多文档提示
         if table.has_multiple_docs:

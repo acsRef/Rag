@@ -1,9 +1,19 @@
 """Knowledge Base CRUD API."""
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import or_
-from app.store.db import get_session, KnowledgeBase, KBRoleAccess, Document, Chunk, PiiAlert, PiiHold, DocRoleAccess
+
 from app.middleware.auth import get_current_user
 from app.models.schemas import KBCreateRequest, KBResponse, KBRoleAccessRequest
+from app.store.db import (
+    Chunk,
+    DocRoleAccess,
+    Document,
+    KBRoleAccess,
+    KnowledgeBase,
+    PiiAlert,
+    PiiHold,
+    get_session,
+)
 
 router = APIRouter(prefix="/api/v1/kb", tags=["kb"])
 

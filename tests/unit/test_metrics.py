@@ -3,7 +3,6 @@ import pytest
 
 from eval.metrics import compute_all, hit_at_k, mrr, recall_at_k
 
-
 # ── hit_at_k ────────────────────────────────────────────────
 
 

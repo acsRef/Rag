@@ -13,8 +13,8 @@ import os
 import re
 import sys
 import time
-from pathlib import Path
 from datetime import datetime
+from pathlib import Path
 
 import requests
 from dotenv import load_dotenv
@@ -155,7 +155,7 @@ def call_rag_detail(query: str, token: str, kb_id: str) -> dict:
 
 def generate_report(records: list, path: Path):
     lines = [
-        f"# RAG 详细评测报告",
+        "# RAG 详细评测报告",
         f"\n生成时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
         f"\n题目数: {len(records)}",
     ]
@@ -166,7 +166,7 @@ def generate_report(records: list, path: Path):
         total = sum(r["score"] for r in scored)
         max_s = len(scored) * 3
         lines.extend([
-            f"\n## 总体结果",
+            "\n## 总体结果",
             f"- 已评分: {len(scored)}/{len(records)}",
             f"- 总分: {total}/{max_s} ({total/max_s*100:.1f}%)",
             f"- 完全正确(3分): {sum(1 for r in scored if r['score']==3)}",
@@ -215,19 +215,19 @@ def generate_report(records: list, path: Path):
                 lines.append(f"  {j+1}. `{fn}` → `{sec}` (score={score:.3f})")
 
         # Reference answer
-        lines.append(f"\n**参考答案**:")
+        lines.append("\n**参考答案**:")
         lines.append(f"> {r['reference'][:300]}\n")
 
         # RAG answer
-        lines.append(f"\n**RAG 回答**:")
+        lines.append("\n**RAG 回答**:")
         lines.append(f"> {r['answer'][:600]}\n")
 
         # Thinking (if any)
         if r.get("thinking"):
             lines.append(f"\n**思考过程** ({len(r['thinking'])}字):")
-            lines.append(f"```")
+            lines.append("```")
             lines.append(r["thinking"][:300])
-            lines.append(f"```\n")
+            lines.append("```\n")
 
         # Judge
         lines.append(f"\n**评分**: {r['score']}分 — {r['reason']}\n")
@@ -258,7 +258,7 @@ def main():
         sys.exit(1)
 
     # Load test set
-    with open(TESTSET_PATH, "r", encoding="utf-8") as f:
+    with open(TESTSET_PATH, encoding="utf-8") as f:
         testset = json.load(f)
     questions = testset["题目"]
 

@@ -1,5 +1,4 @@
 """真实 LLM API 冒烟：仅当 RAGENT_LIVE_LLM=1 且 .env 有真实 key 时运行。"""
-import os
 
 import pytest
 

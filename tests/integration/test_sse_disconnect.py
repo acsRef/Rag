@@ -19,7 +19,7 @@ from app.api.chat import (
 )
 from app.config import settings
 from app.models.schemas import ChatRequest
-from app.store.db import get_db_ctx, Message
+from app.store.db import Message, get_db_ctx
 
 USER = {"id": "test-user", "permissions": ["chat"], "role_ids": [], "is_admin": False}
 
@@ -85,6 +85,7 @@ async def test_disconnect_background_completes(
 
 async def test_same_conversation_409(integration_db, fake_llm_stack, monkeypatch):
     from fastapi import HTTPException
+
     from app.llm.chat import minimax_client
     gate = asyncio.Event()
     monkeypatch.setattr(minimax_client, "chat_stream", _gated_stream(gate))

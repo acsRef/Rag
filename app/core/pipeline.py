@@ -1,25 +1,27 @@
-﻿from app.core.memory import conversation_memory
-from app.core.rewrite import query_rewrite_service
-from app.core.intent import intent_classifier
-from app.core.retrieval import retrieval_engine
-from app.core.retrieval_filter import RetrievalFilter
-from app.core.query_parser import parse_query
-from app.core.prompt import prompt_builder
-from app.core.evidence import evidence_organizer, build_evidence_result, evidence_gate_should_refuse
-from app.core.diagnostics import DiagContext
-from app.llm.chat import minimax_client
-from app.llm.base import CircuitOpenError, provider_health
-from app.core.doc_relation import cross_doc_synthesizer
-from app.core.tag_parser import TagStreamParser
-from app.store import pgvector_store
-from app.store.db import Document
-from app.models.schemas import ChatRequest, RetrievedChunk, SourceInfo
-from app.config import settings
-from typing import AsyncGenerator
-import asyncio
+﻿import asyncio
 import json
 import logging
 import re
+from collections.abc import AsyncGenerator
+
+from app.config import settings
+from app.core.diagnostics import DiagContext
+from app.core.doc_relation import cross_doc_synthesizer
+from app.core.evidence import build_evidence_result, evidence_gate_should_refuse, evidence_organizer
+from app.core.intent import intent_classifier
+from app.core.memory import conversation_memory
+from app.core.prompt import prompt_builder
+from app.core.query_parser import parse_query
+from app.core.retrieval import retrieval_engine
+from app.core.rewrite import query_rewrite_service
+from app.core.tag_parser import TagStreamParser
+from app.llm.base import CircuitOpenError, provider_health
+from app.llm.chat import minimax_client
+from app.models.schemas import ChatRequest, RetrievedChunk, SourceInfo
+from app.store import pgvector_store
+from app.store.db import Document
+
+logger = logging.getLogger(__name__)
 import time
 
 
@@ -36,7 +38,7 @@ def _resolve_doc_map(chunks: list[RetrievedChunk]) -> dict[str, str]:
     doc_map: dict[str, str] = {}
     doc_ids = list({c.document_id for c in chunks if c.document_id})
     if doc_ids:
-        from app.store.db import get_db_ctx, Document
+        from app.store.db import Document, get_db_ctx
         with get_db_ctx() as session:
             rows = session.query(Document.document_id, Document.filename).filter(
                 Document.document_id.in_(doc_ids)
@@ -197,10 +199,7 @@ def _needs_decomposition(query: str) -> bool:
 
     # Rule 6: potential false premise patterns
     # "为什么X增长了", "X增加了多少", "X扩大了多少" — might be wrong premise
-    if re.search(r"为什么.{2,20}(增长|增加|扩大|提升|上升|加大|提高)", query):
-        return True
-
-    return False
+    return bool(re.search(r"为什么.{2,20}(增长|增加|扩大|提升|上升|加大|提高)", query))
 
 
 class RAGPipeline:
@@ -243,7 +242,7 @@ class RAGPipeline:
             from app.core.pii_scanner import scan_and_reject
             rejects = scan_and_reject(req.query)
             if rejects:
-                from app.store.db import get_session, PiiAlert
+                from app.store.db import PiiAlert, get_session
                 session = None
                 try:
                     session = get_session()

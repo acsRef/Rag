@@ -6,11 +6,9 @@
 - pipeline.py 的 query_decomposition_enabled guard 在 disable 时强制 needs_decomp=False
 - 开关切换不影响其他 helper（隔离性）
 """
-import pytest
 
 from app.config import settings
 from app.core import retrieval as ret_mod
-
 
 # ── section_supplement_enabled ─────────────────────────────
 

@@ -1,7 +1,8 @@
 """User & role CRUD operations."""
-from app.config import settings
-from app.store.db import get_session, User, Role, UserRole, RolePermission, new_id
 from passlib.context import CryptContext
+
+from app.config import settings
+from app.store.db import Role, RolePermission, User, UserRole, get_session, new_id
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 

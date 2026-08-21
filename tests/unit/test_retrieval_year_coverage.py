@@ -6,8 +6,7 @@ C类（跨文档对比）根因是跨年混排导致某年数据缺失。本测�
 - 全部依赖(DB/bm25)mock，纯离线。
 """
 import app.core.retrieval as retrieval
-from app.core.retrieval import _query_years, _is_cross_year_query
-
+from app.core.retrieval import _is_cross_year_query, _query_years
 
 # ── 年份提取 ──────────────────────────────────────────────
 

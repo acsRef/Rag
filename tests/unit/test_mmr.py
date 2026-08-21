@@ -2,7 +2,6 @@
 
 测试向量均取单位向量（dot = cosine），与 mmr 文档假设一致。
 """
-import pytest
 
 from app.core.mmr import mmr_select
 

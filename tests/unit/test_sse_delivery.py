@@ -6,9 +6,8 @@ indexing），且每个 chunk 广播一次（500 块 = 500 条 × 全体订阅�
 """
 import asyncio
 
-from app.api.documents import _should_deliver, _put_or_drop_oldest
+from app.api.documents import _put_or_drop_oldest, _should_deliver
 from app.ingestion.indexer import _emit_progress, _progress_buckets
-
 
 # ── _should_deliver：按用户过滤 ─────────────────────────
 

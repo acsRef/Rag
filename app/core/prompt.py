@@ -2,10 +2,9 @@
 
 from datetime import datetime
 
-from app.models.schemas import RetrievedChunk
 from app.config import settings
 from app.core.pii_scanner import mask_text as _mask_text
-
+from app.models.schemas import RetrievedChunk
 
 # ------------------------------------------------------------------
 # System Prompt — 现在的版本覆盖了角色定义 + 边界情况 + CoT 策略

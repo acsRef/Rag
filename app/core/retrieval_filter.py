@@ -13,8 +13,8 @@
 """
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Iterable
 
 
 def _to_frozenset(value: Iterable | None) -> frozenset | None:

@@ -27,7 +27,7 @@ if TYPE_CHECKING:
 EMBEDDING_TEXT_VERSION = 2  # 跟 chunks.embedding_version 列对齐
 
 
-def build_embedding_text(chunk: "Chunk", doc: "Document") -> str:
+def build_embedding_text(chunk: Chunk, doc: Document) -> str:
     """构造 chunk 的 embedding 输入字符串。
 
     Args:

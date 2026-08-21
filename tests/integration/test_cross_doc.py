@@ -1,5 +1,4 @@
 """跨文档关系测试：关系矩阵构建 + 三通道跳转。"""
-import pytest
 
 from app.core.doc_relation import cross_doc_retriever
 from app.store import pgvector_store

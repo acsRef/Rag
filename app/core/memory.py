@@ -15,15 +15,15 @@ import asyncio
 import logging
 import threading
 import time
+from datetime import UTC, datetime
 from typing import Optional
 
 from sqlalchemy import func
 
-from app.store.db import get_db_ctx, Message, Conversation, new_id
 from app.config import settings
-from app.llm.chat import minimax_client
 from app.llm.base import call_llm_with_retry
-from datetime import datetime, timezone
+from app.llm.chat import minimax_client
+from app.store.db import Conversation, Message, get_db_ctx, new_id
 
 logger = logging.getLogger(__name__)
 
@@ -171,7 +171,7 @@ class ConversationMemory:
                 )
                 session.add(msg)
                 if conv:
-                    conv.updated_at = datetime.now(timezone.utc)
+                    conv.updated_at = datetime.now(UTC)
                     # 首条用户消息即标题（确定性、零 LLM 成本）
                     if role == "user" and content and not conv.title:
                         conv.title = content[:30]
@@ -308,7 +308,7 @@ class ConversationMemory:
                     if conv2:
                         conv2.summary = new_summary.strip()
                         conv2.last_summarized_msg_id = new_watermark
-                        conv2.last_summary_at = datetime.now(timezone.utc)
+                        conv2.last_summary_at = datetime.now(UTC)
                         session.commit()
                 _summary_failures.pop(conversation_id, None)
                 logger.info(

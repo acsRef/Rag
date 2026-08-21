@@ -10,8 +10,8 @@ Fallback: if a single section's content exceeds max_chunk_size, hard-split is us
 
 import re
 from dataclasses import dataclass, field
-from app.config import settings
 
+from app.config import settings
 
 
 @dataclass
@@ -44,7 +44,7 @@ def _clean_table_text(table_text: str) -> str:
         return table_text
 
     # 统计数据行数（跳过 header 和 separator）
-    data_rows = [l for l in lines[2:] if l.startswith("|")]
+    data_rows = [line for line in lines[2:] if line.startswith("|")]
 
     # 大表格（>4 行数据）保留 Markdown 格式
     if len(data_rows) > 4:

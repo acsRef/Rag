@@ -13,7 +13,7 @@ async def _to_thread(fn, *args):
 @pytest.fixture(autouse=True)
 def _ownership_users(integration_db):
     """conversations.user_id 有外键约束，先建好三个测试用户。"""
-    from app.store.db import get_db_ctx, User
+    from app.store.db import User, get_db_ctx
 
     # 只增不删：会话行外键引用着这些用户，删了会连累其他用例
     with get_db_ctx() as session:

@@ -274,7 +274,7 @@ class DocRelationBuilder:
         Bootstraps from Document table (not doc_entities), extracts entities
         and embeddings for any docs that lack them, then computes relations.
         """
-        from app.store.db import get_db_ctx, Document
+        from app.store.db import Document, get_db_ctx
         with get_db_ctx() as session:
             rows = session.query(Document.document_id).all()
         all_ids = [r[0] for r in rows]

@@ -87,10 +87,9 @@ async def _run_turn(conv_id, query):
 async def test_long_conversation_memory_invariants(corpus):
     """16 轮真实对话后，记忆机制的全部不变式必须成立。"""
     from app.core.memory import _HISTORY_SCAN_LIMIT, _estimate_tokens, conversation_memory
-    from app.store.db import Conversation, Message, get_db_ctx
 
     # 预建用户（conversations.user_id 有外键）
-    from app.store.db import User
+    from app.store.db import Conversation, Message, User, get_db_ctx
     with get_db_ctx() as session:
         if not session.query(User).filter(User.id == "long-conv-user").first():
             session.add(User(id="long-conv-user", username="long-conv-user",
@@ -114,6 +113,7 @@ async def test_long_conversation_memory_invariants(corpus):
     # 等待摘要收敛：排水式摘要单次调用即收敛到位，但后台任务持锁时
     # 本次调用会立即返回——轮询直到水位覆盖全部窗口外消息（最多 120s）
     import time as _time
+
     from app.core.memory import conversation_memory as _cm
     deadline = _time.monotonic() + 180
     while _time.monotonic() < deadline:

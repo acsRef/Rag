@@ -22,7 +22,6 @@ from typing import Any
 
 from app.config import settings
 
-
 DIAG_DIR = Path(settings.diagnostics_dir)
 _diag_write_lock = threading.Lock()
 
@@ -154,7 +153,7 @@ class DiagContext:
         index: list[dict[str, Any]] = []
         if index_path.exists():
             try:
-                with open(index_path, "r", encoding="utf-8") as f:
+                with open(index_path, encoding="utf-8") as f:
                     index = json.load(f)
             except (json.JSONDecodeError, OSError):
                 index = []

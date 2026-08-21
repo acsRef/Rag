@@ -1,5 +1,4 @@
 """FAQ 文档渲染：唯一写入格式 + 幂等文件名。"""
-import pytest
 
 from mcp_server.render import faq_filename, render_faq_doc
 

@@ -6,10 +6,12 @@
 import json
 import re
 from pathlib import Path
+
 from fastapi import APIRouter, Depends, HTTPException
+
+from app.api.admin import require_admin
 from app.config import settings
 from app.middleware.auth import get_current_user
-from app.api.admin import require_admin
 
 router = APIRouter(prefix="/api/v1/diag", tags=["diagnostics"])
 DIAG_DIR = Path(settings.diagnostics_dir)

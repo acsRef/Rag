@@ -10,8 +10,8 @@ import asyncio
 import pytest
 
 from app.llm import base as llm_base
-from app.llm import embedding as emb_mod
 from app.llm import chat as chat_mod
+from app.llm import embedding as emb_mod
 
 
 class _FakeAPIError(Exception):

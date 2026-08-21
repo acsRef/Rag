@@ -55,8 +55,8 @@ def integration_db():
     if not PG_AVAILABLE:
         pytest.skip("PostgreSQL (localhost:5432) 不可达，integration 测试跳过")
 
-    from app.store import db as db_mod
     from app.core.pii_rules import seed_pii_rules
+    from app.store import db as db_mod
 
     db_mod.init_db()
     # 与 main.py 启动序列对齐：没有 seed 的规则表 = PII 检测空转
@@ -109,9 +109,9 @@ def fake_vector(text_input: str) -> list:
 @pytest.fixture
 def fake_llm_stack(monkeypatch):
     """替换 embedding / rerank / metadata 三个外部依赖为确定性离线实现。"""
+    from app.ingestion.metadata import chunk_metadata_generator
     from app.llm.embedding import sf_embedding
     from app.llm.rerank import sf_rerank
-    from app.ingestion.metadata import chunk_metadata_generator
 
     calls = {"embed_with_fallback": []}
 
@@ -156,7 +156,7 @@ def ingest_docs(integration_db, fake_llm_stack):
     旧代副本与当代词法/向量不可区分，会污染跨文档测试的确定性。
     """
     from app.ingestion.indexer import document_indexer
-    from app.store.db import get_db_ctx, Document, new_id, utc_now
+    from app.store.db import Document, get_db_ctx, new_id, utc_now
 
     with get_db_ctx() as session:
         session.execute(text(

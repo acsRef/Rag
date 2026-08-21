@@ -17,7 +17,7 @@ _USERS = ("race-user",)
 
 @pytest.fixture(autouse=True)
 def _concurrency_users(integration_db):
-    from app.store.db import get_db_ctx, User
+    from app.store.db import User, get_db_ctx
 
     with get_db_ctx() as session:
         for uid in _USERS:
@@ -34,7 +34,6 @@ async def test_concurrent_summaries_cover_disjoint_intervals(
     from app.core import memory as memory_mod
     from app.core.memory import conversation_memory
     from app.llm.chat import minimax_client
-    from app.store.db import get_db_ctx, Conversation, Message
 
     # 重新设置参数让触发条件容易满足
     monkeypatch.setattr(memory_mod.settings, "history_max_tokens", 60)

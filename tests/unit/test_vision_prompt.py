@@ -4,13 +4,13 @@
 原 Qwen/Qwen2.5-VL-7B-Instruct 已在硅基流动下架（400 Model does not exist），
 改用可用的 Qwen/Qwen3-VL-8B-Instruct。本测试防止 vision_model 被误改回不可用/不守契约的模型。
 """
-from app.llm.vision import IMAGE_DESCRIBE_PROMPT
 from app.config import settings
+from app.llm.vision import IMAGE_DESCRIBE_PROMPT
 
 
 async def test_vision_uses_configured_model(monkeypatch):
-    from app.llm.vision import image_describer
     from app.llm.chat import minimax_client
+    from app.llm.vision import image_describer
 
     seen = {}
 

@@ -1,6 +1,10 @@
 """TagStreamParser 单测：标签识别、跨 token 边界、展示/持久化一致。"""
 from app.core.tag_parser import (
-    TagStreamParser, THINK_OPEN, THINK_CLOSE, ANSWER_OPEN, ANSWER_CLOSE,
+    ANSWER_CLOSE,
+    ANSWER_OPEN,
+    THINK_CLOSE,
+    THINK_OPEN,
+    TagStreamParser,
 )
 
 

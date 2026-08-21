@@ -1,0 +1,54 @@
+# Phase 1 cleanup — see docs/plans/2026-08-21-cleanup-phase1.md
+line-length = 100
+target-version = "py311"
+
+[lint]
+select = ["E", "F", "I", "B", "UP", "SIM"]
+
+# Per-rule rationale (kept inline above each entry so adding a new ignore
+# forces the same commenting discipline):
+#
+# E501 — line wrapping delegated to ruff format (separate commit). Long
+#        URLs / 中文长句无法机械折行。
+# B008 — FastAPI dependency declaration idiom: Depends() in parameter
+#        defaults is the framework pattern.
+# UP031 — printf-style survives in logging-adjacent code; converting to
+#         f-string changes lazy-evaluation semantics. Defer.
+# E402 — deliberate mid-file imports: db.py migration helpers, pgvector
+#        doc-level pre-retrieval numpy, test-file sys.path bootstrap.
+#        Moving them risks import-order side effects.
+# UP045 — memory.py:366 uses Optional[threading.Lock] (non-type object;
+#         `|` is invalid). Rule re-enabled in Task D after noqa on that
+#         one line; the remaining 5 sites convert normally.
+# E712 — PII rule storage uses SQLAlchemy column == True (ORM idiom).
+# B904 — raise-without-from chain rewrites change traceback __cause__
+#        visibility. Zero Phase-1 value; defer.
+# B905 — zip without strict=; adding strict=True raises on unequal
+#        lengths (behavior change). Per-site judgment deferred.
+# SIM108 — ternary rewrites: semantics-preserving but touches structure.
+#          Defer to behavior round.
+# SIM117 — nested-with merging: same as above.
+# UP041 — timeout-error-alias (replaced by asyncio.TimeoutError). Safe rewrite.
+# E722 — bare except in eval/test scripts; narrowing scope is behavior change.
+# B007 — unused loop-var rename to `_` churns diff without value; loop vars
+#        keep meaningful names for readability.
+# SIM105 — try/except/pass → contextlib.suppress: structural rewrite, defer.
+# SIM102 — collapsible-if nesting merge: readability judgment per site, defer.
+# F841 — unused-variable assignments: may document diagnostics intent; defer.
+ignore = [
+    "E501",
+    "B008",
+    "UP031",
+    "E402",
+    "UP045",
+    "E712",
+    "B904",
+    "B905",
+    "SIM108",
+    "SIM117",
+    "E722",
+    "B007",
+    "SIM105",
+    "SIM102",
+    "F841",
+]

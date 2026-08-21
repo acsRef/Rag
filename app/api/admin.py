@@ -1,14 +1,31 @@
 """Admin API: user & role management + PII review."""
+from datetime import datetime
+
 from fastapi import APIRouter, Depends, HTTPException
-from app.store.auth_store import (
-    get_user_role_ids, set_user_roles,
-    list_roles, create_role, set_role_permissions, get_role_permissions,
-)
-from app.store.db import get_db_ctx, get_session, PiiAlert, PiiHold, utc_now, User, Role, Chunk, Document
+from pydantic import BaseModel
+
 from app.middleware.auth import get_current_user
 from app.models.schemas import UserResponse, UserRoleUpdateRequest
-from datetime import datetime
-from pydantic import BaseModel
+from app.store.auth_store import (
+    create_role,
+    get_role_permissions,
+    get_user_role_ids,
+    list_roles,
+    set_role_permissions,
+    set_user_roles,
+)
+from app.store.db import (
+    Chunk,
+    Document,
+    PiiAlert,
+    PiiHold,
+    Role,
+    User,
+    get_db_ctx,
+    get_session,
+    utc_now,
+)
+
 router = APIRouter(prefix="/api/v1/admin", tags=["admin"])
 
 
@@ -57,7 +74,7 @@ def update_user_roles(user_id: str, body: UserRoleUpdateRequest, current_user: d
                     raise HTTPException(status_code=400, detail=f"角色 {rid} 不存在")
         set_user_roles(user_id, body.role_ids)
         # 设计审查 P1-10：角色变更后失效该用户的鉴权缓存，避免下次请求读旧权限
-        from app.middleware.auth import invalidate_user_cache, invalidate_admin_role
+        from app.middleware.auth import invalidate_admin_role, invalidate_user_cache
         invalidate_user_cache(user_id)
         invalidate_admin_role()
         return {"ok": True}

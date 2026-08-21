@@ -146,7 +146,7 @@ VALIDATORS = {
 
 def seed_pii_rules():
     """Sync DEFAULT_RULES to sensitive_rules table on startup."""
-    from app.store.db import get_session, SensitiveRule, utc_now
+    from app.store.db import SensitiveRule, get_session, utc_now
     session = None
     try:
         session = get_session()

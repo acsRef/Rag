@@ -2,10 +2,7 @@
 
 import json
 
-import pytest
-
 from app.config import settings
-from app.core import rewrite as rewrite_mod
 from app.core.rewrite import query_rewrite_service
 from app.llm.chat import minimax_client
 

@@ -6,12 +6,18 @@ Provider selection is controlled by `settings.chat_provider`.
 
 import asyncio
 import logging
-from typing import AsyncGenerator
+from collections.abc import AsyncGenerator
 
 from openai import AsyncOpenAI
 
 from app.config import settings
-from app.llm.base import CircuitOpenError, PermanentError, RateLimitError, classify_llm_error, provider_health
+from app.llm.base import (
+    CircuitOpenError,
+    PermanentError,
+    RateLimitError,
+    classify_llm_error,
+    provider_health,
+)
 
 logger = logging.getLogger(__name__)
 

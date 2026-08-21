@@ -5,8 +5,6 @@
 """
 import threading
 
-import pytest
-
 import app.core.retrieval as retrieval_mod
 
 

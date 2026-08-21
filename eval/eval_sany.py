@@ -235,7 +235,7 @@ def run_eval(limit: Optional[int] = None, skip_judge: bool = False, resume: bool
     print(f"使用知识库: {kb_id}")
 
     # Load test set
-    with open(TESTSET_PATH, "r", encoding="utf-8") as f:
+    with open(TESTSET_PATH, encoding="utf-8") as f:
         testset = json.load(f)
     questions = testset["题目"]
     if limit:
@@ -245,7 +245,7 @@ def run_eval(limit: Optional[int] = None, skip_judge: bool = False, resume: bool
     # Load existing results for resume
     results = {}
     if resume and RESULT_PATH.exists():
-        with open(RESULT_PATH, "r", encoding="utf-8") as f:
+        with open(RESULT_PATH, encoding="utf-8") as f:
             results = json.load(f)
         done = sum(1 for r in results.values() if r.get("rag_answer"))
         print(f"已有 {done}/{len(questions)} 道题结果，继续...")
@@ -360,7 +360,7 @@ def generate_report(results: dict, questions: list):
         wrong = sum(1 for r in scored.values() if r["judge_score"] <= 1)
 
         lines.extend([
-            f"\n## 总体结果",
+            "\n## 总体结果",
             f"- 已评分: {len(scored)}/{len(questions)}",
             f"- 总分: {total_score}/{max_score} ({total_score/max_score*100:.1f}%)",
             f"- 平均分: {avg_score:.2f}/3",

@@ -13,17 +13,17 @@ import logging
 import re
 import time
 
-from app.store import pgvector_store
-from app.llm.embedding import sf_embedding
-from app.ingestion.chunker import text_chunker, Chunk
-from app.ingestion.cleaner import document_cleaner
-from app.ingestion.structurer import document_structurer
-from app.ingestion.metadata import chunk_metadata_generator
-from app.ingestion.embedding_text import build_embedding_text  # noqa: F401  # 保留供 ablation
-from app.store.db import get_db_ctx, get_session, Document, new_id, utc_now
-from app.store.pgvector_store import tokenize
 from app.config import settings
 from app.core.doc_relation import cross_doc_builder
+from app.ingestion.chunker import Chunk, text_chunker
+from app.ingestion.cleaner import document_cleaner
+from app.ingestion.embedding_text import build_embedding_text  # noqa: F401  # 保留供 ablation
+from app.ingestion.metadata import chunk_metadata_generator
+from app.ingestion.structurer import document_structurer
+from app.llm.embedding import sf_embedding
+from app.store import pgvector_store
+from app.store.db import Document, get_db_ctx, get_session, new_id, utc_now
+from app.store.pgvector_store import tokenize
 
 logger = logging.getLogger(__name__)
 _INDEX_POOL = concurrent.futures.ThreadPoolExecutor(max_workers=2)
@@ -188,7 +188,7 @@ class DocumentIndexer:
             }
         pii_findings_cache = None  # cache PII scan to avoid 3x pass
         if settings.pii_enabled:
-            from app.core.pii_scanner import scan, scan_and_reject, mask_text
+            from app.core.pii_scanner import mask_text, scan, scan_and_reject
             rejects = scan_and_reject(text)
             if rejects:
                 logger.info("ingest.pii_rejected doc=%s rule_count=%d", u_tag, len(rejects))

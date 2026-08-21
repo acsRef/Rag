@@ -8,8 +8,8 @@ import asyncio
 import base64
 import hashlib
 import logging
-from collections import OrderedDict
 import os
+from collections import OrderedDict
 
 from app.llm.chat import minimax_client
 
@@ -92,9 +92,9 @@ class ImageDescriber:
     def _should_skip(self, image_bytes: bytes, pil_size: tuple[int, int] | None = None) -> bool:
         if len(image_bytes) < self.file_size_threshold:
             return True
-        if pil_size and (pil_size[0] < self.size_threshold or pil_size[1] < self.size_threshold):
-            return True
-        return False
+        return bool(pil_size) and (
+            pil_size[0] < self.size_threshold or pil_size[1] < self.size_threshold
+        )
 
     async def describe(self, image_bytes: bytes, filename: str = "image.png") -> str:
         """Describe a single image via vision API, with cache."""

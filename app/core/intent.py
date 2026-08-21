@@ -12,12 +12,18 @@
 无意图命中时,上层 `RAGPipeline` 会把 query 撒向所有 KB 做兜底。
 """
 import asyncio
-
-from app.llm.chat import minimax_client
-from app.llm.base import CircuitOpenError, PermanentError, TemporaryError, call_llm_with_retry, robust_json_parse
-from app.models.schemas import IntentResult, IntentMatch
-from app.config import settings
 import logging
+
+from app.config import settings
+from app.llm.base import (
+    CircuitOpenError,
+    PermanentError,
+    TemporaryError,
+    call_llm_with_retry,
+    robust_json_parse,
+)
+from app.llm.chat import minimax_client
+from app.models.schemas import IntentMatch, IntentResult
 
 logger = logging.getLogger(__name__)
 
@@ -175,7 +181,7 @@ class IntentClassifier:
 
 def _resolve_kb_names(kb_ids: list[str]) -> dict[str, str]:
     """kb_id → 名称，供意图 prompt 使用（LLM 只对名称能做语义路由）。"""
-    from app.store.db import get_db_ctx, KnowledgeBase
+    from app.store.db import KnowledgeBase, get_db_ctx
     with get_db_ctx() as session:
         rows = session.query(KnowledgeBase.id, KnowledgeBase.name).filter(
             KnowledgeBase.id.in_(kb_ids)).all()

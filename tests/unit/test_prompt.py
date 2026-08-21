@@ -1,5 +1,4 @@
 """锁定 app/core/prompt.py 行为：token 估算一致性与历史裁剪。"""
-import pytest
 
 from app.core.memory import _estimate_tokens
 from app.core.prompt import _est, prompt_builder
@@ -47,13 +46,6 @@ def test_trim_chunks_truncates_oversized_single_chunk():
     assert len(kept) == 1
     assert len(kept[0].text) < len(big)
     assert len(kept[0].text) <= int(200 * 1.5)
-
-
-def test_trim_chunks_drops_oversized_when_no_chars_left():
-    """budget 仅够 1 chunk 但内容超大且截断后 ≤ 0 字符：丢弃。"""
-    big = "字" * 5000
-    kept = prompt_builder._trim_chunks([_chunk(big)], token_budget=1)
-    assert kept == []
 
 
 def test_trim_chunks_drops_oversized_when_no_chars_left():

@@ -1,14 +1,12 @@
 """摄入链路测试（真实 PG + fake embedding/metadata）：建块、入库、增量复用。"""
 from pathlib import Path
 
-import pytest
-
 FIXTURE_DIR = Path(__file__).parent.parent / "fixtures" / "docs"
 
 
 def test_ingest_creates_chunks_questions_and_relations(ingest_docs, integration_db):
     from app.store import pgvector_store
-    from app.store.db import get_db_ctx, ChunkQuestion
+    from app.store.db import ChunkQuestion, get_db_ctx
 
     doc_id = ingest_docs["transformer_basics.md"]
     chunks = pgvector_store.get_chunks_by_document(doc_id)
@@ -42,7 +40,7 @@ def test_incremental_update_reuses_unchanged_chunks(ingest_docs, fake_llm_stack)
 
     name = "rag_chunking.md"
     original = (FIXTURE_DIR / name).read_bytes()
-    modified = original + "\n\n### 新增小节\n\n这是追加的语义分块实验内容，用于触发增量更新。\n".encode("utf-8")
+    modified = original + "\n\n### 新增小节\n\n这是追加的语义分块实验内容，用于触发增量更新。\n".encode()
 
     fake_llm_stack["embed_with_fallback"].clear()
     res = document_indexer.index(
@@ -82,7 +80,7 @@ def test_incremental_update_preserves_reused_questions(ingest_docs, fake_llm_sta
     counts_before = _question_counts()
     assert counts_before, "首次摄入应已写入问题行"
 
-    modified = original + "\n\n### 追加小节\n\n这是追加的内容，用于触发增量更新路径。\n".encode("utf-8")
+    modified = original + "\n\n### 追加小节\n\n这是追加的内容，用于触发增量更新路径。\n".encode()
     res = document_indexer.index(
         name, modified, kb_id="test-kb", user_id="test-user",
         document_id=doc_id,
@@ -147,10 +145,10 @@ def test_neighbor_expansion_survives_incremental_update(ingest_docs, fake_llm_st
     original = (FIXTURE_DIR / name).read_bytes().replace(b"\r\n", b"\n")
 
     # 在文档中间插入新小节
-    marker = "\n\n### ".encode("utf-8")
+    marker = b"\n\n### "
     parts = original.split(marker)
     assert len(parts) >= 3, "fixture 应含多个 H3 小节"
-    middle = "\n\n### 中间插入小节\n\n这是插在文档中间的邻居扩展验证内容。\n".encode("utf-8")
+    middle = "\n\n### 中间插入小节\n\n这是插在文档中间的邻居扩展验证内容。\n".encode()
     inserted = parts[0] + marker + parts[1] + middle + marker + marker.join(parts[2:])
 
     res = document_indexer.index(
@@ -231,7 +229,7 @@ def test_reindex_partial_embed_failure_preserves_old_index(integration_db, fake_
 
 def _precreate_document_row(filename: str) -> str:
     """模拟 api/documents.py 的上传契约：先建 Document 行，返回 doc_id。"""
-    from app.store.db import get_db_ctx, Document, new_id, utc_now
+    from app.store.db import Document, get_db_ctx, new_id, utc_now
 
     doc_id = new_id()
     with get_db_ctx() as session:
@@ -272,9 +270,9 @@ def test_content_hash_is_post_pii(integration_db, fake_llm_stack):
     """
     from app.config import settings
     from app.ingestion.cleaner import document_cleaner
-    from app.ingestion.indexer import document_indexer, _content_hash
+    from app.ingestion.indexer import _content_hash, document_indexer
     from app.ingestion.parser import document_parser
-    from app.store.db import get_db_ctx, Document
+    from app.store.db import Document, get_db_ctx
 
     evil = "# 体检说明\n\n受检者证件号 11010519491231002X 请核查。\n" * 3
     doc_id = _precreate_document_row("pii-hash.md")
@@ -291,7 +289,7 @@ def test_content_hash_is_post_pii(integration_db, fake_llm_stack):
     # 复刻 indexer 的清洗 + PII 脱敏路径，得到"脱敏后文本"的期望 hash
     text = document_cleaner.clean(document_parser.parse_bytes(evil.encode("utf-8"), "pii-hash.md"))
     if settings.pii_enabled:
-        from app.core.pii_scanner import scan, scan_and_reject, mask_text
+        from app.core.pii_scanner import mask_text, scan, scan_and_reject
         assert not scan_and_reject(text)          # 本测试走 mask 而非 reject
         masked = mask_text(text, findings=scan(text))
         text = masked
@@ -306,7 +304,7 @@ def test_index_without_precreated_document_row(integration_db, fake_llm_stack):
 
     res = document_indexer.index(
         "standalone.md",
-        "# 独立摄入\n\n这段内容用于验证无预建 Document 行的摄入路径。\n".encode("utf-8"),
+        "# 独立摄入\n\n这段内容用于验证无预建 Document 行的摄入路径。\n".encode(),
         kb_id="test-kb", user_id="test-user",
     )
     assert res["status"] == "indexed"

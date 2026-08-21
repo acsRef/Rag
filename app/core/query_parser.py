@@ -14,11 +14,10 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass, field
-from typing import Iterable
 
 from app.core.retrieval_filter import RetrievalFilter
-
 
 # ── 年份提取 ──────────────────────────────────────────────
 

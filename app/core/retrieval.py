@@ -11,15 +11,15 @@ import logging
 import time
 from typing import TYPE_CHECKING
 
-from app.store import pgvector_store
+from app.config import settings
+from app.core.doc_relation import cross_doc_retriever
+from app.core.mmr import mmr_select
+from app.core.retrieval_filter import RetrievalFilter
+from app.llm.base import CircuitOpenError, provider_health
 from app.llm.embedding import sf_embedding
 from app.llm.rerank import sf_rerank
-from app.llm.base import CircuitOpenError
 from app.models.schemas import IntentResult, RetrievedChunk
-from app.config import settings
-from app.core.mmr import mmr_select
-from app.core.doc_relation import cross_doc_retriever
-from app.llm.base import provider_health
+from app.store import pgvector_store
 
 if TYPE_CHECKING:
     from app.core.diagnostics import DiagContext
@@ -455,8 +455,8 @@ def _supplement_missing_years(
 
     # 查每个缺失年份的 document_ids（按 kb 过滤）
     try:
-        from app.store.db import get_db_ctx, Document
         from app.ingestion.indexer import _extract_year_from_filename
+        from app.store.db import Document, get_db_ctx
         year_docs: dict[str, list[str]] = {}
         with get_db_ctx() as session:
             rows = session.query(Document.document_id, Document.filename).filter(
@@ -820,7 +820,7 @@ class RetrievalEngine:
         year_map: dict[str, str] = {}
         if doc_ids:
             try:
-                from app.store.db import get_db_ctx, Document
+                from app.store.db import Document, get_db_ctx
                 with get_db_ctx() as session:
                     rows = session.query(Document.document_id, Document.filename).filter(
                         Document.document_id.in_(doc_ids)).all()

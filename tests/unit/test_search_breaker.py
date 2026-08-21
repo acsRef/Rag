@@ -4,11 +4,10 @@ DB 失败 / 成功计入 provider_health["postgres"] 熔断器：复用既有熔
 postgres 进入 is_degraded() 后，pipeline 末尾的 degraded SSE 事件自动包含它。
 熔断打开时 retrieve 入口短路，不再撞 DB。
 """
-import pytest
 
+from app.core.retrieval import _search_kb
 from app.llm import base as llm_base
 from app.llm.base import CircuitState
-from app.core.retrieval import _search_kb
 from app.store import pgvector_store
 
 

@@ -1,9 +1,10 @@
 """手动测试 C/H 关键问题，逐个跑避免 judge API 限流。"""
 import json
-import requests
 import os
 import time
 from pathlib import Path
+
+import requests
 from dotenv import load_dotenv
 
 # 加载 .env
@@ -22,7 +23,7 @@ kb_id = requests.get(f"{BASE_URL}/api/v1/kb", headers={"Authorization": f"Bearer
 kb_id = [k["id"] for k in kb_id if "三一重工" in k["name"]][0]
 
 # 加载测试集
-with open(TESTSET_PATH, "r", encoding="utf-8") as f:
+with open(TESTSET_PATH, encoding="utf-8") as f:
     testset = json.load(f)
 questions = {q["id"]: q for q in testset["题目"]}
 

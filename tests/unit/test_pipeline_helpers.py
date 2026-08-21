@@ -1,8 +1,6 @@
 """锁定 app/core/pipeline.py 纯辅助函数行为：分解门控 / SSE 转义 / 文本规整。"""
-import pytest
 
 from app.core.pipeline import _needs_decomposition, _norm, _sse_safe
-
 
 # ── _needs_decomposition ────────────────────────────────
 

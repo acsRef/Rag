@@ -9,11 +9,18 @@
 输出 JSON:{"rewritten_query": "...", "sub_questions": ["...", "..."]}
 LLM 解析失败时回退到原 query,不抛异常。
 """
-from app.llm.chat import minimax_client
-from app.llm.base import CircuitOpenError, PermanentError, TemporaryError, call_llm_with_retry, robust_json_parse
-from app.config import settings
-from app.models.schemas import RewriteResult
 import logging
+
+from app.config import settings
+from app.llm.base import (
+    CircuitOpenError,
+    PermanentError,
+    TemporaryError,
+    call_llm_with_retry,
+    robust_json_parse,
+)
+from app.llm.chat import minimax_client
+from app.models.schemas import RewriteResult
 
 logger = logging.getLogger(__name__)
 
@@ -42,9 +49,7 @@ def _is_complex_query(question: str) -> bool:
     if "-" in q or "～" in q or "~" in q or "近三年" in q:
         return True
     # 出现两个及以上 "和/与/分别" 分隔的列举，倾向复杂
-    if q.count("和") >= 2 or q.count("与") >= 2 or "分别" in q:
-        return True
-    return False
+    return q.count("和") >= 2 or q.count("与") >= 2 or "分别" in q
 
 
 REWRITE_PROMPT = """你是一个查询改写助手。你的任务是将用户问题改写成自包含的检索查询，消除代词指代，必要时拆分子问题。

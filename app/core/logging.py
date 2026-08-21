@@ -19,8 +19,8 @@
 本实现改用 `RotatingFileHandler` + 启动时绑定日期,行为上等价于"按大小切,文件名带日期"。
 """
 import logging
-from logging.handlers import RotatingFileHandler
 from datetime import date
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 from app.config import settings

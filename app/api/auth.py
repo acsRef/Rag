@@ -2,16 +2,23 @@
 import threading
 import time
 from collections import defaultdict
-from fastapi import APIRouter, Depends, HTTPException, status, Request
+
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.exc import IntegrityError
-from app.store.auth_store import (
-    create_user, get_user_by_username, get_user_by_id,
-    get_user_role_ids, get_user_permissions, list_roles, verify_password,
-    hash_password, seed_defaults,
-)
+
 from app.middleware.auth import create_access_token, get_current_user
-from app.models.schemas import RegisterRequest, LoginRequest, TokenResponse, UserResponse
-from app.store.db import get_db_ctx, KnowledgeBase
+from app.models.schemas import LoginRequest, RegisterRequest, TokenResponse, UserResponse
+from app.store.auth_store import (
+    create_user,
+    get_user_by_id,
+    get_user_by_username,
+    get_user_permissions,
+    get_user_role_ids,
+    hash_password,
+    list_roles,
+    verify_password,
+)
+from app.store.db import KnowledgeBase, get_db_ctx
 
 router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
 

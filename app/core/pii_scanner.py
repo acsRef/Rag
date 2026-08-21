@@ -18,8 +18,9 @@ import logging
 import re
 import time
 from typing import NamedTuple
+
 from app.config import settings
-from app.core.pii_rules import VALIDATORS, DEFAULT_RULES
+from app.core.pii_rules import DEFAULT_RULES, VALIDATORS
 
 logger = logging.getLogger(__name__)
 
@@ -69,7 +70,7 @@ def load_rules(force: bool = False) -> list[dict]:
 
     session = None
     try:
-        from app.store.db import get_session, SensitiveRule
+        from app.store.db import SensitiveRule, get_session
         session = get_session()
         rows = session.query(SensitiveRule).filter(SensitiveRule.is_active == True).all()
     except Exception:

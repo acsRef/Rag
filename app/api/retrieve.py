@@ -16,7 +16,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from app.config import settings
 from app.core.retrieval import embed_query_with_fallback
 from app.middleware.auth import get_current_user
-from app.models.schemas import RetrieveRequest, RetrieveResponse, RetrievedItem
+from app.models.schemas import RetrievedItem, RetrieveRequest, RetrieveResponse
 from app.store.db import KBRoleAccess, KnowledgeBase, get_session
 from app.store.pgvector_store import hybrid_search, search
 

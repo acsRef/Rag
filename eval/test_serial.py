@@ -1,12 +1,10 @@
 """逐个测试失败题（不并发），输出 RAG 真实答案便于诊断。"""
 import json
-import os
-import sys
 import time
 from pathlib import Path
-from dotenv import load_dotenv
 
 import requests
+from dotenv import load_dotenv
 
 load_dotenv(Path(__file__).parent / ".env")
 
@@ -40,15 +38,18 @@ def call_rag(token, kb_id, query, timeout=120):
     event = None
     sources = []
     for line in resp.iter_lines(decode_unicode=True):
-        if not line: continue
+        if not line:
+            continue
         if line.startswith("event: "):
             event = line[7:].strip()
         elif line.startswith("data: "):
             if event == "token":
                 answer += line[6:]
             elif event == "sources":
-                try: sources = json.loads(line[6:])
-                except: pass
+                try:
+                    sources = json.loads(line[6:])
+                except Exception:
+                    pass
             event = None
     return {"answer": answer, "sources": sources}
 
@@ -57,7 +58,7 @@ def main():
     token = login()
     kb_id = get_kb_id(token)
 
-    with open(TESTSET_PATH, "r", encoding="utf-8") as f:
+    with open(TESTSET_PATH, encoding="utf-8") as f:
         testset = json.load(f)
     questions = {q["id"]: q for q in testset["题目"]}
 

@@ -6,11 +6,19 @@ import random
 import threading
 import time
 
-from openai import AsyncOpenAI, RateLimitError, APIStatusError
+from openai import APIStatusError, AsyncOpenAI
+from openai import RateLimitError as OpenAIRateLimitError
 
 from app.config import settings
 from app.core.cache import embedding_cache
-from app.llm.base import CircuitOpenError, PermanentError, RateLimitError, classify_llm_error, jittered_backoff, provider_health
+from app.llm.base import (
+    CircuitOpenError,
+    PermanentError,
+    RateLimitError,
+    classify_llm_error,
+    jittered_backoff,
+    provider_health,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -152,7 +160,7 @@ class SFEmbedding:
             return (vec, None)
         except CircuitOpenError:
             raise
-        except RateLimitError as e:
+        except (OpenAIRateLimitError, RateLimitError) as e:
             # 429 可重试但不计数——AGENTS §8
             retry_after = _parse_retry_after(e) or (settings.embedding_backoff_base * (2 ** attempt))
             if attempt < settings.embedding_max_retries:
@@ -226,7 +234,7 @@ async def _try_batch_with_retry(sf: SFEmbedding, texts: list[str], attempt: int 
         return [d.embedding for d in resp.data]
     except CircuitOpenError:
         raise
-    except RateLimitError as e:
+    except (OpenAIRateLimitError, RateLimitError) as e:
         # 429 可重试但不计熔断（AGENTS §8）
         retry_after = _parse_retry_after(e) or (settings.embedding_backoff_base * (2 ** attempt))
         if attempt < settings.embedding_max_retries:
@@ -248,7 +256,7 @@ async def _try_batch_with_retry(sf: SFEmbedding, texts: list[str], attempt: int 
         return None
 
 
-def _parse_retry_after(e: RateLimitError) -> float | None:
+def _parse_retry_after(e: OpenAIRateLimitError) -> float | None:
     try:
         val = e.response.headers.get("retry-after")
         if val:

@@ -1,13 +1,14 @@
 """JWT authentication middleware."""
 import asyncio
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
+
 from fastapi import Depends, HTTPException, status
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jose import JWTError, jwt
 
 from app.config import settings
-from app.store.auth_store import get_user_by_id, get_user_role_ids, get_user_permissions
+from app.store.auth_store import get_user_by_id, get_user_permissions, get_user_role_ids
 
 bearer_required = HTTPBearer(auto_error=True)
 bearer_optional = HTTPBearer(auto_error=False)
@@ -38,7 +39,7 @@ def _get_admin_role_id() -> int:
     global _admin_role_id, _admin_role_ts
     now = time.monotonic()
     if _admin_role_id is None or (now - _admin_role_ts) >= _ADMIN_ROLE_TTL:
-        from app.store.db import get_session, Role
+        from app.store.db import Role, get_session
         session = get_session()
         try:
             role = session.query(Role).filter(Role.name == "admin").first()
@@ -51,7 +52,7 @@ def _get_admin_role_id() -> int:
 
 def create_access_token(data: dict) -> str:
     to_encode = data.copy()
-    expire = datetime.now(timezone.utc) + timedelta(minutes=settings.access_token_expire_minutes)
+    expire = datetime.now(UTC) + timedelta(minutes=settings.access_token_expire_minutes)
     to_encode.update({"exp": int(expire.timestamp())})
     return jwt.encode(to_encode, settings.jwt_secret, algorithm=settings.jwt_algorithm)
 

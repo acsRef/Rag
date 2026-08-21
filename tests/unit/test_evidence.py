@@ -1,8 +1,7 @@
 """Unit tests for evidence organizer."""
 
-import pytest
+from app.core.evidence import ConflictDetector, EvidenceOrganizer, EvidenceSlot, EvidenceTable
 from app.models.schemas import RetrievedChunk
-from app.core.evidence import EvidenceOrganizer, EvidenceSlot, EvidenceTable, ConflictDetector
 
 
 class TestEvidenceReranking:

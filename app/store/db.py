@@ -1,9 +1,22 @@
 ﻿"""All SQLAlchemy models + PG connection."""
-from sqlalchemy import create_engine, Column, String, Text, Integer, DateTime, JSON, Boolean, ForeignKey, ARRAY, text
-from sqlalchemy.orm import declarative_base, sessionmaker
-from pgvector.sqlalchemy import Vector
-from datetime import datetime, timezone
 import uuid
+from datetime import UTC, datetime
+
+from pgvector.sqlalchemy import Vector
+from sqlalchemy import (
+    ARRAY,
+    JSON,
+    Boolean,
+    Column,
+    DateTime,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    create_engine,
+    text,
+)
+from sqlalchemy.orm import declarative_base, sessionmaker
 
 from app.config import settings
 
@@ -109,8 +122,8 @@ def init_db():
             raise
 
 
-from contextlib import contextmanager
 from collections.abc import Generator
+from contextlib import contextmanager
 
 
 def get_session():
@@ -141,7 +154,7 @@ def new_id() -> str:
 
 
 def utc_now():
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 # ── Auth ────────────────────────────────────────────────

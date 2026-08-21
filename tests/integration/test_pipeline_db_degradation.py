@@ -6,9 +6,7 @@ DB-3：检索空结果叠加 postgres 熔断 → 发 error 事件告知用户服
     不进 LLM 幻觉路径；正常空结果走原有 no_context。
 DB-4：/health 探针反映 DB 状态（db: bool），DB 故障时 status=degraded。
 """
-import asyncio
 
-import pytest
 from fastapi.testclient import TestClient
 
 
@@ -61,8 +59,8 @@ async def _collect(req, **kwargs):
 
 async def test_db_down_lists_kb_ids_does_not_crash(monkeypatch, fake_llm_stack):
     """DB-2：list_kb_ids 失败 → pipeline 不再穿透异常，按空 KB 列表继续。"""
-    from app.store import pgvector_store
     from app.models.schemas import ChatRequest
+    from app.store import pgvector_store
 
     def boom():
         raise RuntimeError("db down")
@@ -79,10 +77,9 @@ async def test_db_down_lists_kb_ids_does_not_crash(monkeypatch, fake_llm_stack):
 async def test_retrieval_empty_with_db_open_emits_error_not_no_context(
         monkeypatch, integration_db, fake_llm_stack):
     """DB-3：检索空 + postgres 熔断 OPEN → error 事件告知用户，不走 LLM。"""
-    from app.models.schemas import ChatRequest
-    from app.llm import base as llm_base
-    from app.llm import chat as chat_mod
     from app.core import retrieval as retrieval_mod
+    from app.llm import chat as chat_mod
+    from app.models.schemas import ChatRequest
 
     _open_postgres_breaker()
     try:
@@ -123,9 +120,9 @@ async def test_retrieval_empty_with_db_healthy_emits_no_context(
 
     校验：postgres 熔断 CLOSED + 检索空 → 发 no_context（不是 error）。
     """
-    from app.models.schemas import ChatRequest
-    from app.llm import chat as chat_mod
     from app.core import retrieval as retrieval_mod
+    from app.llm import chat as chat_mod
+    from app.models.schemas import ChatRequest
 
     # stub chat_stream 让流走到正常结束（不抛错，否则通用 except 会发 error 事件）
     async def fake_stream(messages, **kw):

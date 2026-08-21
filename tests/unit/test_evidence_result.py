@@ -10,10 +10,11 @@ import pytest
 
 from app.core.evidence import (
     EvidenceResult,
+    EvidenceSlot,
+    EvidenceTable,
     build_evidence_result,
     evidence_gate_should_refuse,
 )
-from app.core.evidence import EvidenceTable, EvidenceSlot
 
 
 def _slot(sub_q, doc_ids, covered=True):

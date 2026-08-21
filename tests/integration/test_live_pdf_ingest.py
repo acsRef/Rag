@@ -29,6 +29,7 @@ def pingan_doc(integration_db, live_env):
     truncate_corpus(integration_db)
     repo_root = Path(__file__).parent.parent.parent
     import os as _os
+
     from dotenv import dotenv_values
     child_env = dict(_os.environ)
     child_env["PYTHONPATH"] = str(repo_root)   # 脚本执行不会把 repo 根加入 sys.path
@@ -45,7 +46,7 @@ def pingan_doc(integration_db, live_env):
         env=child_env,
     )
     line = next(
-        (l for l in proc.stdout.splitlines() if l.startswith("RESULT_JSON:")), None)
+        (line for line in proc.stdout.splitlines() if line.startswith("RESULT_JSON:")), None)
     assert line, (
         "PDF 摄入子进程异常退出（rc=%d，疑似 docling 原生崩溃）；stderr tail:%s%s"
         % (proc.returncode, chr(10), proc.stderr[-800:]))

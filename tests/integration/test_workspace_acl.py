@@ -13,6 +13,7 @@ from sqlalchemy import text as sqlt
 @pytest.fixture(scope="module")
 def client(integration_db):
     from fastapi.testclient import TestClient
+
     from app.main import app
     with TestClient(app) as c:
         yield c
@@ -20,6 +21,7 @@ def client(integration_db):
 
 def test_register_workspace_kb_defaults_to_restricted(client, integration_db):
     import uuid
+
     # 限流桶是进程级共享状态：test_security_api 的限流用例会把它打满，
     # 此处先清空，避免跨用例串扰
     import app.api.auth as auth_mod
@@ -30,7 +32,7 @@ def test_register_workspace_kb_defaults_to_restricted(client, integration_db):
     assert resp.status_code == 200, resp.text
     kb_id = resp.json()["user"]["workspace_kb_id"]
     assert kb_id
-    from app.store.db import get_db_ctx, KnowledgeBase
+    from app.store.db import KnowledgeBase, get_db_ctx
     with get_db_ctx() as session:
         kb = session.query(KnowledgeBase).filter_by(id=kb_id).first()
     assert kb is not None
@@ -39,10 +41,15 @@ def test_register_workspace_kb_defaults_to_restricted(client, integration_db):
 
 async def test_restricted_doc_visible_to_owner_only(integration_db, fake_llm_stack):
     """restricted 文档：属主可检索、他人不可、admin 可。"""
-    from app.ingestion.indexer import document_indexer
     from app.core.retrieval import retrieval_engine
+    from app.ingestion.indexer import document_indexer
     from app.store.db import (
-        get_db_ctx, Document, KnowledgeBase, User, new_id, utc_now,
+        Document,
+        KnowledgeBase,
+        User,
+        get_db_ctx,
+        new_id,
+        utc_now,
     )
 
     with get_db_ctx() as session:

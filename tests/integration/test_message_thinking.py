@@ -24,7 +24,7 @@ def admin_token(client):
 
 
 def test_get_messages_returns_thinking_content(client, admin_token, integration_db):
-    from app.store.db import get_db_ctx, User, Conversation, Message, new_id, utc_now
+    from app.store.db import Conversation, Message, User, get_db_ctx, new_id, utc_now
 
     with get_db_ctx() as session:
         admin_id = session.query(User).filter(User.username == "admin").first().id

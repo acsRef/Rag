@@ -6,12 +6,10 @@ for ALL chunks in one batch, then writes results back into the Chunk objects.
 
 import asyncio
 import logging
-import re
 
-from app.llm.chat import minimax_client
-from app.llm.base import robust_json_parse, call_llm_with_retry
 from app.ingestion.chunker import Chunk
-from app.config import settings
+from app.llm.base import call_llm_with_retry, robust_json_parse
+from app.llm.chat import minimax_client
 
 logger = logging.getLogger(__name__)
 
