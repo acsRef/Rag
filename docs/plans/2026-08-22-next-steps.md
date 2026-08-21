@@ -67,13 +67,44 @@ dfc1d5f docs(plan): Phase 1 cleanup spec
 
 ## 立即可做的下一步（推荐先做这条）
 
-**重新整理 Phase 2 问题清单**——而不是直接执行任何一项：
+**A 类已收口**（[docs/plans/2026-08-22-phase2-contract-decisions.md](2026-08-22-phase2-contract-decisions.md) 固化）。**当前 checkpoint**：
 
-1. 给 A-D 每类写一段简短的价值评估（30 分钟）：
-   - `complexity` / `sub_dependencies`：rewrite prompt 契约变更是否真的带来 RAG 质量提升？或在实践中复杂度本来就用不上？
-   - `year` 类型：是当前评测的真正瓶颈还是只是代码异味？
-   - evidence gate：ablation 显示默认 OFF；接通它的实际收益？
-   - ``：LLM 内部推理是用户体验资产还是工程负担？
+```
+Phase 0 baseline
+   ↓
+Phase 1 清理 + 静态质量
+   ↓
+Phase 2 A 契约决策（不执行）
+   ↓
+★ 当前
+   ↓
+Phase 2 B 设计侦察（不执行）
+   ↓
+B 决策固化
+   ↓
+再决定是否真正接通 Gate
+```
+
+**B 类先做设计侦察、不直接接通 Gate**——避免"为不确定价值的 Gate 先大改 query_type ontology"的二次返工。
+
+侦察 4 步：
+
+1. 全仓梳理 Evidence Gate 当前输入/输出契约（pure read）
+2. 梳理 `query_type` 三套 ontology 各自表达什么、谁消费、是否真在生产路径生效
+3. 明确 Gate 实际依赖哪些字段——**这步会决定 B1（Gate 价值验证）与 B2（query_type 统一）是否可独立进行**
+4. 基于上述发现设计 Gate 实验矩阵
+
+完成 4 步后产出一份 B 类侦察决策文档，类似 A 类的结构，再决定是否进入执行期。
+
+**核心原则**：
+
+> "B 类被列入计划" ≠ "B 类必须执行"。B 类所有候选同样接受 delete / refactor / keep 审查。Evidence Gate 最终完全可能得 **DELETE**——这并不是浪费时间，而是 Phase 2 决策机制有效运行的证明。
+
+## 旧"立即可做"段落（已被替换，保留以追溯思路）
+
+> 重新整理 Phase 2 问题清单——而不是直接执行任何一项：
+>
+> 1. 给 A-D 每类写一段简短的价值评估...
    - Alembic：项目目前单机单库，引入迁移工具的临界点在哪？
 2. 根据评估给出 **delete / refactor / keep** 标签
 3. 重新排序成新 Phase 2-4 路线图
