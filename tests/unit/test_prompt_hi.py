@@ -23,7 +23,7 @@ def test_i_class_refusal_covers_all_edge_categories():
     assert "拒答边界" in SYSTEM_PROMPT
     assert "市值" in SYSTEM_PROMPT
     assert "单一国家" in SYSTEM_PROMPT
-    assert "未来年度" in SYSTEM_PROMPT
+    assert "未来预测" in SYSTEM_PROMPT
     assert "知识库之外" in SYSTEM_PROMPT
 
 
