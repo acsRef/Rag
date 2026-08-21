@@ -3,6 +3,7 @@
 离线：dependency_overrides 提供假用户；hybrid_search / KB 可读性判定 monkeypatch，
 不触真实 DB 与 embedding 服务。
 """
+
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -32,24 +33,37 @@ def _stub_layers(monkeypatch):
     # 会命中本 stub 导致全绿假象；若去掉 autouse，须确认 5 个端点测试均已显式
     # 声明本 fixture（现状如此）。
     import app.api.retrieve as mod
+
     monkeypatch.setattr(mod, "_assert_kb_readable", lambda session, user, kb_ids: None)
 
     async def _fake_embed(query, ctx=None):
         return [0.0] * 4, False
+
     monkeypatch.setattr(mod, "embed_query_with_fallback", _fake_embed)
 
     calls = {}
 
     def _fake_hybrid(**kwargs):
         calls.update(kwargs)
-        return [{"chunk_id": "c1", "document_id": "d1", "text": "字典正文",
-                 "title": "dict-table_public_fact_sales.md", "section_path": "字段", "score": 0.9}]
+        return [
+            {
+                "chunk_id": "c1",
+                "document_id": "d1",
+                "text": "字典正文",
+                "title": "dict-table_public_fact_sales.md",
+                "section_path": "字段",
+                "score": 0.9,
+            }
+        ]
+
     monkeypatch.setattr(mod, "hybrid_search", _fake_hybrid)
     return calls
 
 
 def test_retrieve_happy_path(client, _stub_layers):
-    resp = client.post("/api/v1/retrieve", json={"query": "销售额", "kb_ids": ["kb-dict"], "top_k": 3})
+    resp = client.post(
+        "/api/v1/retrieve", json={"query": "销售额", "kb_ids": ["kb-dict"], "top_k": 3}
+    )
     assert resp.status_code == 200
     body = resp.json()
     assert body["degraded"] is False
@@ -63,13 +77,13 @@ def test_retrieve_happy_path(client, _stub_layers):
     assert _stub_layers["user_role_ids"] == []
     # settings 检索参数显式透传（与主路径 retrieval._search_kb 对齐）
     from app.config import settings
+
     assert _stub_layers["fetch_k"] == settings.hybrid_search_top_k
     assert _stub_layers["rrf_k"] == settings.hybrid_rrf_k
 
 
 def test_retrieve_kb_ids_dedup_preserves_order(client, _stub_layers):
-    resp = client.post("/api/v1/retrieve",
-                       json={"query": "q", "kb_ids": ["kb-a", "kb-a", "kb-b"]})
+    resp = client.post("/api/v1/retrieve", json={"query": "q", "kb_ids": ["kb-a", "kb-a", "kb-b"]})
     assert resp.status_code == 200
     assert _stub_layers["kb_ids"] == ["kb-a", "kb-b"]
 
@@ -86,8 +100,16 @@ def test_retrieve_hybrid_disabled_uses_pure_vector(client, monkeypatch, _stub_la
     def _fake_vector(**kwargs):
         called["vector"] += 1
         vector_kwargs.update(kwargs)
-        return [{"chunk_id": "c1", "document_id": "d1", "text": "正文",
-                 "title": "t", "section_path": "s", "score": 0.8}]
+        return [
+            {
+                "chunk_id": "c1",
+                "document_id": "d1",
+                "text": "正文",
+                "title": "t",
+                "section_path": "s",
+                "score": 0.8,
+            }
+        ]
 
     def _fake_hybrid(**kwargs):
         called["hybrid"] += 1
@@ -117,6 +139,7 @@ def test_retrieve_forbidden_kb(client, monkeypatch, _stub_layers):
 
     def _deny(session, user, kb_ids):
         raise HTTPException(status_code=403, detail=f"无权读取知识库: {kb_ids[0]}")
+
     monkeypatch.setattr(mod, "_assert_kb_readable", _deny)
     resp = client.post("/api/v1/retrieve", json={"query": "q", "kb_ids": ["kb-x"]})
     assert resp.status_code == 403
@@ -127,6 +150,7 @@ def test_retrieve_degraded_flag(client, monkeypatch, _stub_layers):
 
     async def _degraded(query, ctx=None):
         return [0.0] * 4, True
+
     monkeypatch.setattr(mod, "embed_query_with_fallback", _degraded)
     resp = client.post("/api/v1/retrieve", json={"query": "q", "kb_ids": ["kb-dict"]})
     assert resp.status_code == 200
@@ -138,6 +162,7 @@ def test_retrieve_pure_vector_none_returns_empty(client, monkeypatch, _stub_laye
 
     async def _none(query, ctx=None):
         return None, True
+
     monkeypatch.setattr(mod, "embed_query_with_fallback", _none)
     resp = client.post("/api/v1/retrieve", json={"query": "q", "kb_ids": ["kb-dict"]})
     assert resp.status_code == 200
@@ -148,6 +173,7 @@ def test_retrieve_pure_vector_none_returns_empty(client, monkeypatch, _stub_laye
 
 def test_retrieve_empty_result_semantics(client, monkeypatch, _stub_layers):
     import app.api.retrieve as mod
+
     monkeypatch.setattr(mod, "hybrid_search", lambda **kw: [])
     resp = client.post("/api/v1/retrieve", json={"query": "不存在的字段", "kb_ids": ["kb-dict"]})
     assert resp.status_code == 200
@@ -168,16 +194,17 @@ from app.store.db import Base, KBRoleAccess, KnowledgeBase
 def _readability_session():
     """内存 SQLite：只建 KnowledgeBase / KBRoleAccess 两张普通表，
     预置 public / internal / restricted 各一个 KB + 一条 role_id=2 的授权。"""
-    engine = create_engine("sqlite://", poolclass=StaticPool,
-                           connect_args={"check_same_thread": False})
+    engine = create_engine(
+        "sqlite://", poolclass=StaticPool, connect_args={"check_same_thread": False}
+    )
     Base.metadata.create_all(engine, tables=[KnowledgeBase.__table__, KBRoleAccess.__table__])
     session = sessionmaker(bind=engine)()
     session.add(KnowledgeBase(id="kb-pub", name="pub", visibility="public", owner_id="u-other"))
     session.add(KnowledgeBase(id="kb-int", name="int", visibility="internal", owner_id="u-other"))
     session.add(KnowledgeBase(id="kb-res", name="res", visibility="restricted", owner_id="u-other"))
     session.add(KnowledgeBase(id="kb-mine", name="mine", visibility="internal", owner_id="u-1"))
-    session.add(KBRoleAccess(kb_id="kb-int", role_id=2))      # internal 对 role 2 放行
-    session.add(KBRoleAccess(kb_id="kb-mine", role_id=9))     # 干扰项：owner 判定不应依赖角色
+    session.add(KBRoleAccess(kb_id="kb-int", role_id=2))  # internal 对 role 2 放行
+    session.add(KBRoleAccess(kb_id="kb-mine", role_id=9))  # 干扰项：owner 判定不应依赖角色
     session.commit()
     return session
 

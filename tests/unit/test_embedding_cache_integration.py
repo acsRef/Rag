@@ -9,6 +9,7 @@
 mock 思路：直接 monkeypatch sf._client + sf._client_loop_id 替换 client.property
 返回，避开 AsyncOpenAI 真实调用（conftest 已 sentinel 化 key）。
 """
+
 from app.config import settings
 from app.core import cache as cache_mod
 from app.llm import embedding as emb_mod

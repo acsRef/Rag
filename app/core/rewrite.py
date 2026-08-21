@@ -9,6 +9,7 @@
 输出 JSON:{"rewritten_query": "...", "sub_questions": ["...", "..."]}
 LLM 解析失败时回退到原 query,不抛异常。
 """
+
 import logging
 
 from app.config import settings
@@ -28,9 +29,23 @@ logger = logging.getLogger(__name__)
 # 复杂查询关键词：命中任一即判定为 complex，动用推理模型（R1）做子问题拆解/依赖规划。
 # 与 REWRITE_PROMPT「难度分类」段的判据对齐，避免高频简单查询被 R1 拖慢。
 _COMPLEX_HINTS = (
-    "为什么", "判断", "是否成立", "趋势", "变化", "对比", "区别",
-    "原因", "解释", "如何", "多少倍", "差异", "增长", "下降",
-    "分别是", "按照", "来龙去脉",
+    "为什么",
+    "判断",
+    "是否成立",
+    "趋势",
+    "变化",
+    "对比",
+    "区别",
+    "原因",
+    "解释",
+    "如何",
+    "多少倍",
+    "差异",
+    "增长",
+    "下降",
+    "分别是",
+    "按照",
+    "来龙去脉",
 )
 
 
@@ -175,7 +190,9 @@ REWRITE_PROMPT = """你是一个查询改写助手。你的任务是将用户问
 
 
 class QueryRewriteService:
-    async def rewrite(self, question: str, history: list[dict], summary: str = "", ctx=None) -> RewriteResult:
+    async def rewrite(
+        self, question: str, history: list[dict], summary: str = "", ctx=None
+    ) -> RewriteResult:
         """改写用户问题为自包含的检索查询。
 
         输入:当前问题 + 最近对话历史 + 已有摘要
@@ -186,7 +203,11 @@ class QueryRewriteService:
           - 若 LLM 返回非 JSON,降级为原 query(不抛异常,保证主流程不中断)
         """
         summary_str = summary if summary else "暂无对话摘要"
-        history_str = "\n".join(f"{m['role']}: {m['content']}" for m in history[-4:]) if history else "暂无最近对话"
+        history_str = (
+            "\n".join(f"{m['role']}: {m['content']}" for m in history[-4:])
+            if history
+            else "暂无最近对话"
+        )
         prompt = REWRITE_PROMPT.format(summary=summary_str, history=history_str, question=question)
         # 复杂查询才动用推理模型（R1）做精细拆题/依赖规划；简单查询走默认 V3 快路径。
         # 意图路由已是 V3（第一层轻量分类），这里的 R1 仅作「复杂查询规划」第二层。
@@ -208,18 +229,19 @@ class QueryRewriteService:
         if data is None:
             logger.warning("Rewrite parse failed (first 200): %s", result[:200])
             if ctx:
-                ctx.track_error("rewrite", "JSONDecodeError", "failed to parse LLM JSON output", degraded=True)
+                ctx.track_error(
+                    "rewrite", "JSONDecodeError", "failed to parse LLM JSON output", degraded=True
+                )
             return RewriteResult(rewritten_query=question, sub_questions=[question])
         # 守卫：LLM 可能显式返回空 sub_questions（[] 会让 .get 默认值失效，
         # 下游 pipeline 的 sub_queries[0] 直接 IndexError）；过滤非字符串/空白项，
         # 空列表回退到 rewritten_query，rewritten 缺失再回退原 query。
         rewritten = data.get("rewritten_query") or question
-        subs = [s for s in (data.get("sub_questions") or [])
-                if isinstance(s, str) and s.strip()]
+        subs = [s for s in (data.get("sub_questions") or []) if isinstance(s, str) and s.strip()]
         # 封顶：LLM 控制的 sub_questions 数量无上限会触发 gather 并发雪崩
         # （rerank 无内置限流）；按 settings 截断到 max_sub_questions。
         if len(subs) > settings.max_sub_questions:
-            subs = subs[:settings.max_sub_questions]
+            subs = subs[: settings.max_sub_questions]
         if not subs:
             subs = [rewritten]
         # 解析 sub_dependencies（0-based 索引列表的列表）

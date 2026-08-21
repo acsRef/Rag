@@ -29,9 +29,9 @@ T = TypeVar("T")
 
 
 class CircuitState(Enum):
-    CLOSED = "closed"           # normal operation
-    OPEN = "open"               # fast-fail, no requests allowed
-    HALF_OPEN = "half_open"     # probing after cooldown
+    CLOSED = "closed"  # normal operation
+    OPEN = "open"  # fast-fail, no requests allowed
+    HALF_OPEN = "half_open"  # probing after cooldown
 
 
 class PermanentError(Exception):
@@ -39,6 +39,7 @@ class PermanentError(Exception):
 
     Includes: 4xx (auth / bad request), permission denied, quota exceeded.
     """
+
     pass
 
 
@@ -47,6 +48,7 @@ class TemporaryError(Exception):
 
     Includes: 5xx, timeout, connection reset, rate limit.
     """
+
     pass
 
 
@@ -76,7 +78,7 @@ class CircuitBreaker:
     failure_count: int = 0
     last_failure_time: float = 0.0
     last_success_time: float = 0.0
-    _total_failures: int = 0   # lifetime counter for diagnostics
+    _total_failures: int = 0  # lifetime counter for diagnostics
     _total_successes: int = 0  # lifetime counter for diagnostics
     _probe_in_flight: bool = False  # guard: only one HALF_OPEN probe at a time
     _lock: threading.Lock = field(default_factory=threading.Lock)
@@ -139,7 +141,8 @@ class CircuitBreaker:
                 self.state = CircuitState.OPEN
                 logger.warning(
                     "Circuit breaker OPEN (threshold=%d reached, total_failures=%d)",
-                    self.failure_threshold, self._total_failures,
+                    self.failure_threshold,
+                    self._total_failures,
                 )
 
     # ------------------------------------------------------------------
@@ -161,6 +164,7 @@ class CircuitBreaker:
 
 class CircuitOpenError(Exception):
     """Raised when a request is blocked by an open circuit breaker."""
+
     pass
 
 
@@ -200,7 +204,9 @@ def classify_llm_error(exc: Exception) -> tuple[Exception, bool]:
     name = type(exc).__name__.lower()
     if any(kw in name for kw in ("timeout", "connection", "network", "readerror")):
         return (TemporaryError(str(exc)), True)
-    if any(kw in name for kw in ("authentication", "permission", "notfound", "badrequest", "invalid")):
+    if any(
+        kw in name for kw in ("authentication", "permission", "notfound", "badrequest", "invalid")
+    ):
         return (PermanentError(str(exc)), False)
 
     # Default: treat as temporary (conservative)
@@ -211,12 +217,13 @@ def classify_llm_error(exc: Exception) -> tuple[Exception, bool]:
 # Global provider health
 # ------------------------------------------------------------------
 
+
 class ProviderHealth:
     """Global tracker of circuit breakers keyed by provider name."""
 
     def __init__(self) -> None:
         self._breakers: dict[str, CircuitBreaker] = {}
-        self._lock = threading.Lock()   # 多线程并发 get 也要建锁
+        self._lock = threading.Lock()  # 多线程并发 get 也要建锁
 
     def get(self, provider: str) -> CircuitBreaker:
         with self._lock:
@@ -230,8 +237,7 @@ class ProviderHealth:
     def is_degraded(self) -> list[str]:
         """Return list of provider names currently degraded."""
         return [
-            name for name, breaker in self._breakers.items()
-            if breaker.state != CircuitState.CLOSED
+            name for name, breaker in self._breakers.items() if breaker.state != CircuitState.CLOSED
         ]
 
     def snapshot_all(self) -> dict[str, Any]:
@@ -244,7 +250,7 @@ provider_health = ProviderHealth()
 
 def jittered_backoff(attempt: int, base: float = 1.0) -> float:
     """Exponential backoff with jitter, capped at 60s."""
-    return min(60.0, base * (2 ** attempt)) + random.uniform(0, 0.5)
+    return min(60.0, base * (2**attempt)) + random.uniform(0, 0.5)
 
 
 # ------------------------------------------------------------------
@@ -271,7 +277,7 @@ def robust_json_parse(text: str) -> dict | None:
     Returns parsed dict on success, None on failure.
     """
     cleaned = text.strip().removeprefix("﻿")  # strip BOM
-    cleaned = re.sub(r'<think>.*?</think>', '', cleaned, flags=re.DOTALL).strip()
+    cleaned = re.sub(r"<think>.*?</think>", "", cleaned, flags=re.DOTALL).strip()
 
     # 契约：只返回 dict（调用方按 dict 用）；数组等一律 None。
     # Try direct parse first
@@ -310,6 +316,7 @@ def robust_json_parse(text: str) -> dict | None:
 def _fix_trailing_commas(text: str) -> str | None:
     """Remove trailing commas before } or ]."""
     import re as _re
+
     return _re.sub(r",\s*([}\]])", r"\1", text)
 
 
@@ -331,6 +338,7 @@ def _fix_single_quotes(text: str) -> str | None:
 def _fix_unquoted_keys(text: str) -> str | None:
     """Quote unquoted JSON keys (like {key: 'value'} → {"key": "value"})."""
     import re as _re
+
     # Match patterns like `{key: ` or `,key: `
     if not _re.search(r"[{,]\s*[a-zA-Z_][a-zA-Z0-9_]*\s*:", text):
         return None
@@ -389,8 +397,11 @@ async def call_llm_with_retry(
             delay = jittered_backoff(attempt)
             logger.warning(
                 "%s: attempt %d/%d failed — %s, retrying in %.1fs",
-                tag, attempt + 1, max_retries + 1,
-                last_exc, delay,
+                tag,
+                attempt + 1,
+                max_retries + 1,
+                last_exc,
+                delay,
             )
             await asyncio.sleep(delay)
 

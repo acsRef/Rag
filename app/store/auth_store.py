@@ -1,4 +1,5 @@
 """User & role CRUD operations."""
+
 from passlib.context import CryptContext
 
 from app.config import settings
@@ -17,7 +18,14 @@ def verify_password(plain: str, hashed: str) -> bool:
 
 # ── User ────────────────────────────────────────────────
 
-def create_user(username: str, password: str, display_name: str = "", email: str = "", role_ids: list[int] | None = None) -> User:
+
+def create_user(
+    username: str,
+    password: str,
+    display_name: str = "",
+    email: str = "",
+    role_ids: list[int] | None = None,
+) -> User:
     session = get_session()
     try:
         user = User(
@@ -29,7 +37,7 @@ def create_user(username: str, password: str, display_name: str = "", email: str
         )
         session.add(user)
         session.flush()
-        for rid in (role_ids or []):
+        for rid in role_ids or []:
             session.add(UserRole(user_id=user.id, role_id=rid))
         session.commit()
         # commit 默认 expire 所有属性，必须先 refresh 再 expunge，
@@ -95,6 +103,7 @@ def set_user_roles(user_id: str, role_ids: list[int]):
 
 # ── Role ────────────────────────────────────────────────
 
+
 def create_role(name: str, description: str = "") -> Role:
     session = get_session()
     try:
@@ -124,6 +133,7 @@ def list_roles() -> list[Role]:
 
 # ── Permissions ─────────────────────────────────────────
 
+
 def set_role_permissions(role_id: int, permissions: list[str]):
     session = get_session()
     try:
@@ -138,7 +148,9 @@ def set_role_permissions(role_id: int, permissions: list[str]):
 def get_role_permissions(role_id: int) -> list[str]:
     session = get_session()
     try:
-        rows = session.query(RolePermission.permission).filter(RolePermission.role_id == role_id).all()
+        rows = (
+            session.query(RolePermission.permission).filter(RolePermission.role_id == role_id).all()
+        )
         return [r[0] for r in rows]
     finally:
         session.close()
@@ -147,15 +159,19 @@ def get_role_permissions(role_id: int) -> list[str]:
 def get_user_permissions(user_id: str) -> list[str]:
     session = get_session()
     try:
-        rows = session.query(RolePermission.permission)\
-            .join(UserRole, UserRole.role_id == RolePermission.role_id)\
-            .filter(UserRole.user_id == user_id).all()
+        rows = (
+            session.query(RolePermission.permission)
+            .join(UserRole, UserRole.role_id == RolePermission.role_id)
+            .filter(UserRole.user_id == user_id)
+            .all()
+        )
         return list(set(r[0] for r in rows))
     finally:
         session.close()
 
 
 # ── Seed ────────────────────────────────────────────────
+
 
 def seed_defaults():
     session = get_session()
@@ -167,8 +183,16 @@ def seed_defaults():
             session.flush()
 
             perms = {
-                admin_role.id: ["chat", "doc.upload", "doc.delete", "doc.read_all", "kb.create",
-                                "kb.delete", "kb.manage_visibility", "user.manage"],
+                admin_role.id: [
+                    "chat",
+                    "doc.upload",
+                    "doc.delete",
+                    "doc.read_all",
+                    "kb.create",
+                    "kb.delete",
+                    "kb.manage_visibility",
+                    "user.manage",
+                ],
                 user_role.id: ["chat", "doc.upload", "doc.delete"],
             }
             for rid, plist in perms.items():
@@ -176,8 +200,13 @@ def seed_defaults():
                     session.add(RolePermission(role_id=rid, permission=p))
 
             admin_pw = hash_password(settings.default_password)
-            admin = User(id=new_id(), username=settings.default_username, hashed_password=admin_pw,
-                         display_name="Administrator", email="admin@ragent.local")
+            admin = User(
+                id=new_id(),
+                username=settings.default_username,
+                hashed_password=admin_pw,
+                display_name="Administrator",
+                email="admin@ragent.local",
+            )
             session.add(admin)
             session.flush()
             session.add(UserRole(user_id=admin.id, role_id=admin_role.id))
@@ -190,10 +219,16 @@ def seed_defaults():
         anon = session.query(User).filter(User.id == "anonymous").first()
         if not anon:
             anon_pw = hash_password(new_id())
-            session.add(User(
-                id="anonymous", username="anonymous", hashed_password=anon_pw,
-                display_name="Anonymous User", email="", is_active=True,
-            ))
+            session.add(
+                User(
+                    id="anonymous",
+                    username="anonymous",
+                    hashed_password=anon_pw,
+                    display_name="Anonymous User",
+                    email="",
+                    is_active=True,
+                )
+            )
 
         session.commit()
     finally:
@@ -202,11 +237,16 @@ def seed_defaults():
 
 def _ensure_permission(session, role_name: str, permission: str):
     from app.store.db import Role, RolePermission
+
     role = session.query(Role).filter(Role.name == role_name).first()
     if role:
-        exists = session.query(RolePermission).filter(
-            RolePermission.role_id == role.id,
-            RolePermission.permission == permission,
-        ).first()
+        exists = (
+            session.query(RolePermission)
+            .filter(
+                RolePermission.role_id == role.id,
+                RolePermission.permission == permission,
+            )
+            .first()
+        )
         if not exists:
             session.add(RolePermission(role_id=role.id, permission=permission))

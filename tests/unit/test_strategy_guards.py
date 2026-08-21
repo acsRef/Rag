@@ -16,9 +16,7 @@ from app.core import retrieval as ret_mod
 def test_section_supplement_disabled_returns_results_unchanged(monkeypatch):
     monkeypatch.setattr(settings, "section_supplement_enabled", False)
     sentinel = [{"chunk_id": "c1"}, {"chunk_id": "c2"}]
-    out = ret_mod._supplement_authoritative_sections(
-        sentinel, "q", [], None, False, "u1"
-    )
+    out = ret_mod._supplement_authoritative_sections(sentinel, "q", [], None, False, "u1")
     assert out is sentinel, "关时应原样返回（不开新检索）"
 
 
@@ -44,9 +42,7 @@ def test_section_supplement_enabled_calls_inner_logic(monkeypatch):
 def test_year_supplement_disabled_returns_results_unchanged(monkeypatch):
     monkeypatch.setattr(settings, "year_supplement_enabled", False)
     sentinel = [{"chunk_id": "c1", "year": "2024"}]
-    out = ret_mod._supplement_missing_years(
-        sentinel, "q", [], None, False, "u1"
-    )
+    out = ret_mod._supplement_missing_years(sentinel, "q", [], None, False, "u1")
     assert out is sentinel
 
 
@@ -59,9 +55,7 @@ def test_year_supplement_enabled_calls_inner_logic(monkeypatch):
         return [{"chunk_id": "year-supplemented"}]
 
     monkeypatch.setattr(ret_mod, "_supplement_missing_years", fake)
-    out = ret_mod._supplement_missing_years(
-        [{"chunk_id": "c1"}], "q", ["kb1"], None, False, "u1"
-    )
+    out = ret_mod._supplement_missing_years([{"chunk_id": "c1"}], "q", ["kb1"], None, False, "u1")
     assert called["n"] == 1
     assert out == [{"chunk_id": "year-supplemented"}]
 
@@ -102,14 +96,17 @@ def test_section_boost_enabled_with_no_query_match_leaves_results(monkeypatch):
 def test_cross_doc_disabled_returns_empty_extra(monkeypatch):
     """cross_doc_enabled=False 时 _cross_doc_extra 返回 ([], 0)。"""
     monkeypatch.setattr(settings, "cross_doc_enabled", False)
+
     # 即使内部 cross_doc_retriever 抛错也不该被触达
     def explode(*args, **kwargs):
         raise RuntimeError("must not be called when disabled")
+
     monkeypatch.setattr(ret_mod.cross_doc_retriever, "retrieve_sync", explode)
     import asyncio
-    extra, count = asyncio.run(ret_mod._cross_doc_extra(
-        "q", [0.0]*4, ["kb1"], [], None, False, "u1"
-    ))
+
+    extra, count = asyncio.run(
+        ret_mod._cross_doc_extra("q", [0.0] * 4, ["kb1"], [], None, False, "u1")
+    )
     assert extra == []
     assert count == 0
 
@@ -118,13 +115,15 @@ def test_cross_doc_enabled_calls_inner(monkeypatch):
     """cross_doc_enabled=True 时正常走 cross_doc_retriever。"""
     monkeypatch.setattr(settings, "cross_doc_enabled", True)
     monkeypatch.setattr(
-        ret_mod.cross_doc_retriever, "retrieve_sync",
+        ret_mod.cross_doc_retriever,
+        "retrieve_sync",
         lambda *a, **kw: [{"chunk_id": "x1", "score": 0.8}],
     )
     import asyncio
-    extra, count = asyncio.run(ret_mod._cross_doc_extra(
-        "q", [0.0]*4, ["kb1"], [], None, False, "u1"
-    ))
+
+    extra, count = asyncio.run(
+        ret_mod._cross_doc_extra("q", [0.0] * 4, ["kb1"], [], None, False, "u1")
+    )
     assert count == 1
     assert extra[0]["chunk_id"] == "x1"
 
@@ -167,13 +166,16 @@ def test_pipeline_query_decomposition_disabled_forces_needs_decomp_false(monkeyp
 
     # 模拟 pipeline 入口的逻辑：needs_decomp = settings.query_decomposition_enabled and _needs_decomposition(...)
     # 如果 explode 被调用，会抛 RuntimeError
-    needs_decomp = settings.query_decomposition_enabled and pipe_mod._needs_decomposition("跨年对比查询")
+    needs_decomp = settings.query_decomposition_enabled and pipe_mod._needs_decomposition(
+        "跨年对比查询"
+    )
     assert needs_decomp is False
 
 
 def test_pipeline_query_decomposition_enabled_calls_inner(monkeypatch):
     monkeypatch.setattr(settings, "query_decomposition_enabled", True)
     from app.core import pipeline as pipe_mod
+
     called = {"n": 0}
     orig = pipe_mod._needs_decomposition
 
@@ -183,6 +185,8 @@ def test_pipeline_query_decomposition_enabled_calls_inner(monkeypatch):
 
     monkeypatch.setattr(pipe_mod, "_needs_decomposition", tracking)
     # 走真函数确认守卫没破坏正常路径
-    out = settings.query_decomposition_enabled and pipe_mod._needs_decomposition("对比 2023 vs 2024 营收")
+    out = settings.query_decomposition_enabled and pipe_mod._needs_decomposition(
+        "对比 2023 vs 2024 营收"
+    )
     assert called["n"] == 1
     assert out is True

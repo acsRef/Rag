@@ -4,6 +4,7 @@
 渠道拆分、成本毛利、集团 KPI、渠道手册），互相之间通过产品名/区域名/
 渠道名构成交叉关系。仅当 RAGENT_LIVE_LLM=1 且 key 齐备时运行。
 """
+
 from pathlib import Path
 
 import pytest
@@ -32,8 +33,10 @@ def table_corpus(integration_db, live_env):
     ids = {}
     for name in DOC_FILES:
         res = document_indexer.index(
-            name, (TABLE_DIR / name).read_bytes(),
-            kb_id="test-kb", user_id="test-user",
+            name,
+            (TABLE_DIR / name).read_bytes(),
+            kb_id="test-kb",
+            user_id="test-user",
         )
         assert res["status"] == "indexed", "摄入 %s 失败: %s" % (name, res)
         ids[name] = res["document_id"]
@@ -71,7 +74,8 @@ async def test_retrieval_region_specific_query(table_corpus):
     from app.core.retrieval import retrieval_engine
 
     results = await retrieval_engine.retrieve(
-        "智享家Pro 2024年Q3 华东区销售额", None, can_read_all=True)
+        "智享家Pro 2024年Q3 华东区销售额", None, can_read_all=True
+    )
     assert results
     top_docs = [r.document_id for r in results[:3]]
     assert table_corpus["sales_east_2024.md"] in top_docs
@@ -82,7 +86,8 @@ async def test_retrieval_cost_query_hits_cost_doc(table_corpus):
     from app.core.retrieval import retrieval_engine
 
     results = await retrieval_engine.retrieve(
-        "智享家Pro 的毛利率和单位成本是多少", None, can_read_all=True)
+        "智享家Pro 的毛利率和单位成本是多少", None, can_read_all=True
+    )
     assert results
     top_docs = [r.document_id for r in results[:3]]
     assert table_corpus["product_cost_margin.md"] in top_docs
@@ -93,7 +98,8 @@ async def test_retrieval_comparison_spans_regions(table_corpus):
     from app.core.retrieval import retrieval_engine
 
     results = await retrieval_engine.retrieve(
-        "华东区和华南区 智享家Pro 销售额对比", None, can_read_all=True)
+        "华东区和华南区 智享家Pro 销售额对比", None, can_read_all=True
+    )
     assert results
     top_doc_set = {r.document_id for r in results[:6]}
     region_docs = {
@@ -110,6 +116,7 @@ async def test_mmr_per_doc_soft_cap(table_corpus):
     from app.core.retrieval import retrieval_engine
 
     results = await retrieval_engine.retrieve(
-        "2024 年各产品线销售额与毛利率", None, can_read_all=True)
+        "2024 年各产品线销售额与毛利率", None, can_read_all=True
+    )
     counts = Counter(r.document_id for r in results)
     assert counts.most_common(1)[0][1] <= 3

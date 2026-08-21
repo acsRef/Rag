@@ -1,6 +1,7 @@
 """逐个重评 eval_results.json 中评分为 -1 的题。
 不重跑 RAG（答案已缓存），只重新调裁判 API 多次。
 """
+
 import json
 import os
 import re
@@ -19,8 +20,8 @@ TESTSET_PATH = "D:/PyProject/ragent-py/eval/sany_annual_reports/rag_testset.json
 def judge(question_data, rag_answer):
     prompt = f"""根据参考答案判断RAG回答的准确度(0-3分)。
 
-问题: {question_data['问题']}
-参考答案: {question_data['参考答案'][:300]}
+问题: {question_data["问题"]}
+参考答案: {question_data["参考答案"][:300]}
 RAG回答: {rag_answer[:800]}
 
 3=完全正确;2=基本正确有小偏差;1=部分正确有明显错误;0=错误/拒答/编造。
@@ -34,15 +35,17 @@ RAG回答: {rag_answer[:800]}
         try:
             resp = requests.post(
                 f"{base_url}/chat/completions",
-                headers={"Authorization": f"Bearer {api_key}",
-                         "Content-Type": "application/json"},
-                json={"model": model,
-                      "messages": [{"role": "user", "content": prompt}],
-                      "temperature": 0.1, "max_tokens": 200},
+                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                json={
+                    "model": model,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "temperature": 0.1,
+                    "max_tokens": 200,
+                },
                 timeout=180,  # 给大模型充足时间
             )
             content = resp.json()["choices"][0]["message"]["content"] or ""
-            content = re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL).strip()
+            content = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL).strip()
             if not content:
                 if attempt < 4:
                     time.sleep(5)  # 退避
@@ -73,15 +76,18 @@ def main():
     questions = {q["id"]: q for q in testset["题目"]}
 
     # 找出未评分的题
-    targets = [qid for qid, r in results.items()
-               if r.get("judge_score") is None or r.get("judge_score") < 0]
+    targets = [
+        qid
+        for qid, r in results.items()
+        if r.get("judge_score") is None or r.get("judge_score") < 0
+    ]
     print(f"需要重评 {len(targets)} 题: {targets}\n")
 
     updated = 0
     for i, qid in enumerate(targets):
         r = results[qid]
         if not r.get("rag_answer"):
-            print(f"[{i+1}/{len(targets)}] {qid} 无 RAG 答案，跳过")
+            print(f"[{i + 1}/{len(targets)}] {qid} 无 RAG 答案，跳过")
             continue
 
         q = questions.get(qid, {})
@@ -91,9 +97,9 @@ def main():
             results[qid]["judge_score"] = score
             results[qid]["judge_reason"] = reason
             updated += 1
-            print(f"[{i+1}/{len(targets)}] {qid} → {score}分 ({reason[:50]})")
+            print(f"[{i + 1}/{len(targets)}] {qid} → {score}分 ({reason[:50]})")
         else:
-            print(f"[{i+1}/{len(targets)}] {qid} → 仍失败 ({reason})")
+            print(f"[{i + 1}/{len(targets)}] {qid} → 仍失败 ({reason})")
 
         time.sleep(2)
 

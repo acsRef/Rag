@@ -3,6 +3,7 @@
 烟测实锤：DeepSeek-R1 把路由任务当通用问答，输出推理轨迹/长段 markdown，3/3 不吐 JSON
 → robust_json_parse 失败 → 空 matches → 全库回退。此测试锁定 prompt 必须有强格式约束。
 """
+
 from app.core.intent import INTENT_CLASSIFIER_PROMPT
 
 

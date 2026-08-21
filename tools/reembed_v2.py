@@ -25,6 +25,7 @@
     # 限制 + dry-run
     D:/miniConda/envs/rag/python.exe tools/reembed_v2.py --limit 50 --dry-run
 """
+
 from __future__ import annotations
 
 import argparse
@@ -64,10 +65,7 @@ def _load_chunks(limit: int | None, target_version: int):
         if limit:
             stmt = stmt.limit(limit)
         rows = session.execute(stmt).all()
-    return [
-        (chunk.chunk_id, chunk, filename)
-        for (chunk, filename) in rows
-    ]
+    return [(chunk.chunk_id, chunk, filename) for (chunk, filename) in rows]
 
 
 def _build_text(chunk, filename: str, use_build: bool) -> str:
@@ -77,6 +75,7 @@ def _build_text(chunk, filename: str, use_build: bool) -> str:
     from types import SimpleNamespace
 
     from app.ingestion.embedding_text import build_embedding_text
+
     doc = SimpleNamespace(filename=filename)
     return build_embedding_text(chunk, doc)
 
@@ -125,7 +124,11 @@ async def run(limit: int | None, target_version: int, use_build: bool, dry_run: 
 
     logger.info(
         "Found %d chunks to reembed (target_version=%d, use_build=%s, limit=%s, dry_run=%s)",
-        total, target_version, use_build, limit, dry_run,
+        total,
+        target_version,
+        use_build,
+        limit,
+        dry_run,
     )
 
     written = 0
@@ -163,34 +166,49 @@ async def run(limit: int | None, target_version: int, use_build: bool, dry_run: 
             elapsed = time.monotonic() - t0
             logger.info(
                 "  progress %d/%d (%.1fs elapsed, written=%d failed=%d)",
-                min(batch_start + BATCH_SIZE, total), total, elapsed, written, failed,
+                min(batch_start + BATCH_SIZE, total),
+                total,
+                elapsed,
+                written,
+                failed,
             )
 
     elapsed = time.monotonic() - t0
     logger.info(
         "Done. processed=%d written=%d failed=%d elapsed=%.1fs (%.1f chunks/s)",
-        total, written, failed, elapsed, total / elapsed if elapsed > 0 else 0,
+        total,
+        written,
+        failed,
+        elapsed,
+        total / elapsed if elapsed > 0 else 0,
     )
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--limit", type=int, default=None,
-                        help="只处理前 N 条（smoke 用）")
-    parser.add_argument("--target-version", type=int, default=1,
-                        help="目标 embedding_version（默认 1 = 生产 chunk-only）")
-    parser.add_argument("--use-build-embedding-text", action="store_true",
-                        help="用 build_embedding_text() 加 document/section prefix（实验性）")
-    parser.add_argument("--dry-run", action="store_true",
-                        help="不写 DB，仅打印统计")
+    parser.add_argument("--limit", type=int, default=None, help="只处理前 N 条（smoke 用）")
+    parser.add_argument(
+        "--target-version",
+        type=int,
+        default=1,
+        help="目标 embedding_version（默认 1 = 生产 chunk-only）",
+    )
+    parser.add_argument(
+        "--use-build-embedding-text",
+        action="store_true",
+        help="用 build_embedding_text() 加 document/section prefix（实验性）",
+    )
+    parser.add_argument("--dry-run", action="store_true", help="不写 DB，仅打印统计")
     args = parser.parse_args()
 
-    asyncio.run(run(
-        limit=args.limit,
-        target_version=args.target_version,
-        use_build=args.use_build_embedding_text,
-        dry_run=args.dry_run,
-    ))
+    asyncio.run(
+        run(
+            limit=args.limit,
+            target_version=args.target_version,
+            use_build=args.use_build_embedding_text,
+            dry_run=args.dry_run,
+        )
+    )
 
 
 if __name__ == "__main__":

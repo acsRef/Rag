@@ -13,6 +13,7 @@ section_path / table_title / figure_title 等元数据前缀，让 embedding 知
 注：用 SimpleNamespace 模拟 Chunk/Document（避免 SQLAlchemy __init__ 限制 + 不
 依赖尚未加列的字段如 table_title / figure_title）。
 """
+
 from types import SimpleNamespace
 
 from app.ingestion.embedding_text import build_embedding_text

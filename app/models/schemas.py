@@ -5,11 +5,14 @@ from pydantic import BaseModel, Field
 
 # ── Auth ────────────────────────────────────────────────
 
+
 class RegisterRequest(BaseModel):
     username: str = Field(min_length=2, max_length=64)
     password: str = Field(min_length=6, max_length=128)
     display_name: str = Field(default="", max_length=128)
-    email: str = Field(default="", max_length=256, pattern=r"^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$|^$")
+    email: str = Field(
+        default="", max_length=256, pattern=r"^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$|^$"
+    )
 
 
 class LoginRequest(BaseModel):
@@ -59,6 +62,7 @@ class UserRoleUpdateRequest(BaseModel):
 
 # ── Knowledge Base ──────────────────────────────────────
 
+
 class KBCreateRequest(BaseModel):
     name: str = Field(min_length=1, max_length=128)
     visibility: Literal["public", "internal", "restricted"] = "public"
@@ -77,6 +81,7 @@ class KBRoleAccessRequest(BaseModel):
 
 
 # ── Document ────────────────────────────────────────────
+
 
 class DocumentUploadResponse(BaseModel):
     document_id: str
@@ -97,6 +102,7 @@ class DocumentStatusResponse(BaseModel):
 
 # ── Chat ────────────────────────────────────────────────
 
+
 class ChatRequest(BaseModel):
     conversation_id: str | None = None
     query: str = Field(min_length=1, max_length=4096)
@@ -111,6 +117,7 @@ class ChatMessage(BaseModel):
 
 
 # ── RAG internals ───────────────────────────────────────
+
 
 class RewriteResult(BaseModel):
     rewritten_query: str
@@ -161,6 +168,7 @@ class SourceInfo(BaseModel):
 
 # ── Retrieve（只检索不生成，供字典桥/外部消费） ────────────
 
+
 class RetrieveRequest(BaseModel):
     query: str = Field(min_length=1, max_length=4096)
     kb_ids: list[str] = Field(min_length=1, max_length=20)
@@ -169,6 +177,7 @@ class RetrieveRequest(BaseModel):
 
 class RetrievedItem(BaseModel):
     """对外 /retrieve 线路契约；内部管线请用 RetrievedChunk。"""
+
     chunk_id: str
     document_id: str
     text: str

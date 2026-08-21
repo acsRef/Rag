@@ -1,4 +1,4 @@
-﻿"""pgvector-based vector search + BM25 lexical search with permission filtering.
+"""pgvector-based vector search + BM25 lexical search with permission filtering.
 
 检索方法:
   - `search`: 纯向量余弦相似度检索
@@ -9,6 +9,7 @@
   过滤逻辑对所有检索方法一致:admin (can_read_all=True) 跳过,否则只返回
   visibility='public' 或 allowed_roles 与用户角色有交集的 chunk。
 """
+
 import logging
 import re
 import time
@@ -39,22 +40,25 @@ def add_chunks(chunks_data: list[dict]):
     try:
         base_ts = utc_now()
         for i, c in enumerate(chunks_data):
-            session.add(Chunk(
-                chunk_id=c["chunk_id"],
-                document_id=c["document_id"],
-                kb_id=c["kb_id"],
-                text=c["text"],
-                embedding=c["embedding"],
-                title=c.get("title", ""),
-                summary=c.get("summary", ""),
-                questions=c.get("questions", ""),
-                section_path=c.get("section_path", ""),
-                search_text=c.get("search_text", ""),
-                content_hash=c.get("content_hash", ""),
-                visibility=c.get("visibility", "public"),
-                allowed_roles=c.get("allowed_roles", []),
-                created_at=base_ts + timedelta(microseconds=i),  # timedelta 自动进位，不再微秒溢出
-            ))
+            session.add(
+                Chunk(
+                    chunk_id=c["chunk_id"],
+                    document_id=c["document_id"],
+                    kb_id=c["kb_id"],
+                    text=c["text"],
+                    embedding=c["embedding"],
+                    title=c.get("title", ""),
+                    summary=c.get("summary", ""),
+                    questions=c.get("questions", ""),
+                    section_path=c.get("section_path", ""),
+                    search_text=c.get("search_text", ""),
+                    content_hash=c.get("content_hash", ""),
+                    visibility=c.get("visibility", "public"),
+                    allowed_roles=c.get("allowed_roles", []),
+                    created_at=base_ts
+                    + timedelta(microseconds=i),  # timedelta 自动进位，不再微秒溢出
+                )
+            )
         session.commit()
     finally:
         session.close()
@@ -64,11 +68,7 @@ def get_chunks_by_document(document_id: str) -> list[dict]:
     """Return all chunks for a document, keyed by content_hash for reuse lookup."""
     session = get_session()
     try:
-        rows = (
-            session.query(Chunk)
-            .filter(Chunk.document_id == document_id)
-            .all()
-        )
+        rows = session.query(Chunk).filter(Chunk.document_id == document_id).all()
         return [
             {
                 "chunk_id": r.chunk_id,
@@ -113,8 +113,13 @@ def search(
     rows = []  # finally 的 debug 日志引用 rows；execute 抛错时不得再抛 UnboundLocalError 掩盖原始异常
     session = get_session()
     t0 = time.monotonic()
-    logger.debug("vector.search.start kb_count=%d top_k=%d can_read_all=%s doc_filter=%s",
-                 len(kb_ids), top_k, can_read_all, len(document_ids) if document_ids else "none")
+    logger.debug(
+        "vector.search.start kb_count=%d top_k=%d can_read_all=%s doc_filter=%s",
+        len(kb_ids),
+        top_k,
+        can_read_all,
+        len(document_ids) if document_ids else "none",
+    )
     try:
         doc_filter = ""
         if document_ids:
@@ -165,7 +170,11 @@ def search(
         ]
     finally:
         session.close()
-        logger.debug("vector.search.done row_count=%d elapsed_ms=%.1f", len(rows), (time.monotonic() - t0) * 1000)
+        logger.debug(
+            "vector.search.done row_count=%d elapsed_ms=%.1f",
+            len(rows),
+            (time.monotonic() - t0) * 1000,
+        )
 
 
 # tsquery 运算符/分隔符字符——jieba 分词结果若携带这些字符（如查询 "C++"、
@@ -232,8 +241,12 @@ def bm25_search(
     rows = []  # 同 search()：防 finally 日志以 UnboundLocalError 掩盖原始异常
     session = get_session()
     t0 = time.monotonic()
-    logger.debug("bm25.search.start kb_count=%d top_k=%d doc_filter=%s",
-                 len(kb_ids), top_k, len(document_ids) if document_ids else "none")
+    logger.debug(
+        "bm25.search.start kb_count=%d top_k=%d doc_filter=%s",
+        len(kb_ids),
+        top_k,
+        len(document_ids) if document_ids else "none",
+    )
     try:
         doc_filter = ""
         if document_ids:
@@ -287,7 +300,11 @@ def bm25_search(
         ]
     finally:
         session.close()
-        logger.debug("bm25.search.done row_count=%d elapsed_ms=%.1f", len(rows), (time.monotonic() - t0) * 1000)
+        logger.debug(
+            "bm25.search.done row_count=%d elapsed_ms=%.1f",
+            len(rows),
+            (time.monotonic() - t0) * 1000,
+        )
 
 
 # ── Chunk Questions (multi-channel retrieval) ─────────────
@@ -310,8 +327,10 @@ def upsert_chunk_questions(questions_data: list[dict]):
         )
         for q in questions_data:
             session.execute(
-                text("INSERT INTO chunk_questions (chunk_id, question, embedding, position) "
-                     "VALUES (:chunk_id, :question, :embedding, :position)"),
+                text(
+                    "INSERT INTO chunk_questions (chunk_id, question, embedding, position) "
+                    "VALUES (:chunk_id, :question, :embedding, :position)"
+                ),
                 {
                     "chunk_id": q["chunk_id"],
                     "question": q["question"],
@@ -343,8 +362,12 @@ def question_vector_search(
     rows = []  # 同 search()：防 finally 日志以 UnboundLocalError 掩盖原始异常
     session = get_session()
     t0 = time.monotonic()
-    logger.debug("question_vector.search.start kb_count=%d top_k=%d doc_filter=%s",
-                 len(kb_ids), top_k, len(document_ids) if document_ids else "none")
+    logger.debug(
+        "question_vector.search.start kb_count=%d top_k=%d doc_filter=%s",
+        len(kb_ids),
+        top_k,
+        len(document_ids) if document_ids else "none",
+    )
     try:
         doc_filter = ""
         if document_ids:
@@ -399,8 +422,11 @@ def question_vector_search(
         ]
     finally:
         session.close()
-        logger.debug("question_vector.search.done row_count=%d elapsed_ms=%.1f",
-                     len(rows), (time.monotonic() - t0) * 1000)
+        logger.debug(
+            "question_vector.search.done row_count=%d elapsed_ms=%.1f",
+            len(rows),
+            (time.monotonic() - t0) * 1000,
+        )
 
 
 def hybrid_search(
@@ -437,12 +463,22 @@ def hybrid_search(
 
     t0 = time.monotonic()
     vector_results = search(
-        kb_ids, embedding, user_role_ids, can_read_all, top_k=fetch_k,
-        user_id=user_id, document_ids=effective_doc_ids,
+        kb_ids,
+        embedding,
+        user_role_ids,
+        can_read_all,
+        top_k=fetch_k,
+        user_id=user_id,
+        document_ids=effective_doc_ids,
     )
     bm25_results = bm25_search(
-        kb_ids, query, user_role_ids, can_read_all, top_k=fetch_k,
-        user_id=user_id, document_ids=effective_doc_ids,
+        kb_ids,
+        query,
+        user_role_ids,
+        can_read_all,
+        top_k=fetch_k,
+        user_id=user_id,
+        document_ids=effective_doc_ids,
     )
 
     channel_weights: dict[str, float] = {}
@@ -451,7 +487,9 @@ def hybrid_search(
     def _accumulate(results: list[dict], channel: str, weight: float = 1.0):
         channel_weights[channel] = weight
         for rank, r in enumerate(results):
-            rrf_scores[r["chunk_id"]] = rrf_scores.get(r["chunk_id"], 0) + weight / (rrf_k + rank + 1)
+            rrf_scores[r["chunk_id"]] = rrf_scores.get(r["chunk_id"], 0) + weight / (
+                rrf_k + rank + 1
+            )
 
     _accumulate(vector_results, "vector")
     _accumulate(bm25_results, "bm25")
@@ -459,13 +497,15 @@ def hybrid_search(
     question_results = []
     if enable_question_channel:
         question_results = question_vector_search(
-            kb_ids, embedding, user_role_ids, can_read_all,
+            kb_ids,
+            embedding,
+            user_role_ids,
+            can_read_all,
             top_k=settings.question_channel_top_k,
             user_id=user_id,
             document_ids=effective_doc_ids,
         )
-        _accumulate(question_results, "question",
-                    weight=settings.question_channel_rrf_weight)
+        _accumulate(question_results, "question", weight=settings.question_channel_rrf_weight)
 
     merged: dict[str, dict] = {}
     for r in vector_results:
@@ -480,8 +520,13 @@ def hybrid_search(
     # ── Fallback: 如果 RRF 融合结果不足 top_k，用原始 query 重试 BM25 ──
     if len(ranked) < top_k:
         relaxed_bm25 = bm25_search(
-            kb_ids, query, user_role_ids, can_read_all,
-            top_k=fetch_k, stopwords=False, user_id=user_id,
+            kb_ids,
+            query,
+            user_role_ids,
+            can_read_all,
+            top_k=fetch_k,
+            stopwords=False,
+            user_id=user_id,
             document_ids=effective_doc_ids,
         )
         existing_ids = {r["chunk_id"] for r in ranked}
@@ -489,10 +534,14 @@ def hybrid_search(
         if new_from_bm25:
             logger.info(
                 "hybrid.fallback relaxed_bm25 new=%d had=%d target=%d",
-                len(new_from_bm25), len(ranked), top_k,
+                len(new_from_bm25),
+                len(ranked),
+                top_k,
             )
             for rank, r in enumerate(new_from_bm25):
-                rrf_scores[r["chunk_id"]] = rrf_scores.get(r["chunk_id"], 0) + 0.5 / (rrf_k + rank + 1)
+                rrf_scores[r["chunk_id"]] = rrf_scores.get(r["chunk_id"], 0) + 0.5 / (
+                    rrf_k + rank + 1
+                )
                 ranked.append(r)
             ranked.sort(key=lambda r: rrf_scores[r["chunk_id"]], reverse=True)
 
@@ -500,10 +549,13 @@ def hybrid_search(
         r["score"] = rrf_scores[r["chunk_id"]]
 
     logger.info(
-        "hybrid.search.done vec=%d bm25=%d qvec=%d merged=%d rrf_k=%d "
-        "channels=%s elapsed_ms=%.1f",
-        len(vector_results), len(bm25_results), len(question_results),
-        len(merged), rrf_k, list(channel_weights.keys()),
+        "hybrid.search.done vec=%d bm25=%d qvec=%d merged=%d rrf_k=%d channels=%s elapsed_ms=%.1f",
+        len(vector_results),
+        len(bm25_results),
+        len(question_results),
+        len(merged),
+        rrf_k,
+        list(channel_weights.keys()),
         (time.monotonic() - t0) * 1000,
     )
     return ranked[:top_k]
@@ -523,8 +575,8 @@ def replace_chunks(document_id: str, chunks_data: list[dict]):
     session = get_session()
     try:
         existing_ids = {
-            r[0] for r in session.query(Chunk.chunk_id)
-            .filter(Chunk.document_id == document_id).all()
+            r[0]
+            for r in session.query(Chunk.chunk_id).filter(Chunk.document_id == document_id).all()
         }
         new_ids = {c["chunk_id"] for c in chunks_data}
         gone_ids = existing_ids - new_ids
@@ -561,13 +613,16 @@ def replace_chunks(document_id: str, chunks_data: list[dict]):
             )
             if c["chunk_id"] in existing_ids:
                 session.query(Chunk).filter(Chunk.chunk_id == c["chunk_id"]).update(
-                    values, synchronize_session=False)
+                    values, synchronize_session=False
+                )
             else:
-                session.add(Chunk(
-                    chunk_id=c["chunk_id"],
-                    document_id=c["document_id"],
-                    **values,
-                ))
+                session.add(
+                    Chunk(
+                        chunk_id=c["chunk_id"],
+                        document_id=c["document_id"],
+                        **values,
+                    )
+                )
         session.commit()
     finally:
         session.close()
@@ -600,6 +655,7 @@ def get_neighbor_chunks(
         return {}
 
     from collections import defaultdict
+
     doc_anchors: dict[str, list[str]] = defaultdict(list)
     for doc_id, cid in anchors:
         if doc_id and cid:
@@ -625,7 +681,9 @@ def get_neighbor_chunks(
                 if idx is None:
                     continue
                 before = [text_map[order[j]] for j in range(max(0, idx - expand_n), idx)]
-                after = [text_map[order[j]] for j in range(idx + 1, min(len(order), idx + 1 + expand_n))]
+                after = [
+                    text_map[order[j]] for j in range(idx + 1, min(len(order), idx + 1 + expand_n))
+                ]
                 result[cid] = {
                     "before": "\n".join(before),
                     "after": "\n".join(after),
@@ -637,8 +695,10 @@ def get_neighbor_chunks(
 
 # ── Cross-Doc Relation Store Methods ────────────────────
 
+
 def save_doc_entities(document_id: str, entities: list[tuple[str, int]]):
     from app.store.db import DocEntity
+
     session = get_session()
     try:
         session.query(DocEntity).filter(DocEntity.document_id == document_id).delete()
@@ -653,6 +713,7 @@ def get_doc_entities_bulk(doc_ids: list[str]) -> dict[str, list[tuple[str, int]]
     if not doc_ids:
         return {}
     from app.store.db import DocEntity
+
     session = get_session()
     try:
         rows = (
@@ -673,6 +734,7 @@ def get_doc_entities_bulk(doc_ids: list[str]) -> dict[str, list[tuple[str, int]]
 
 def get_all_doc_ids_with_entities(kb_ids: list[str] | None = None) -> list[str]:
     from app.store.db import DocEntity, Document
+
     session = get_session()
     try:
         q = session.query(DocEntity.document_id).distinct()
@@ -694,18 +756,19 @@ def get_global_df() -> tuple[dict[str, int], int]:
     refresh_global_stats 的"seen_in_doc 去重后计数"。
     """
     from app.store.db import DocEntity
+
     session = get_session()
     try:
         rows = (
             session.query(
                 DocEntity.entity,
                 func.count(func.distinct(DocEntity.document_id)),
-            ).group_by(DocEntity.entity).all()
+            )
+            .group_by(DocEntity.entity)
+            .all()
         )
         df = {entity: cnt for entity, cnt in rows}
-        total = session.query(
-            func.count(func.distinct(DocEntity.document_id))
-        ).scalar() or 0
+        total = session.query(func.count(func.distinct(DocEntity.document_id))).scalar() or 0
         return df, total
     finally:
         session.close()
@@ -720,6 +783,7 @@ def get_doc_ids_with_any_entity(terms: list[str]) -> list[str]:
     if not terms:
         return []
     from app.store.db import DocEntity
+
     session = get_session()
     try:
         rows = (
@@ -735,13 +799,10 @@ def get_doc_ids_with_any_entity(terms: list[str]) -> list[str]:
 
 def get_doc_relations(doc_id: str) -> list[dict]:
     from app.store.db import DocRelation
+
     session = get_session()
     try:
-        rows = (
-            session.query(DocRelation)
-            .filter(DocRelation.source_doc == doc_id)
-            .all()
-        )
+        rows = session.query(DocRelation).filter(DocRelation.source_doc == doc_id).all()
         return [
             {
                 "target_doc": r.target_doc,
@@ -758,22 +819,21 @@ def get_doc_relations(doc_id: str) -> list[dict]:
 
 def replace_doc_relations(source_doc: str, relations: list[dict]):
     from app.store.db import DocRelation
+
     session = get_session()
     try:
-        session.query(DocRelation).filter(
-            DocRelation.source_doc == source_doc
-        ).delete()
-        session.query(DocRelation).filter(
-            DocRelation.target_doc == source_doc
-        ).delete()
+        session.query(DocRelation).filter(DocRelation.source_doc == source_doc).delete()
+        session.query(DocRelation).filter(DocRelation.target_doc == source_doc).delete()
         for rel in relations:
-            session.add(DocRelation(
-                source_doc=rel["source_doc"],
-                target_doc=rel["target_doc"],
-                cosine=rel["cosine"],
-                entity_jaccard=rel["entity_jaccard"],
-                relation_type=rel.get("relation_type", "unknown"),
-            ))
+            session.add(
+                DocRelation(
+                    source_doc=rel["source_doc"],
+                    target_doc=rel["target_doc"],
+                    cosine=rel["cosine"],
+                    entity_jaccard=rel["entity_jaccard"],
+                    relation_type=rel.get("relation_type", "unknown"),
+                )
+            )
         session.commit()
     except Exception:
         session.rollback()
@@ -784,6 +844,7 @@ def replace_doc_relations(source_doc: str, relations: list[dict]):
 
 def clear_all_relations():
     from app.store.db import DocRelation
+
     session = get_session()
     try:
         session.query(DocRelation).delete()
@@ -794,14 +855,11 @@ def clear_all_relations():
 
 def delete_doc_relations_by_doc_id(doc_id: str):
     from app.store.db import DocRelation
+
     session = get_session()
     try:
-        session.query(DocRelation).filter(
-            DocRelation.source_doc == doc_id
-        ).delete()
-        session.query(DocRelation).filter(
-            DocRelation.target_doc == doc_id
-        ).delete()
+        session.query(DocRelation).filter(DocRelation.source_doc == doc_id).delete()
+        session.query(DocRelation).filter(DocRelation.target_doc == doc_id).delete()
         session.commit()
     except Exception:
         session.rollback()
@@ -812,16 +870,19 @@ def delete_doc_relations_by_doc_id(doc_id: str):
 
 def bulk_save_relations(relations: list[dict]):
     from app.store.db import DocRelation
+
     session = get_session()
     try:
         for rel in relations:
-            session.add(DocRelation(
-                source_doc=rel["source_doc"],
-                target_doc=rel["target_doc"],
-                cosine=rel["cosine"],
-                entity_jaccard=rel["entity_jaccard"],
-                relation_type=rel.get("relation_type", "unknown"),
-            ))
+            session.add(
+                DocRelation(
+                    source_doc=rel["source_doc"],
+                    target_doc=rel["target_doc"],
+                    cosine=rel["cosine"],
+                    entity_jaccard=rel["entity_jaccard"],
+                    relation_type=rel.get("relation_type", "unknown"),
+                )
+            )
         session.commit()
     finally:
         session.close()
@@ -829,6 +890,7 @@ def bulk_save_relations(relations: list[dict]):
 
 def get_doc_embedding(document_id: str) -> list[float] | None:
     from app.store.db import DocEmbedding
+
     session = get_session()
     try:
         row = (
@@ -848,6 +910,7 @@ def get_doc_embeddings_bulk(doc_ids: list[str]) -> dict[str, list[float]]:
     if not doc_ids:
         return {}
     from app.store.db import DocEmbedding
+
     session = get_session()
     try:
         rows = (
@@ -862,31 +925,32 @@ def get_doc_embeddings_bulk(doc_ids: list[str]) -> dict[str, list[float]]:
 
 def upsert_doc_embedding(document_id: str, embedding: list[float], chunk_count: int):
     from app.store.db import DocEmbedding, utc_now
+
     session = get_session()
     try:
         existing = (
-            session.query(DocEmbedding)
-            .filter(DocEmbedding.document_id == document_id)
-            .first()
+            session.query(DocEmbedding).filter(DocEmbedding.document_id == document_id).first()
         )
         if existing:
             existing.embedding = embedding
             existing.chunk_count = chunk_count
             existing.updated_at = utc_now()
         else:
-            session.add(DocEmbedding(
-                document_id=document_id,
-                embedding=embedding,
-                chunk_count=chunk_count,
-            ))
+            session.add(
+                DocEmbedding(
+                    document_id=document_id,
+                    embedding=embedding,
+                    chunk_count=chunk_count,
+                )
+            )
         session.commit()
     finally:
         session.close()
 
 
-
-
-_CHUNKS_PER_NEIGHBOR_DOC = 10   # 跨文档邻居每文档上限：代表性上下文即可，最终条数由 rerank_top_k 收口
+_CHUNKS_PER_NEIGHBOR_DOC = (
+    10  # 跨文档邻居每文档上限：代表性上下文即可，最终条数由 rerank_top_k 收口
+)
 
 
 def get_chunks_by_documents_bulk(
@@ -905,6 +969,7 @@ def get_chunks_by_documents_bulk(
     session = get_session()
     try:
         from collections import defaultdict
+
         sql = """
             SELECT chunk_id, document_id, text, embedding, title, summary,
                    section_path, search_text, content_hash, visibility, allowed_roles
@@ -920,34 +985,40 @@ def get_chunks_by_documents_bulk(
                            AND d2.owner_id = :user_id)))
             ORDER BY document_id, id
         """
-        rows = session.execute(text(sql), {
-            "doc_ids": doc_ids,
-            "can_read_all": can_read_all,
-            "user_roles": user_role_ids or [],
-            "user_id": user_id or "",
-        }).fetchall()
+        rows = session.execute(
+            text(sql),
+            {
+                "doc_ids": doc_ids,
+                "can_read_all": can_read_all,
+                "user_roles": user_role_ids or [],
+                "user_id": user_id or "",
+            },
+        ).fetchall()
         result: dict[str, list[dict]] = defaultdict(list)
         per_doc_count: dict[str, int] = {}
         for r in rows:
             if per_doc_count.get(r[1], 0) >= _CHUNKS_PER_NEIGHBOR_DOC:
                 continue
             per_doc_count[r[1]] = per_doc_count.get(r[1], 0) + 1
-            result[r[1]].append({
-                "chunk_id": r[0],
-                "document_id": r[1],
-                "text": r[2],
-                "embedding": r[3],
-                "title": r[4],
-                "summary": r[5],
-                "section_path": r[6],
-                "search_text": r[7],
-                "content_hash": r[8],
-                "visibility": r[9],
-                "allowed_roles": r[10],
-            })
+            result[r[1]].append(
+                {
+                    "chunk_id": r[0],
+                    "document_id": r[1],
+                    "text": r[2],
+                    "embedding": r[3],
+                    "title": r[4],
+                    "summary": r[5],
+                    "section_path": r[6],
+                    "search_text": r[7],
+                    "content_hash": r[8],
+                    "visibility": r[9],
+                    "allowed_roles": r[10],
+                }
+            )
         return dict(result)
     finally:
         session.close()
+
 
 def _like_escape_literal(prefix: str) -> str:
     """转义 LIKE 模式中的通配符（`_`/`%`/`\\`）——chunk_id 前缀是字面量，
@@ -963,7 +1034,8 @@ def delete_orphan_chunk_questions(document_id: str, valid_chunk_ids: list[str]) 
     session = get_session()
     try:
         q = session.query(ChunkQuestion).filter(
-            ChunkQuestion.chunk_id.like(_like_escape_literal(document_id) + "\\_%", escape="\\"))
+            ChunkQuestion.chunk_id.like(_like_escape_literal(document_id) + "\\_%", escape="\\")
+        )
         if valid_chunk_ids:
             q = q.filter(~ChunkQuestion.chunk_id.in_(valid_chunk_ids))
         q.delete(synchronize_session=False)
@@ -1001,6 +1073,7 @@ def pre_retrieve_documents(
     t0 = time.monotonic()
     try:
         from app.store.db import DocEmbedding, Document
+
         q = session.query(
             DocEmbedding.document_id,
             DocEmbedding.embedding,
@@ -1038,7 +1111,10 @@ def pre_retrieve_documents(
         logger.debug(
             "pre_retrieve_documents query_dim=%d candidates=%d above_threshold=%d "
             "returned=%d elapsed_ms=%.1f",
-            len(query_emb), len(rows), len(scored_docs), len(result),
+            len(query_emb),
+            len(rows),
+            len(scored_docs),
+            len(result),
             (time.monotonic() - t0) * 1000,
         )
         return result

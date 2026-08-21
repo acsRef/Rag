@@ -1,4 +1,5 @@
-﻿"""All SQLAlchemy models + PG connection."""
+"""All SQLAlchemy models + PG connection."""
+
 import uuid
 from datetime import UTC, datetime
 
@@ -44,17 +45,19 @@ def init_db():
                 text("ALTER TABLE conversations ADD COLUMN IF NOT EXISTS last_summary_at TIMESTAMP")
             )
             conn.execute(
-                text("ALTER TABLE conversations ADD COLUMN IF NOT EXISTS last_summarized_msg_id INTEGER")
+                text(
+                    "ALTER TABLE conversations ADD COLUMN IF NOT EXISTS last_summarized_msg_id INTEGER"
+                )
             )
             conn.execute(
                 text("ALTER TABLE chunks ADD COLUMN IF NOT EXISTS search_text TEXT DEFAULT ''")
             )
+            conn.execute(text("ALTER TABLE chunks ADD COLUMN IF NOT EXISTS embedding_text TEXT"))
             conn.execute(
-                text("ALTER TABLE chunks ADD COLUMN IF NOT EXISTS embedding_text TEXT")
-            )
-            conn.execute(
-                text("CREATE INDEX IF NOT EXISTS idx_chunks_search_text ON chunks "
-                     "USING GIN (to_tsvector('simple', search_text))")
+                text(
+                    "CREATE INDEX IF NOT EXISTS idx_chunks_search_text ON chunks "
+                    "USING GIN (to_tsvector('simple', search_text))"
+                )
             )
             conn.execute(
                 text("CREATE INDEX IF NOT EXISTS idx_pii_alerts_status ON pii_alerts (status)")
@@ -63,58 +66,88 @@ def init_db():
                 text("CREATE INDEX IF NOT EXISTS idx_pii_hold_status ON pii_hold (status)")
             )
             conn.execute(
-                text("ALTER TABLE chunks ADD COLUMN IF NOT EXISTS content_hash VARCHAR(64) DEFAULT ''")
+                text(
+                    "ALTER TABLE chunks ADD COLUMN IF NOT EXISTS content_hash VARCHAR(64) DEFAULT ''"
+                )
             )
             conn.execute(
-                text("ALTER TABLE documents ADD COLUMN IF NOT EXISTS content_hash VARCHAR(64) DEFAULT ''")
+                text(
+                    "ALTER TABLE documents ADD COLUMN IF NOT EXISTS content_hash VARCHAR(64) DEFAULT ''"
+                )
             )
             conn.execute(
                 text("ALTER TABLE documents ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP")
             )
             conn.execute(
-                text("ALTER TABLE documents ADD COLUMN IF NOT EXISTS embedded_chunk_count INTEGER DEFAULT 0")
+                text(
+                    "ALTER TABLE documents ADD COLUMN IF NOT EXISTS embedded_chunk_count INTEGER DEFAULT 0"
+                )
             )
             conn.execute(
-                text("ALTER TABLE documents ADD COLUMN IF NOT EXISTS error_message VARCHAR(1024) DEFAULT ''")
+                text(
+                    "ALTER TABLE documents ADD COLUMN IF NOT EXISTS error_message VARCHAR(1024) DEFAULT ''"
+                )
             )
             conn.execute(
                 text("ALTER TABLE messages ADD COLUMN IF NOT EXISTS thinking_content TEXT")
             )
             conn.execute(
-                text("ALTER TABLE messages ADD COLUMN IF NOT EXISTS status VARCHAR(16) DEFAULT 'completed'")
+                text(
+                    "ALTER TABLE messages ADD COLUMN IF NOT EXISTS status VARCHAR(16) DEFAULT 'completed'"
+                )
             )
             # ── chunks 历史扩展列（year / page / embedding_version / table_title / figure_title）──
             conn.execute(text("ALTER TABLE chunks ADD COLUMN IF NOT EXISTS year INTEGER"))
             conn.execute(text("ALTER TABLE chunks ADD COLUMN IF NOT EXISTS page_start INTEGER"))
             conn.execute(text("ALTER TABLE chunks ADD COLUMN IF NOT EXISTS page_end INTEGER"))
-            conn.execute(text("ALTER TABLE chunks ADD COLUMN IF NOT EXISTS embedding_version INTEGER DEFAULT 1"))
+            conn.execute(
+                text(
+                    "ALTER TABLE chunks ADD COLUMN IF NOT EXISTS embedding_version INTEGER DEFAULT 1"
+                )
+            )
             conn.execute(text("ALTER TABLE chunks ADD COLUMN IF NOT EXISTS table_title TEXT"))
             conn.execute(text("ALTER TABLE chunks ADD COLUMN IF NOT EXISTS figure_title TEXT"))
             # 索引：year + embedding_version 检索时 WHERE 过滤用
             conn.execute(text("CREATE INDEX IF NOT EXISTS idx_chunks_year ON chunks (year)"))
-            conn.execute(text("CREATE INDEX IF NOT EXISTS idx_chunks_embedding_version ON chunks (embedding_version)"))
             conn.execute(
-                text("CREATE INDEX IF NOT EXISTS idx_doc_entities_doc ON doc_entities (document_id)")
+                text(
+                    "CREATE INDEX IF NOT EXISTS idx_chunks_embedding_version ON chunks (embedding_version)"
+                )
             )
             conn.execute(
-                text("CREATE INDEX IF NOT EXISTS idx_doc_relations_source ON doc_relations (source_doc)")
+                text(
+                    "CREATE INDEX IF NOT EXISTS idx_doc_entities_doc ON doc_entities (document_id)"
+                )
             )
             conn.execute(
-                text("CREATE INDEX IF NOT EXISTS idx_doc_relations_target ON doc_relations (target_doc)")
+                text(
+                    "CREATE INDEX IF NOT EXISTS idx_doc_relations_source ON doc_relations (source_doc)"
+                )
             )
             conn.execute(
-                text("CREATE INDEX IF NOT EXISTS idx_doc_embeddings_doc ON doc_embeddings (document_id)")
+                text(
+                    "CREATE INDEX IF NOT EXISTS idx_doc_relations_target ON doc_relations (target_doc)"
+                )
             )
             conn.execute(
-                text("CREATE TABLE IF NOT EXISTS chunk_questions ("
-                     "id SERIAL PRIMARY KEY, "
-                     "chunk_id VARCHAR(64) REFERENCES chunks(chunk_id) ON DELETE CASCADE, "
-                     "question TEXT NOT NULL, "
-                     "embedding VECTOR(4096), "
-                     "position INT DEFAULT 0)")
+                text(
+                    "CREATE INDEX IF NOT EXISTS idx_doc_embeddings_doc ON doc_embeddings (document_id)"
+                )
             )
             conn.execute(
-                text("CREATE INDEX IF NOT EXISTS idx_chunk_questions_chunk_id ON chunk_questions (chunk_id)")
+                text(
+                    "CREATE TABLE IF NOT EXISTS chunk_questions ("
+                    "id SERIAL PRIMARY KEY, "
+                    "chunk_id VARCHAR(64) REFERENCES chunks(chunk_id) ON DELETE CASCADE, "
+                    "question TEXT NOT NULL, "
+                    "embedding VECTOR(4096), "
+                    "position INT DEFAULT 0)"
+                )
+            )
+            conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS idx_chunk_questions_chunk_id ON chunk_questions (chunk_id)"
+                )
             )
             conn.commit()
         except Exception:
@@ -159,6 +192,7 @@ def utc_now():
 
 # ── Auth ────────────────────────────────────────────────
 
+
 class User(Base):
     __tablename__ = "users"
     id = Column(String(64), primary_key=True, default=new_id)
@@ -186,28 +220,36 @@ class UserRole(Base):
 class RolePermission(Base):
     __tablename__ = "role_permissions"
     id = Column(Integer, primary_key=True, autoincrement=True)
-    role_id = Column(Integer, ForeignKey("roles.id", ondelete="CASCADE"), nullable=False, index=True)
+    role_id = Column(
+        Integer, ForeignKey("roles.id", ondelete="CASCADE"), nullable=False, index=True
+    )
     permission = Column(String(64), nullable=False)
 
 
 # ── Knowledge Base ──────────────────────────────────────
 
+
 class KnowledgeBase(Base):
     __tablename__ = "knowledge_bases"
     id = Column(String(64), primary_key=True, default=new_id)
     name = Column(String(128), nullable=False)
-    visibility = Column(String(16), nullable=False, default="public")  # public / internal / restricted
+    visibility = Column(
+        String(16), nullable=False, default="public"
+    )  # public / internal / restricted
     owner_id = Column(String(64), ForeignKey("users.id"), nullable=False)
     created_at = Column(DateTime, default=utc_now)
 
 
 class KBRoleAccess(Base):
     __tablename__ = "kb_role_access"
-    kb_id = Column(String(64), ForeignKey("knowledge_bases.id", ondelete="CASCADE"), primary_key=True)
+    kb_id = Column(
+        String(64), ForeignKey("knowledge_bases.id", ondelete="CASCADE"), primary_key=True
+    )
     role_id = Column(Integer, ForeignKey("roles.id", ondelete="CASCADE"), primary_key=True)
 
 
 # ── Document ────────────────────────────────────────────
+
 
 class Document(Base):
     __tablename__ = "documents"
@@ -228,16 +270,21 @@ class Document(Base):
 
 class DocRoleAccess(Base):
     __tablename__ = "doc_role_access"
-    document_id = Column(String(64), ForeignKey("documents.document_id", ondelete="CASCADE"), primary_key=True)
+    document_id = Column(
+        String(64), ForeignKey("documents.document_id", ondelete="CASCADE"), primary_key=True
+    )
     role_id = Column(Integer, ForeignKey("roles.id", ondelete="CASCADE"), primary_key=True)
 
 
 # ── Chunk Questions (multi-channel retrieval) ───────────
 
+
 class ChunkQuestion(Base):
     __tablename__ = "chunk_questions"
     id = Column(Integer, primary_key=True, autoincrement=True)
-    chunk_id = Column(String(64), ForeignKey("chunks.chunk_id", ondelete="CASCADE"), nullable=False, index=True)
+    chunk_id = Column(
+        String(64), ForeignKey("chunks.chunk_id", ondelete="CASCADE"), nullable=False, index=True
+    )
     question = Column(Text, nullable=False)
     embedding = Column(Vector(4096))
     position = Column(Integer, default=0)
@@ -245,11 +292,14 @@ class ChunkQuestion(Base):
 
 # ── Chunk (with pgvector) ───────────────────────────────
 
+
 class Chunk(Base):
     __tablename__ = "chunks"
     id = Column(Integer, primary_key=True, autoincrement=True)
     chunk_id = Column(String(64), unique=True, nullable=False, index=True)
-    document_id = Column(String(64), ForeignKey("documents.document_id"), nullable=False, index=True)
+    document_id = Column(
+        String(64), ForeignKey("documents.document_id"), nullable=False, index=True
+    )
     kb_id = Column(String(64), ForeignKey("knowledge_bases.id"), nullable=False, index=True)
     text = Column(Text, nullable=False)
     embedding_text = Column(Text, nullable=True)  # 增强文本：build_embedding_text() 输出
@@ -278,6 +328,7 @@ class Chunk(Base):
 
 # ── Conversation ────────────────────────────────────────
 
+
 class Conversation(Base):
     __tablename__ = "conversations"
     id = Column(Integer, primary_key=True, autoincrement=True)
@@ -286,7 +337,7 @@ class Conversation(Base):
     title = Column(String(256), default="")
     summary = Column(Text, default="")
     last_summary_at = Column(DateTime, nullable=True)
-    last_summarized_msg_id = Column(Integer, nullable=True)   # 摘要水位：已摘要到的最大 Message.id
+    last_summarized_msg_id = Column(Integer, nullable=True)  # 摘要水位：已摘要到的最大 Message.id
     created_at = Column(DateTime, default=utc_now)
     updated_at = Column(DateTime, default=utc_now, onupdate=utc_now)
 
@@ -295,7 +346,9 @@ class Message(Base):
     __tablename__ = "messages"
     id = Column(Integer, primary_key=True, autoincrement=True)
     message_id = Column(String(64), unique=True, nullable=False)
-    conversation_id = Column(String(64), ForeignKey("conversations.conversation_id"), nullable=False, index=True)
+    conversation_id = Column(
+        String(64), ForeignKey("conversations.conversation_id"), nullable=False, index=True
+    )
     user_id = Column(String(64), ForeignKey("users.id"), nullable=False)
     role = Column(String(16), nullable=False)
     content = Column(Text, nullable=False, default="")
@@ -306,6 +359,7 @@ class Message(Base):
 
 
 # ── PII / Sensitive Data ─────────────────────────────────
+
 
 class SensitiveRule(Base):
     __tablename__ = "sensitive_rules"
@@ -332,7 +386,9 @@ class PiiAlert(Base):
     matched_text = Column(Text, nullable=False)
     context_snippet = Column(Text, default="")
     strategy = Column(String(16), nullable=False)
-    status = Column(String(16), nullable=False, default="pending")  # pending / confirmed / false_positive
+    status = Column(
+        String(16), nullable=False, default="pending"
+    )  # pending / confirmed / false_positive
     created_at = Column(DateTime, default=utc_now)
     resolved_at = Column(DateTime, nullable=True)
 
@@ -349,10 +405,16 @@ class PiiHold(Base):
 
 # ── Cross-Doc Relation ──────────────────────────────────
 
+
 class DocEntity(Base):
     __tablename__ = "doc_entities"
     id = Column(Integer, primary_key=True, autoincrement=True)
-    document_id = Column(String(64), ForeignKey("documents.document_id", ondelete="CASCADE"), nullable=False, index=True)
+    document_id = Column(
+        String(64),
+        ForeignKey("documents.document_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
     entity = Column(String(128), nullable=False)
     frequency = Column(Integer, nullable=False, default=1)
 
@@ -360,7 +422,13 @@ class DocEntity(Base):
 class DocEmbedding(Base):
     __tablename__ = "doc_embeddings"
     id = Column(Integer, primary_key=True, autoincrement=True)
-    document_id = Column(String(64), ForeignKey("documents.document_id", ondelete="CASCADE"), unique=True, nullable=False, index=True)
+    document_id = Column(
+        String(64),
+        ForeignKey("documents.document_id", ondelete="CASCADE"),
+        unique=True,
+        nullable=False,
+        index=True,
+    )
     embedding = Column(Vector(4096), nullable=True)
     chunk_count = Column(Integer, default=0)
     updated_at = Column(DateTime, default=utc_now, onupdate=utc_now)
@@ -369,8 +437,18 @@ class DocEmbedding(Base):
 class DocRelation(Base):
     __tablename__ = "doc_relations"
     id = Column(Integer, primary_key=True, autoincrement=True)
-    source_doc = Column(String(64), ForeignKey("documents.document_id", ondelete="CASCADE"), nullable=False, index=True)
-    target_doc = Column(String(64), ForeignKey("documents.document_id", ondelete="CASCADE"), nullable=False, index=True)
+    source_doc = Column(
+        String(64),
+        ForeignKey("documents.document_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    target_doc = Column(
+        String(64),
+        ForeignKey("documents.document_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
     cosine = Column(Integer, nullable=False, default=0)
     entity_jaccard = Column(Integer, nullable=False, default=0)
     relation_type = Column(String(16), default="unknown")

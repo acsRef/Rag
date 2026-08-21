@@ -8,6 +8,7 @@
 - 三个通道函数（search / bm25_search / question_vector_search）必须收到相同的
   document_ids 列表
 """
+
 import pytest
 
 from app.core.retrieval_filter import RetrievalFilter
@@ -28,6 +29,7 @@ def capture_channels(monkeypatch):
         def stub(*args, **kwargs):
             captured.setdefault(name, []).append({"args": args, "kwargs": kwargs})
             return []
+
         return stub
 
     monkeypatch.setattr(pgvector_store, "search", make_stub("vector"))
@@ -59,7 +61,9 @@ def _saw_doc_ids(channel_capture, expected):
 def test_hybrid_search_accepts_filters_none_without_breaking(capture_channels):
     """filters=None 时行为与改造前完全一致。"""
     pgvector_store.hybrid_search(
-        kb_ids=["kb1"], embedding=[0.0] * 4, query="q",
+        kb_ids=["kb1"],
+        embedding=[0.0] * 4,
+        query="q",
     )
     # search 与 bm25_search 必须被调用；document_ids 缺省 = 不传
     assert "vector" in capture_channels
@@ -71,21 +75,27 @@ def test_hybrid_search_accepts_filters_none_without_breaking(capture_channels):
 def test_hybrid_search_filters_document_ids_propagates_to_all_channels(capture_channels):
     """filters.document_ids 必须传到 vector + bm25 + question 三个通道。"""
     pgvector_store.hybrid_search(
-        kb_ids=["kb1"], embedding=[0.0] * 4, query="q",
+        kb_ids=["kb1"],
+        embedding=[0.0] * 4,
+        query="q",
         filters=RetrievalFilter(document_ids={"doc_a", "doc_b"}),
         enable_question_channel=True,
     )
     expected = {"doc_a", "doc_b"}
     for ch in ("vector", "bm25", "question"):
         assert ch in capture_channels, f"{ch} 通道未被调用"
-        assert _saw_doc_ids(capture_channels[ch], expected), f"{ch} 通道未传 document_ids={expected}"
+        assert _saw_doc_ids(capture_channels[ch], expected), (
+            f"{ch} 通道未传 document_ids={expected}"
+        )
 
 
 def test_hybrid_search_filters_overrides_legacy_document_ids(capture_channels):
     """filters.document_ids 与旧 document_ids 同时传时，filters 优先。"""
     pgvector_store.hybrid_search(
-        kb_ids=["kb1"], embedding=[0.0] * 4, query="q",
-        document_ids=["legacy_doc"],   # 旧参数
+        kb_ids=["kb1"],
+        embedding=[0.0] * 4,
+        query="q",
+        document_ids=["legacy_doc"],  # 旧参数
         filters=RetrievalFilter(document_ids={"new_doc"}),  # 新参数
     )
     assert _saw_doc_ids(capture_channels["vector"], {"new_doc"})
@@ -95,7 +105,9 @@ def test_hybrid_search_filters_overrides_legacy_document_ids(capture_channels):
 def test_hybrid_search_legacy_document_ids_still_works(capture_channels):
     """只传老 document_ids 时仍正常工作（向后兼容）。"""
     pgvector_store.hybrid_search(
-        kb_ids=["kb1"], embedding=[0.0] * 4, query="q",
+        kb_ids=["kb1"],
+        embedding=[0.0] * 4,
+        query="q",
         document_ids=["legacy_only"],
     )
     assert _saw_doc_ids(capture_channels["vector"], {"legacy_only"})
@@ -105,7 +117,9 @@ def test_hybrid_search_legacy_document_ids_still_works(capture_channels):
 def test_hybrid_search_filters_empty_does_not_pass_document_ids(capture_channels):
     """filters=RetrievalFilter() 空过滤器 → 跟 filters=None 一样：document_ids=None。"""
     pgvector_store.hybrid_search(
-        kb_ids=["kb1"], embedding=[0.0] * 4, query="q",
+        kb_ids=["kb1"],
+        embedding=[0.0] * 4,
+        query="q",
         filters=RetrievalFilter(),
     )
     # 空过滤器不应产生 document_ids 过滤（即使 None）
@@ -117,7 +131,9 @@ def test_hybrid_search_filters_unused_fields_documented_as_noop(capture_channels
     """years/section_names/source_types/kb_ids 暂未翻译；本测试只锁定"接口不报错"。"""
     # 即便这些字段填了值，当前不会翻译到 SQL（Day 2 接通）
     pgvector_store.hybrid_search(
-        kb_ids=["kb1"], embedding=[0.0] * 4, query="q",
+        kb_ids=["kb1"],
+        embedding=[0.0] * 4,
+        query="q",
         filters=RetrievalFilter(
             years={2024, 2025},
             section_names={"主要会计数据"},

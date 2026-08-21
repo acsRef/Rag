@@ -72,7 +72,7 @@ SYSTEM_PROMPT = (
     "## 示例\n"
     "\n"
     "【示例1 — 复杂问题】\n"
-    "用户：\"JWT 和 Session 有什么区别？\"\n"
+    '用户："JWT 和 Session 有什么区别？"\n'
     "<think>\n"
     "1. 用户问的是 JWT 和 Session 的对比，涉及跨文档交叉分析。\n"
     "2. Source 1 描述了 JWT 的无状态特性。\n"
@@ -86,7 +86,7 @@ SYSTEM_PROMPT = (
     "</answer>\n"
     "\n"
     "【示例2 — 简单问题】\n"
-    "用户：\"JWT 是什么？\"\n"
+    '用户："JWT 是什么？"\n'
     "<answer>\n"
     "JWT (JSON Web Token) 是一种无状态的认证机制, 将用户信息加密存储在 token 中...[1]\n"
     "</answer>\n"
@@ -265,11 +265,18 @@ class RAGPromptBuilder:
                     return []
                 # pydantic v2 model 允许字段赋值；返回新实例避免就地修改原对象
                 from app.models.schemas import RetrievedChunk as _RC
-                return [_RC(
-                    chunk_id=c.chunk_id, document_id=c.document_id,
-                    text=c.text[:max_chars], score=c.score,
-                    title=c.title, summary=c.summary, section_path=c.section_path,
-                )]
+
+                return [
+                    _RC(
+                        chunk_id=c.chunk_id,
+                        document_id=c.document_id,
+                        text=c.text[:max_chars],
+                        score=c.score,
+                        title=c.title,
+                        summary=c.summary,
+                        section_path=c.section_path,
+                    )
+                ]
         return kept
 
     def _trim_history(self, history: list[dict], summary: str, budget: int) -> tuple[str, int]:

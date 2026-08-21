@@ -12,12 +12,18 @@ class TestEvidenceReranking:
         table = EvidenceTable(
             query="2023-2024年营收",
             slots=[
-                EvidenceSlot(sub_question="2023年营收", chunks=[
-                    _make_chunk("c1", doc_id="doc1", score=0.8),
-                ]),
-                EvidenceSlot(sub_question="2024年营收", chunks=[
-                    _make_chunk("c2", doc_id="doc2", score=0.6),
-                ]),
+                EvidenceSlot(
+                    sub_question="2023年营收",
+                    chunks=[
+                        _make_chunk("c1", doc_id="doc1", score=0.8),
+                    ],
+                ),
+                EvidenceSlot(
+                    sub_question="2024年营收",
+                    chunks=[
+                        _make_chunk("c2", doc_id="doc2", score=0.6),
+                    ],
+                ),
             ],
             query_type="comparison",
         )
@@ -50,22 +56,31 @@ class TestEvidenceReranking:
     def test_detect_comparison_pattern(self):
         organizer = EvidenceOrganizer()
         # Same metric, different years → comparison
-        assert organizer.detect_comparison_pattern(
-            "2023-2025年营收",
-            ["2023年营收", "2024年营收", "2025年营收"],
-        ) is True
+        assert (
+            organizer.detect_comparison_pattern(
+                "2023-2025年营收",
+                ["2023年营收", "2024年营收", "2025年营收"],
+            )
+            is True
+        )
 
         # Different topics → not comparison
-        assert organizer.detect_comparison_pattern(
-            "公司情况",
-            ["公司营收", "公司员工数量"],
-        ) is False
+        assert (
+            organizer.detect_comparison_pattern(
+                "公司情况",
+                ["公司营收", "公司员工数量"],
+            )
+            is False
+        )
 
         # Single sub-question → not comparison
-        assert organizer.detect_comparison_pattern(
-            "营收",
-            ["营收是多少"],
-        ) is False
+        assert (
+            organizer.detect_comparison_pattern(
+                "营收",
+                ["营收是多少"],
+            )
+            is False
+        )
 
     def test_unique_doc_bonus(self):
         """Chunks from documents unique to a slot should get higher importance."""
@@ -88,7 +103,9 @@ class TestEvidenceReranking:
         assert scores["c1"] > scores["c2"]
 
 
-def _make_chunk(chunk_id: str, doc_id: str = "doc1", text: str = "test text", score: float = 0.5) -> RetrievedChunk:
+def _make_chunk(
+    chunk_id: str, doc_id: str = "doc1", text: str = "test text", score: float = 0.5
+) -> RetrievedChunk:
     return RetrievedChunk(
         chunk_id=chunk_id,
         document_id=doc_id,
@@ -234,12 +251,18 @@ class TestConflictDetection:
         table = EvidenceTable(
             query="test",
             slots=[
-                EvidenceSlot(sub_question="q1", chunks=[
-                    _make_chunk("c1", doc_id="doc1", text="营业收入为732亿元"),
-                ]),
-                EvidenceSlot(sub_question="q2", chunks=[
-                    _make_chunk("c2", doc_id="doc2", text="营业收入为732亿元"),
-                ]),
+                EvidenceSlot(
+                    sub_question="q1",
+                    chunks=[
+                        _make_chunk("c1", doc_id="doc1", text="营业收入为732亿元"),
+                    ],
+                ),
+                EvidenceSlot(
+                    sub_question="q2",
+                    chunks=[
+                        _make_chunk("c2", doc_id="doc2", text="营业收入为732亿元"),
+                    ],
+                ),
             ],
         )
         conflicts = detector.detect(table)
@@ -252,12 +275,18 @@ class TestConflictDetection:
         table = EvidenceTable(
             query="test",
             slots=[
-                EvidenceSlot(sub_question="q1", chunks=[
-                    _make_chunk("c1", doc_id="doc1", text="营业收入为732亿元"),
-                ]),
-                EvidenceSlot(sub_question="q2", chunks=[
-                    _make_chunk("c2", doc_id="doc2", text="营业收入为740亿元"),
-                ]),
+                EvidenceSlot(
+                    sub_question="q1",
+                    chunks=[
+                        _make_chunk("c1", doc_id="doc1", text="营业收入为732亿元"),
+                    ],
+                ),
+                EvidenceSlot(
+                    sub_question="q2",
+                    chunks=[
+                        _make_chunk("c2", doc_id="doc2", text="营业收入为740亿元"),
+                    ],
+                ),
             ],
         )
         conflicts = detector.detect(table)

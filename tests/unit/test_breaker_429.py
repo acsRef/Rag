@@ -5,6 +5,7 @@ classify_llm_error 旧实现把 429 归类为 TemporaryError，导致调用方
 把 embedding 服务打穿成 outage。修复：429 → RateLimitError（TemporaryError
 子类，可重试但不计熔断失败）；其他 4xx 同理不计失败。
 """
+
 import asyncio
 
 import pytest
@@ -27,6 +28,7 @@ def _fresh_breakers():
 
 # ── classify_llm_error 类型语义 ─────────────────────────
 
+
 def test_429_returns_rate_limit_error():
     typed, should_retry = llm_base.classify_llm_error(_FakeAPIError(429))
     assert isinstance(typed, llm_base.RateLimitError)
@@ -48,6 +50,7 @@ def test_5xx_returns_temporary():
 
 
 # ── SFEmbedding.embed() ────────────────────────────────────
+
 
 async def test_embed_429_does_not_trip_breaker(monkeypatch):
     _fresh_breakers()
@@ -120,6 +123,7 @@ async def test_embed_400_does_not_trip_breaker(monkeypatch):
 
 # ── SFEmbedding.embed_single_chunk 与 _try_batch_with_retry ───────
 
+
 async def test_embed_single_chunk_429_retries_then_no_failure(monkeypatch):
     _fresh_breakers()
     sf = emb_mod.sf_embedding
@@ -128,13 +132,11 @@ async def test_embed_single_chunk_429_retries_then_no_failure(monkeypatch):
         raise llm_base.RateLimitError("rate limited")
 
     class _FakeClient:
-        embeddings = type(
-            "E", (), {"create": staticmethod(raise_429)})()
+        embeddings = type("E", (), {"create": staticmethod(raise_429)})()
 
     sf._client = _FakeClient()
     sf._client_loop_id = id(asyncio.get_event_loop())
-    monkeypatch.setattr(emb_mod, "_jittered_sleep",
-                        lambda s: asyncio.sleep(0))
+    monkeypatch.setattr(emb_mod, "_jittered_sleep", lambda s: asyncio.sleep(0))
     sf._check_breaker()
 
     emb, err = await sf.embed_single_chunk("text")
@@ -151,13 +153,11 @@ async def test_try_batch_429_no_failure(monkeypatch):
         raise llm_base.RateLimitError("rate limited")
 
     class _FakeClient:
-        embeddings = type(
-            "E", (), {"create": staticmethod(raise_429)})()
+        embeddings = type("E", (), {"create": staticmethod(raise_429)})()
 
     sf._client = _FakeClient()
     sf._client_loop_id = id(asyncio.get_event_loop())
-    monkeypatch.setattr(emb_mod, "_jittered_sleep",
-                        lambda s: asyncio.sleep(0))
+    monkeypatch.setattr(emb_mod, "_jittered_sleep", lambda s: asyncio.sleep(0))
 
     result = await emb_mod._try_batch_with_retry(sf, ["a"])
     assert result is None
@@ -166,6 +166,7 @@ async def test_try_batch_429_no_failure(monkeypatch):
 
 
 # ── MiniMaxClient ──────────────────────────────────────────
+
 
 async def test_chat_429_does_not_trip_breaker(monkeypatch):
     _fresh_breakers()

@@ -18,6 +18,7 @@
 注:Python 3.11 的 `TimedRotatingFileHandler` 不支持 `maxBytes`(Python 3.13 才支持),
 本实现改用 `RotatingFileHandler` + 启动时绑定日期,行为上等价于"按大小切,文件名带日期"。
 """
+
 import logging
 from datetime import date
 from logging.handlers import RotatingFileHandler
@@ -68,4 +69,3 @@ def setup_logging() -> None:
         console = logging.StreamHandler()
         console.setFormatter(formatter)
         root.addHandler(console)
-

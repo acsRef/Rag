@@ -11,6 +11,7 @@ pytestmark = pytest.mark.live_llm
 
 async def test_live_embedding_dimension(live_env):
     from app.llm.embedding import sf_embedding
+
     vec = await sf_embedding.embed("什么是 Transformer")
     assert isinstance(vec, list)
     assert len(vec) == settings.embedding_dimension
@@ -18,7 +19,10 @@ async def test_live_embedding_dimension(live_env):
 
 async def test_live_chat_returns_text(live_env):
     from app.llm.chat import minimax_client
+
     out = await minimax_client.chat(
-        [{"role": "user", "content": "只回复两个字：收到"}], max_tokens=16, timeout=30,
+        [{"role": "user", "content": "只回复两个字：收到"}],
+        max_tokens=16,
+        timeout=30,
     )
     assert out.strip()

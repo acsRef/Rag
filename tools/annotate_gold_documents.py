@@ -13,6 +13,7 @@
     D:/miniConda/envs/rag/python.exe tools/annotate_gold_documents.py            # 写新文件 diff
     D:/miniConda/envs/rag/python.exe tools/annotate_gold_documents.py --apply    # 覆盖原文件
 """
+
 from __future__ import annotations
 
 import argparse
@@ -95,9 +96,8 @@ def annotate_testset(testset: dict) -> tuple[dict, list[str]]:
 
     new_testset = dict(testset)
     new_testset["题目"] = new_questions
-    summary = (
-        f"\n[summary] 共 {len(new_questions)} 题，gold 文档数分布：\n"
-        + "\n".join(f"  {k} 个 gold: {v} 题" for k, v in sorted(gold_count.items()))
+    summary = f"\n[summary] 共 {len(new_questions)} 题，gold 文档数分布：\n" + "\n".join(
+        f"  {k} 个 gold: {v} 题" for k, v in sorted(gold_count.items())
     )
     if all_warnings:
         all_warnings.append(summary)
@@ -109,7 +109,8 @@ def annotate_testset(testset: dict) -> tuple[dict, list[str]]:
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--apply", action="store_true",
+        "--apply",
+        action="store_true",
         help="直接覆盖原文件；不加则写到 rag_testset.gold.json 让你 diff",
     )
     parser.add_argument(

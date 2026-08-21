@@ -1,4 +1,4 @@
-﻿import asyncio
+import asyncio
 import json
 import logging
 import re
@@ -30,6 +30,7 @@ def _pii_safe(text: str) -> str:
     if not settings.pii_enabled:
         return text
     from app.core.pii_scanner import mask_text
+
     return mask_text(text)
 
 
@@ -39,10 +40,13 @@ def _resolve_doc_map(chunks: list[RetrievedChunk]) -> dict[str, str]:
     doc_ids = list({c.document_id for c in chunks if c.document_id})
     if doc_ids:
         from app.store.db import Document, get_db_ctx
+
         with get_db_ctx() as session:
-            rows = session.query(Document.document_id, Document.filename).filter(
-                Document.document_id.in_(doc_ids)
-            ).all()
+            rows = (
+                session.query(Document.document_id, Document.filename)
+                .filter(Document.document_id.in_(doc_ids))
+                .all()
+            )
             for row in rows:
                 doc_map[row.document_id] = row.filename
     return doc_map
@@ -56,15 +60,17 @@ def _build_sources(chunks: list[RetrievedChunk], doc_map: dict[str, str]) -> lis
     sources = []
     for c in chunks:
         text = c.text[:150].replace("\n", " ")
-        sources.append(SourceInfo(
-            chunk_id=c.chunk_id,
-            document_id=c.document_id,
-            filename=doc_map.get(c.document_id, ""),
-            title=c.title,
-            section_path=c.section_path,
-            snippet=text,
-            score=round(c.score, 4),
-        ))
+        sources.append(
+            SourceInfo(
+                chunk_id=c.chunk_id,
+                document_id=c.document_id,
+                filename=doc_map.get(c.document_id, ""),
+                title=c.title,
+                section_path=c.section_path,
+                snippet=text,
+                score=round(c.score, 4),
+            )
+        )
     return sources
 
 
@@ -75,14 +81,18 @@ def _sse_safe(text: str) -> str:
     """Escape text for safe SSE data field (remove \r, encode \n)."""
     return text.replace(chr(10), _NL).replace(chr(13), "")
 
+
 _EOL = chr(10)
 _EOL2 = chr(10) * 2
 
+
 def _norm(text: str) -> str:
-    text = re.sub(r'\n{3,}', '\n\n', text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
     # Collapse blank lines between consecutive list items
-    text = re.sub(r'(\n\s*(?:[-*]|\d+\.)\s.+\n)\n+(?=\s*(?:[-*]|\d+\.)\s)', r'\1', text)
+    text = re.sub(r"(\n\s*(?:[-*]|\d+\.)\s.+\n)\n+(?=\s*(?:[-*]|\d+\.)\s)", r"\1", text)
     return text.strip()
+
+
 def _truncate_with_doc_diversity(chunks: list, max_total: int) -> list:
     """截断 chunk 列表但保证文档多样性。
 
@@ -139,6 +149,7 @@ def resolve_doc_ids_by_years(
     try:
         # 简单策略：filename LIKE '%2024%' OR '%2025%' ...；不依赖 _extract_year_from_filename
         from sqlalchemy import or_
+
         conditions = [Document.filename.like(f"%{y}%") for y in years]
         rows = (
             session.query(Document.document_id)
@@ -213,7 +224,8 @@ class RAGPipeline:
     ) -> AsyncGenerator[str, None]:
         conv_id = await asyncio.to_thread(
             conversation_memory.get_or_create_conversation,
-            req.conversation_id, user_id,
+            req.conversation_id,
+            user_id,
         )
         yield f"event: metadata\ndata: {json.dumps({'conversation_id': conv_id})}\n\n"
 
@@ -227,31 +239,43 @@ class RAGPipeline:
         # 由 hybrid_search 直接 SQL 过滤。
         parsed_query = parse_query(req.query)
         if ctx:
-            ctx.append("query_parse", {
-                "raw": parsed_query.raw,
-                "years": parsed_query.years,
-                "intent_metric": parsed_query.intent_metric,
-            })
+            ctx.append(
+                "query_parse",
+                {
+                    "raw": parsed_query.raw,
+                    "years": parsed_query.years,
+                    "intent_metric": parsed_query.intent_metric,
+                },
+            )
         logging.getLogger(__name__).info(
             "query.parse raw=%r years=%s metric=%s",
-            parsed_query.raw[:60], parsed_query.years, parsed_query.intent_metric,
+            parsed_query.raw[:60],
+            parsed_query.years,
+            parsed_query.intent_metric,
         )
 
         if settings.pii_enabled:
             from app.core.pii_scanner import scan_and_reject
+
             rejects = scan_and_reject(req.query)
             if rejects:
                 from app.store.db import PiiAlert, get_session
+
                 session = None
                 try:
                     session = get_session()
                     for r in rejects:
-                        session.add(PiiAlert(
-                            source_type="chat", source_id=conv_id,
-                            rule_name=r.rule_name, matched_text=r.matched_text,
-                            context_snippet=req.query[max(0, r.start-30):r.end+30],
-                            strategy=r.strategy, status="pending",
-                        ))
+                        session.add(
+                            PiiAlert(
+                                source_type="chat",
+                                source_id=conv_id,
+                                rule_name=r.rule_name,
+                                matched_text=r.matched_text,
+                                context_snippet=req.query[max(0, r.start - 30) : r.end + 30],
+                                strategy=r.strategy,
+                                status="pending",
+                            )
+                        )
                     session.commit()
                 finally:
                     if session:
@@ -259,7 +283,7 @@ class RAGPipeline:
                 if ctx:
                     ctx.record("rejected", reason="pii", details=[r.rule_name for r in rejects])
                     ctx.save()
-                yield "event: error\ndata: {\"error\":\"您的问题涉及敏感信息，无法回答，请修改后重试\"}\n\n"
+                yield 'event: error\ndata: {"error":"您的问题涉及敏感信息，无法回答，请修改后重试"}\n\n'
                 yield "event: done\ndata: {}\n\n"
                 return
 
@@ -267,13 +291,13 @@ class RAGPipeline:
             history = await asyncio.to_thread(conversation_memory.get_history, conv_id)
         except Exception:
             logging.getLogger(__name__).exception(
-                "DB 历史拉取失败（DB-2 穿透兜底）：按空上下文继续")
+                "DB 历史拉取失败（DB-2 穿透兜底）：按空上下文继续"
+            )
             history = []
         try:
             summary = await asyncio.to_thread(conversation_memory.get_summary, conv_id)
         except Exception:
-            logging.getLogger(__name__).exception(
-                "DB 摘要拉取失败（DB-2 穿透兜底）：按空摘要继续")
+            logging.getLogger(__name__).exception("DB 摘要拉取失败（DB-2 穿透兜底）：按空摘要继续")
             summary = ""
         all_kb_ids = req.knowledge_base_ids
         if not all_kb_ids:
@@ -282,7 +306,8 @@ class RAGPipeline:
                 all_kb_ids = await asyncio.to_thread(pgvector_store.list_kb_ids)
             except Exception:
                 logging.getLogger(__name__).exception(
-                    "DB 知识库列表拉取失败（DB-2 穿透兜底）：意图分类短路到无 KB")
+                    "DB 知识库列表拉取失败（DB-2 穿透兜底）：意图分类短路到无 KB"
+                )
                 all_kb_ids = []
 
         # Strategy guard：关掉时强制 needs_decomp=False，跳过 rewrite/intent 走 fast path
@@ -293,9 +318,12 @@ class RAGPipeline:
             rewritten_query = req.query
             query_complexity = "complex"  # fast path 默认复杂
         else:
-            rewrite_result = await query_rewrite_service.rewrite(req.query, history, summary, ctx=ctx)
+            rewrite_result = await query_rewrite_service.rewrite(
+                req.query, history, summary, ctx=ctx
+            )
             if ctx:
-                ctx.record("rewrite",
+                ctx.record(
+                    "rewrite",
                     original=req.query,
                     rewritten=rewrite_result.rewritten_query,
                     sub_questions=rewrite_result.sub_questions,
@@ -308,7 +336,7 @@ class RAGPipeline:
             query_complexity = rewrite_result.complexity
 
         # --- Retrieve ---
-        yield "event: status\ndata: {\"phase\":\"retrieving\",\"message\":\"正在检索知识库...\"}\n\n"
+        yield 'event: status\ndata: {"phase":"retrieving","message":"正在检索知识库..."}\n\n'
         all_chunks: list[RetrievedChunk] = []
         # 保留子问题→chunks 映射（供证据整理层使用）
         sub_question_chunks: dict[str, list[RetrievedChunk]] = {}
@@ -320,21 +348,24 @@ class RAGPipeline:
                     intent = await intent_classifier.classify(sub_q, all_kb_ids, ctx=ctx)
                 except Exception:
                     # 守卫兜底：意图分类的任何意外不得打死整条检索链路
-                    logging.getLogger(__name__).exception(
-                        "intent.classify_failed q=%s", sub_q[:40])
+                    logging.getLogger(__name__).exception("intent.classify_failed q=%s", sub_q[:40])
                     intent = None
                 if ctx and intent is not None:
-                    ctx.append("intent", {
-                        "sub_query": sub_q,
-                        "kbs": [
-                            {"name": m.kb_id, "kb_id": m.kb_id, "confidence": m.score}
-                            for m in (intent.matches or [])
-                        ],
-                        "intent_type": intent.intent_type,
-                    })
+                    ctx.append(
+                        "intent",
+                        {
+                            "sub_query": sub_q,
+                            "kbs": [
+                                {"name": m.kb_id, "kb_id": m.kb_id, "confidence": m.score}
+                                for m in (intent.matches or [])
+                            ],
+                            "intent_type": intent.intent_type,
+                        },
+                    )
             try:
                 chunks = await retrieval_engine.retrieve(
-                    sub_q, intent,
+                    sub_q,
+                    intent,
                     user_role_ids=user_role_ids,
                     can_read_all=can_read_all,
                     ctx=ctx,
@@ -350,7 +381,7 @@ class RAGPipeline:
         # 旧实现按子问题循环发「正在检索子问题 (i/N)」纯误导——
         # 全部 status 事件在 gather 之前就已发出，与实际并发时序对不上。
         if len(sub_queries) > 1:
-            yield f"event: status\ndata: {json.dumps({'phase':'retrieving','message':f'正在并行检索 {len(sub_queries)} 个子问题...'})}\n\n"
+            yield f"event: status\ndata: {json.dumps({'phase': 'retrieving', 'message': f'正在并行检索 {len(sub_queries)} 个子问题...'})}\n\n"
 
         if len(sub_queries) > 1:
             results_list = await asyncio.gather(*[_retrieve_one(q) for q in sub_queries])
@@ -364,7 +395,8 @@ class RAGPipeline:
             try:
                 # 兜底用改写后的独立查询——旧实现用原始 query，代词未消解
                 chunks = await retrieval_engine.retrieve(
-                    rewritten_query, None,
+                    rewritten_query,
+                    None,
                     user_role_ids=user_role_ids,
                     can_read_all=can_read_all,
                     ctx=ctx,
@@ -409,17 +441,21 @@ class RAGPipeline:
                 )
                 evidence_result = build_evidence_result(evidence_table)
                 if ctx:
-                    ctx.append("evidence", {
-                        "coverage": evidence_result.coverage,
-                        "temporal_consistent": evidence_result.temporal_consistent,
-                        "conflicts_count": len(evidence_result.conflicts),
-                        "sources_count": len(evidence_result.sources),
-                        "coverage_by_year": evidence_result.coverage_by_year,
-                    })
+                    ctx.append(
+                        "evidence",
+                        {
+                            "coverage": evidence_result.coverage,
+                            "temporal_consistent": evidence_result.temporal_consistent,
+                            "conflicts_count": len(evidence_result.conflicts),
+                            "sources_count": len(evidence_result.sources),
+                            "coverage_by_year": evidence_result.coverage_by_year,
+                        },
+                    )
                 if evidence_gate_should_refuse(evidence_result, settings.evidence_min_coverage):
                     logger.warning(
                         "evidence.gate.refuse coverage=%.2f threshold=%.2f temporal_consistent=%s",
-                        evidence_result.coverage, settings.evidence_min_coverage,
+                        evidence_result.coverage,
+                        settings.evidence_min_coverage,
                         evidence_result.temporal_consistent,
                     )
                     reason = (
@@ -428,18 +464,28 @@ class RAGPipeline:
                     )
                     if not evidence_result.temporal_consistent:
                         reason = f"检测到跨文档/跨年份冲突，需要进一步确认；{reason}"
-                    payload = json.dumps({
-                        "phase": "evidence_refused",
-                        "reason": reason,
-                        "coverage": evidence_result.coverage,
-                        "min_coverage": settings.evidence_min_coverage,
-                        "temporal_consistent": evidence_result.temporal_consistent,
-                    }, ensure_ascii=False)
+                    payload = json.dumps(
+                        {
+                            "phase": "evidence_refused",
+                            "reason": reason,
+                            "coverage": evidence_result.coverage,
+                            "min_coverage": settings.evidence_min_coverage,
+                            "temporal_consistent": evidence_result.temporal_consistent,
+                        },
+                        ensure_ascii=False,
+                    )
                     yield f"event: status\ndata: {payload}\n\n"
-                    yield "event: degraded\ndata: " + json.dumps({
-                        "reason": "evidence_gate_refused",
-                        "message": reason,
-                    }, ensure_ascii=False) + "\n\n"
+                    yield (
+                        "event: degraded\ndata: "
+                        + json.dumps(
+                            {
+                                "reason": "evidence_gate_refused",
+                                "message": reason,
+                            },
+                            ensure_ascii=False,
+                        )
+                        + "\n\n"
+                    )
                     yield "event: done\ndata: {}\n\n"
                     return
             except Exception:
@@ -450,7 +496,17 @@ class RAGPipeline:
         # 当 chunks 中包含纠正性证据（如"减少"、"下降"等与实际趋势相反的词）时，
         # 确保这些 chunks 不被截断，帮助模型识别并纠正错误前提
         if len(sub_queries) > 1 and len(unique_chunks) > 3:
-            correction_keywords = {"减少", "下降", "降低", "下滑", "萎缩", "收缩", "实际", "趋势", "变化"}
+            correction_keywords = {
+                "减少",
+                "下降",
+                "降低",
+                "下滑",
+                "萎缩",
+                "收缩",
+                "实际",
+                "趋势",
+                "变化",
+            }
             correction_chunks = []
             other_chunks = []
             for c in unique_chunks:
@@ -461,7 +517,7 @@ class RAGPipeline:
                     other_chunks.append(c)
             # 保留前 2 个纠正性 chunk + 其他 chunks
             if correction_chunks:
-                unique_chunks = correction_chunks[:2] + other_chunks[:top_k_limit - 2]
+                unique_chunks = correction_chunks[:2] + other_chunks[: top_k_limit - 2]
 
         # Context expansion 已禁用：邻居 chunks 经常跨 section 边界
         # （如"合并资产负债表"在"合并利润表"前面），拼接后 c.text 被邻居覆盖，
@@ -504,7 +560,7 @@ class RAGPipeline:
             # DB-3：检索空结果若叠加 postgres 降级，区分「真无内容」与「故障」——
             # 发 error 事件告知用户服务不可用并终止，不走 LLM 幻觉路径。
             if "postgres" in provider_health.is_degraded():
-                yield "event: error\ndata: {\"error\":\"知识库服务暂时不可用，请稍后重试\"}\n\n"
+                yield 'event: error\ndata: {"error":"知识库服务暂时不可用，请稍后重试"}\n\n'
                 yield "event: done\ndata: {}\n\n"
                 return
             yield "event: no_context\ndata: {}\n\n"
@@ -518,15 +574,24 @@ class RAGPipeline:
         )
 
         if ctx:
-            ctx.record("topk", chunks=[
-                dict(chunk_id=c.chunk_id, document_id=c.document_id, title=c.title,
-                     section_path=c.section_path, score=round(c.score, 4),
-                     source=sources[i].filename if i < len(sources) else "",
-                     text_preview=c.text[:200])
-                for i, c in enumerate(unique_chunks)
-            ])
+            ctx.record(
+                "topk",
+                chunks=[
+                    dict(
+                        chunk_id=c.chunk_id,
+                        document_id=c.document_id,
+                        title=c.title,
+                        section_path=c.section_path,
+                        score=round(c.score, 4),
+                        source=sources[i].filename if i < len(sources) else "",
+                        text_preview=c.text[:200],
+                    )
+                    for i, c in enumerate(unique_chunks)
+                ],
+            )
             total_chars = sum(len(m.get("content", "")) for m in messages)
-            ctx.record("prompt",
+            ctx.record(
+                "prompt",
                 system_prompt_chars=len(messages[0].get("content", "")) if messages else 0,
                 total_chars=total_chars,
                 message_count=len(messages),
@@ -536,22 +601,24 @@ class RAGPipeline:
         # --- Stream LLM ---
         try:
             await conversation_memory.add_message(
-                conv_id, "user", _pii_safe(req.query),
-                status="completed", user_id=user_id,
+                conv_id,
+                "user",
+                _pii_safe(req.query),
+                status="completed",
+                user_id=user_id,
             )
         except Exception:
             # DB-2：用户消息入库失败仅告警——不能因此切流（用户已发起请求，
             # 切流会导致已发出的 sources/cross_doc 事件被丢）
-            logging.getLogger(__name__).exception(
-                "用户消息入库失败（DB-2 穿透兜底）：流继续")
+            logging.getLogger(__name__).exception("用户消息入库失败（DB-2 穿透兜底）：流继续")
 
-        yield "event: status\ndata: {\"phase\":\"thinking\",\"message\":\"AI 正在思考...\"}\n\n"
+        yield 'event: status\ndata: {"phase":"thinking","message":"AI 正在思考..."}\n\n'
 
-        full_buffer = ""      # raw accumulation for diagnostics
+        full_buffer = ""  # raw accumulation for diagnostics
         stream_start = time.monotonic()
         first_token = True
         chat_degraded = False
-        degraded_reply = ""   # 熔断兜底文案：既要流式给用户，也要持久化
+        degraded_reply = ""  # 熔断兜底文案：既要流式给用户，也要持久化
 
         parser = TagStreamParser()
 
@@ -563,7 +630,10 @@ class RAGPipeline:
             ):
                 if first_token:
                     if ctx:
-                        ctx.record("stream", first_token_ms=round((time.monotonic() - stream_start) * 1000, 1))
+                        ctx.record(
+                            "stream",
+                            first_token_ms=round((time.monotonic() - stream_start) * 1000, 1),
+                        )
                     first_token = False
 
                 full_buffer += raw_token
@@ -579,7 +649,9 @@ class RAGPipeline:
         except CircuitOpenError:
             chat_degraded = True
             degraded_reply = "抱歉，AI 服务暂时不可用，请稍后重试。您仍可浏览已上传的文档信息。"
-            logging.getLogger(__name__).warning("Chat circuit breaker open, returning degraded response")
+            logging.getLogger(__name__).warning(
+                "Chat circuit breaker open, returning degraded response"
+            )
             # 旧实现只把兜底文案写库不流式——用户当轮看到空白。现在同步推给前端
             yield "event: token" + _EOL + "data: " + _sse_safe(degraded_reply) + _EOL2
 
@@ -588,18 +660,23 @@ class RAGPipeline:
             if parser.answer_text or parser.thinking_text:
                 try:
                     await conversation_memory.add_message(
-                        conv_id, "assistant",
+                        conv_id,
+                        "assistant",
                         _pii_safe(_norm(parser.answer_text)),
-                        thinking_content=_pii_safe(_norm(parser.thinking_text)) if parser.thinking_text else None,
+                        thinking_content=_pii_safe(_norm(parser.thinking_text))
+                        if parser.thinking_text
+                        else None,
                         status="interrupted",
                         user_id=user_id,
                     )
                 except Exception:
-                    logging.getLogger(__name__).exception(
-                        "中断消息入库失败（DB-2 穿透兜底）")
+                    logging.getLogger(__name__).exception("中断消息入库失败（DB-2 穿透兜底）")
             if ctx:
-                ctx.update("stream", total_tokens=len(full_buffer),
-                           total_ms=round((time.monotonic() - stream_start) * 1000, 1))
+                ctx.update(
+                    "stream",
+                    total_tokens=len(full_buffer),
+                    total_ms=round((time.monotonic() - stream_start) * 1000, 1),
+                )
                 ctx.save()
             return
 
@@ -609,21 +686,26 @@ class RAGPipeline:
             if parser.answer_text or parser.thinking_text:
                 try:
                     await conversation_memory.add_message(
-                        conv_id, "assistant",
+                        conv_id,
+                        "assistant",
                         _pii_safe(_norm(parser.answer_text)),
-                        thinking_content=_pii_safe(_norm(parser.thinking_text)) if parser.thinking_text else None,
+                        thinking_content=_pii_safe(_norm(parser.thinking_text))
+                        if parser.thinking_text
+                        else None,
                         status="interrupted",
                         user_id=user_id,
                     )
                 except Exception:
-                    logging.getLogger(__name__).exception(
-                        "中断消息入库失败（DB-2 穿透兜底）")
+                    logging.getLogger(__name__).exception("中断消息入库失败（DB-2 穿透兜底）")
             if ctx:
-                ctx.update("stream", error="Chat stream failed",
-                           total_tokens=len(full_buffer),
-                           total_ms=round((time.monotonic() - stream_start) * 1000, 1))
+                ctx.update(
+                    "stream",
+                    error="Chat stream failed",
+                    total_tokens=len(full_buffer),
+                    total_ms=round((time.monotonic() - stream_start) * 1000, 1),
+                )
                 ctx.save()
-            yield "event: error\ndata: {\"error\":\"生成回复时发生错误，请重试\"}\n\n"
+            yield 'event: error\ndata: {"error":"生成回复时发生错误，请重试"}\n\n'
             yield "event: done\ndata: {}\n\n"
             return
 
@@ -639,14 +721,15 @@ class RAGPipeline:
         answer_text = _norm(parser.answer_text)
         thinking_text = _norm(parser.thinking_text)
         if not answer_text and degraded_reply:
-            answer_text = degraded_reply   # 熔断兜底文案随正常路径持久化
+            answer_text = degraded_reply  # 熔断兜底文案随正常路径持久化
         if answer_text or (thinking_text and not answer_text):
             if not answer_text and thinking_text:
                 answer_text = thinking_text
                 thinking_text = ""
             try:
                 await conversation_memory.add_message(
-                    conv_id, "assistant",
+                    conv_id,
+                    "assistant",
                     _pii_safe(answer_text),
                     thinking_content=_pii_safe(thinking_text) if thinking_text else None,
                     status="completed",
@@ -654,9 +737,7 @@ class RAGPipeline:
                 )
             except Exception:
                 # DB-2：助手回复入库失败仅告警——不切流，degraded 事件仍会发
-                logging.getLogger(__name__).exception(
-                    "助手消息入库失败（DB-2 穿透兜底）")
-
+                logging.getLogger(__name__).exception("助手消息入库失败（DB-2 穿透兜底）")
 
         degraded_providers = provider_health.is_degraded()
         if settings.degradation_hint_enabled and degraded_providers:
@@ -665,12 +746,16 @@ class RAGPipeline:
                 ctx.record("degraded", providers=degraded_providers, chat_degraded=chat_degraded)
 
         # Emit stream status
-        yield f"event: status\ndata: {json.dumps({'phase':'done','thinking_tokens':len(thinking_text),'answer_tokens':len(answer_text)})}\n\n"
+        yield f"event: status\ndata: {json.dumps({'phase': 'done', 'thinking_tokens': len(thinking_text), 'answer_tokens': len(answer_text)})}\n\n"
 
         if ctx:
-            ctx.update("stream", total_tokens=len(full_buffer),
-                       total_ms=round((time.monotonic() - stream_start) * 1000, 1),
-                       thinking_chars=len(thinking_text), answer_chars=len(answer_text))
+            ctx.update(
+                "stream",
+                total_tokens=len(full_buffer),
+                total_ms=round((time.monotonic() - stream_start) * 1000, 1),
+                thinking_chars=len(thinking_text),
+                answer_chars=len(answer_text),
+            )
             ctx.save()
         yield "event: done\ndata: {}\n\n"
 

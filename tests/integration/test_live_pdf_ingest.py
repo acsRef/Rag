@@ -4,6 +4,7 @@ docling 解析（含表格清洗入库）→ 结构断言 → 金融术语检索
 摄入在子进程中执行（隔离 docling 原生崩溃）。PDF 不在预期路径则 skip。
 仅当 RAGENT_LIVE_LLM=1 且 key 齐备时运行。
 """
+
 import json
 import subprocess
 import sys
@@ -14,7 +15,8 @@ import pytest
 pytestmark = pytest.mark.live_llm
 
 PDF_PATH = Path(
-    r"C:\Users\Lenovo\Downloads\中国平安：海外监管公告 - 中国平安保险（集团）股份有限公司2026年第一季度报告.pdf")
+    r"C:\Users\Lenovo\Downloads\中国平安：海外监管公告 - 中国平安保险（集团）股份有限公司2026年第一季度报告.pdf"
+)
 CHILD_SCRIPT = Path(__file__).parent / "_pdf_ingest_child.py"
 
 
@@ -31,8 +33,9 @@ def pingan_doc(integration_db, live_env):
     import os as _os
 
     from dotenv import dotenv_values
+
     child_env = dict(_os.environ)
-    child_env["PYTHONPATH"] = str(repo_root)   # 脚本执行不会把 repo 根加入 sys.path
+    child_env["PYTHONPATH"] = str(repo_root)  # 脚本执行不会把 repo 根加入 sys.path
     # root conftest 把哨兵 key 写进了 os.environ 且 env 优先于 .env——
     # 子进程必须用 .env 真实 key 覆盖，否则 embedding 401、摄入必 failed
     vals = dotenv_values(str(repo_root / ".env"))
@@ -42,15 +45,21 @@ def pingan_doc(integration_db, live_env):
             child_env[k] = v
     proc = subprocess.run(
         [sys.executable, str(CHILD_SCRIPT), str(PDF_PATH)],
-        capture_output=True, text=True, timeout=1800, cwd=str(repo_root),
+        capture_output=True,
+        text=True,
+        timeout=1800,
+        cwd=str(repo_root),
         env=child_env,
     )
     line = next(
-        (line for line in proc.stdout.splitlines() if line.startswith("RESULT_JSON:")), None)
-    assert line, (
-        "PDF 摄入子进程异常退出（rc=%d，疑似 docling 原生崩溃）；stderr tail:%s%s"
-        % (proc.returncode, chr(10), proc.stderr[-800:]))
-    res = json.loads(line[len("RESULT_JSON:"):])
+        (line for line in proc.stdout.splitlines() if line.startswith("RESULT_JSON:")), None
+    )
+    assert line, "PDF 摄入子进程异常退出（rc=%d，疑似 docling 原生崩溃）；stderr tail:%s%s" % (
+        proc.returncode,
+        chr(10),
+        proc.stderr[-800:],
+    )
+    res = json.loads(line[len("RESULT_JSON:") :])
     assert res["status"] == "indexed", "PDF 摄入失败: %s" % res
     return res
 
@@ -81,7 +90,8 @@ async def test_pdf_retrieval_revenue(pingan_doc):
     from app.core.retrieval import retrieval_engine
 
     results = await retrieval_engine.retrieve(
-        "中国平安2026年第一季度营业收入", None, can_read_all=True)
+        "中国平安2026年第一季度营业收入", None, can_read_all=True
+    )
     assert results
     top_docs = {r.document_id for r in results[:5]}
     assert pingan_doc["document_id"] in top_docs
@@ -92,7 +102,8 @@ async def test_pdf_retrieval_profit(pingan_doc):
     from app.core.retrieval import retrieval_engine
 
     results = await retrieval_engine.retrieve(
-        "中国平安2026年第一季度净利润表现", None, can_read_all=True)
+        "中国平安2026年第一季度净利润表现", None, can_read_all=True
+    )
     assert results
     top_docs = {r.document_id for r in results[:5]}
     assert pingan_doc["document_id"] in top_docs

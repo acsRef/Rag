@@ -5,6 +5,7 @@ CircuitBreaker/ProviderHealth 旧实现无锁，ingestion 工作线程与主循�
 self._probe_in_flight=False 并把它设 True，多次返回 True → 多 probe
 同时打穿半开闸门。ProviderHealth.get 多线程建 breaker 也存在竞态。
 """
+
 import threading
 
 from app.llm.base import (
@@ -40,8 +41,9 @@ def test_half_open_admits_exactly_one_probe_under_contention():
     for t in threads:
         t.join()
 
-    assert results.count(True) == 1, \
+    assert results.count(True) == 1, (
         f"HALF_OPEN 并发下仅一个 probe 应放行：{results.count(True)} 次"
+    )
 
 
 def test_provider_health_get_returns_same_breaker_across_threads():

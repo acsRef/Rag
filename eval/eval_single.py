@@ -3,6 +3,7 @@
 用法：
     D:/miniConda/envs/rag/python.exe eval_single.py [--limit N] [--offset N]
 """
+
 import argparse
 import json
 import os
@@ -58,7 +59,7 @@ def call_judge(question: str, reference: str, rag_answer: str) -> dict:
             )
             resp.raise_for_status()
             content = resp.json()["choices"][0]["message"]["content"] or ""
-            content = re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL).strip()
+            content = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL).strip()
             if not content:
                 time.sleep(3)
                 continue
@@ -78,6 +79,7 @@ def call_judge(question: str, reference: str, rag_answer: str) -> dict:
 
 
 # ── RAG call ──────────────────────────────────────────────
+
 
 def call_rag(query: str, token: str, kb_id: str) -> dict:
     """Call RAG API with retries."""
@@ -117,7 +119,11 @@ def call_rag(query: str, token: str, kb_id: str) -> dict:
                     print("  ⚠️ Circuit breaker, waiting 30s...", flush=True)
                     time.sleep(30)
                     continue
-                return {"answer": answer, "sources_count": sources_count, "error": "circuit_breaker"}
+                return {
+                    "answer": answer,
+                    "sources_count": sources_count,
+                    "error": "circuit_breaker",
+                }
             return {"answer": answer, "sources_count": sources_count, "error": None}
         except Exception as e:
             if attempt < 2:
@@ -128,6 +134,7 @@ def call_rag(query: str, token: str, kb_id: str) -> dict:
 
 # ── Main ──────────────────────────────────────────────────
 
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--limit", type=int, default=None)
@@ -135,9 +142,9 @@ def main():
     args = parser.parse_args()
 
     # Login
-    token = requests.post(f"{BASE_URL}/api/v1/auth/login", json={
-        "username": "admin", "password": "admin123"
-    }).json()["access_token"]
+    token = requests.post(
+        f"{BASE_URL}/api/v1/auth/login", json={"username": "admin", "password": "admin123"}
+    ).json()["access_token"]
 
     # Find KB
     kbs = requests.get(f"{BASE_URL}/api/v1/kb", headers={"Authorization": f"Bearer {token}"}).json()
@@ -149,9 +156,9 @@ def main():
     # Load test set
     with open(TESTSET_PATH, encoding="utf-8") as f:
         testset = json.load(f)
-    questions = testset["题目"][args.offset:]
+    questions = testset["题目"][args.offset :]
     if args.limit:
-        questions = questions[:args.limit]
+        questions = questions[: args.limit]
 
     # Load existing results
     results = {}
@@ -160,7 +167,9 @@ def main():
             results = json.load(f)
 
     # Count already done
-    done = sum(1 for q in questions if q["id"] in results and results[q["id"]].get("judge_score", -1) >= 0)
+    done = sum(
+        1 for q in questions if q["id"] in results and results[q["id"]].get("judge_score", -1) >= 0
+    )
     print(f"共 {len(questions)} 题，已完成 {done} 题\n")
 
     for i, q in enumerate(questions):
@@ -170,7 +179,11 @@ def main():
         if qid in results and results[qid].get("judge_score", -1) >= 0:
             continue
 
-        print(f"[{i+1}/{len(questions)}] {qid} ({q['难度']}) {q['问题'][:40]}...", end=" ", flush=True)
+        print(
+            f"[{i + 1}/{len(questions)}] {qid} ({q['难度']}) {q['问题'][:40]}...",
+            end=" ",
+            flush=True,
+        )
 
         # Step 1: Call RAG
         rag = call_rag(q["问题"], token, kb_id)
@@ -230,7 +243,7 @@ def main():
         total = sum(r["judge_score"] for r in scored.values())
         max_score = len(scored) * 3
         print(f"\n=== 已完成 {len(scored)}/{len(testset['题目'])} 题 ===")
-        print(f"总分: {total}/{max_score} ({total/max_score*100:.1f}%)")
+        print(f"总分: {total}/{max_score} ({total / max_score * 100:.1f}%)")
 
 
 if __name__ == "__main__":

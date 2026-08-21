@@ -1,4 +1,5 @@
 """chunker 尺寸约束测试：无 H3 不坍缩、超限迭代切分、原子块保护、重叠窗口。"""
+
 from app.ingestion.chunker import TextChunker
 from app.ingestion.structurer import document_structurer
 
@@ -28,15 +29,17 @@ def test_oversized_section_packs_on_element_boundaries():
     embedding 信号与检索可读性双输。
     """
     table = NL.join(
-        ["| 项目 | 数值 |", "|---|---|"]
-        + ["| 行%d | %d |" % (i, i) for i in range(30)]
+        ["| 项目 | 数值 |", "|---|---|"] + ["| 行%d | %d |" % (i, i) for i in range(30)]
     )
-    md = NL.join([
-        "# T", "### 混合小节",
-        "第一段普通文本。" * 20,
-        table,
-        "第二段普通文本。" * 20,
-    ])
+    md = NL.join(
+        [
+            "# T",
+            "### 混合小节",
+            "第一段普通文本。" * 20,
+            table,
+            "第二段普通文本。" * 20,
+        ]
+    )
     sections = document_structurer.structure(md)
     chunks = TextChunker(max_chunk_size=400).chunk(sections)
     assert len(chunks) > 1

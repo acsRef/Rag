@@ -2,6 +2,7 @@
 
 PostgreSQL 不可达时全部 integration 用例 skip，离线环境跑全量套件不受影响。
 """
+
 import hashlib
 import math
 import os
@@ -46,7 +47,7 @@ if PG_AVAILABLE:
         conn.commit()
     boot.dispose()
     os.environ["DATABASE_URL"] = TEST_DB_URL
-    settings.database_url = TEST_DB_URL   # app.store.db 在此之后才会被 import
+    settings.database_url = TEST_DB_URL  # app.store.db 在此之后才会被 import
 
 
 @pytest.fixture(scope="session")
@@ -67,24 +68,35 @@ def integration_db():
         # CASCADE 会把 seed 目标表一并清空。表清单本身已是引用闭包。
         # 注意 2：不要清 user_roles——seed_defaults 按"用户是否存在"跳过重建，
         # 清掉后跨会话留存的 admin 用户会永久失去角色关联（is_admin=False）。
-        session.execute(text(
-            "TRUNCATE chunks, chunk_questions, documents, doc_entities, "
-            "doc_relations, doc_embeddings, conversations, messages, "
-            "pii_alerts, pii_hold, doc_role_access, kb_role_access "
-            "RESTART IDENTITY"
-        ))
+        session.execute(
+            text(
+                "TRUNCATE chunks, chunk_questions, documents, doc_entities, "
+                "doc_relations, doc_embeddings, conversations, messages, "
+                "pii_alerts, pii_hold, doc_role_access, kb_role_access "
+                "RESTART IDENTITY"
+            )
+        )
         session.execute(text("DELETE FROM knowledge_bases WHERE id = 'test-kb'"))
         session.execute(text("DELETE FROM users WHERE id = 'test-user'"))
         # 模型间没有 relationship() 声明，flush 顺序不保证——
         # 必须先 flush user 再插 KB，否则 KB 的 INSERT 可能抢跑触发 FK 违反。
-        session.add(db_mod.User(
-            id="test-user", username="test-user",
-            hashed_password="unused-in-tests", is_active=True,
-        ))
+        session.add(
+            db_mod.User(
+                id="test-user",
+                username="test-user",
+                hashed_password="unused-in-tests",
+                is_active=True,
+            )
+        )
         session.flush()
-        session.add(db_mod.KnowledgeBase(
-            id="test-kb", name="测试知识库", visibility="public", owner_id="test-user",
-        ))
+        session.add(
+            db_mod.KnowledgeBase(
+                id="test-kb",
+                name="测试知识库",
+                visibility="public",
+                owner_id="test-user",
+            )
+        )
         session.commit()
 
     yield db_mod
@@ -124,10 +136,7 @@ def fake_llm_stack(monkeypatch):
 
     async def fake_rerank(query, texts, **kw):
         # 恒等排序的伪分数：极差 > 0.001，让 retrieval 的"无区分度跳过"分支不触发
-        return [
-            {"index": i, "relevance_score": 1.0 - i * 0.01}
-            for i in range(len(texts))
-        ]
+        return [{"index": i, "relevance_score": 1.0 - i * 0.01} for i in range(len(texts))]
 
     def fake_generate(chunks):
         for i, c in enumerate(chunks):
@@ -159,25 +168,36 @@ def ingest_docs(integration_db, fake_llm_stack):
     from app.store.db import Document, get_db_ctx, new_id, utc_now
 
     with get_db_ctx() as session:
-        session.execute(text(
-            "TRUNCATE chunks, chunk_questions, documents, doc_entities, "
-            "doc_relations, doc_embeddings, doc_role_access RESTART IDENTITY"
-        ))
+        session.execute(
+            text(
+                "TRUNCATE chunks, chunk_questions, documents, doc_entities, "
+                "doc_relations, doc_embeddings, doc_role_access RESTART IDENTITY"
+            )
+        )
         session.commit()
 
     ids = {}
     for name in ("transformer_basics.md", "transformer_pytorch.md", "rag_chunking.md"):
         doc_id = new_id()
         with get_db_ctx() as session:
-            session.add(Document(
-                document_id=doc_id, kb_id="test-kb", filename=name,
-                owner_id="test-user", status="processing",
-                created_at=utc_now(), updated_at=utc_now(),
-            ))
+            session.add(
+                Document(
+                    document_id=doc_id,
+                    kb_id="test-kb",
+                    filename=name,
+                    owner_id="test-user",
+                    status="processing",
+                    created_at=utc_now(),
+                    updated_at=utc_now(),
+                )
+            )
             session.commit()
         res = document_indexer.index(
-            name, (FIXTURE_DIR / name).read_bytes(),
-            kb_id="test-kb", user_id="test-user", document_id=doc_id,
+            name,
+            (FIXTURE_DIR / name).read_bytes(),
+            kb_id="test-kb",
+            user_id="test-user",
+            document_id=doc_id,
         )
         assert res["status"] == "indexed", "摄入 %s 失败: %s" % (name, res)
         ids[name] = doc_id
@@ -188,9 +208,12 @@ def truncate_corpus(db_mod) -> None:
     """清空语料相关表：live 模块共享 session 级数据库，
     各模块摄入前调用，避免跨模块语料累积污染 top-k 断言。"""
     with db_mod.get_db_ctx() as session:
-        session.execute(text(
-            "TRUNCATE chunks, chunk_questions, documents, doc_entities, "
-            "doc_relations, doc_embeddings, doc_role_access RESTART IDENTITY"))
+        session.execute(
+            text(
+                "TRUNCATE chunks, chunk_questions, documents, doc_entities, "
+                "doc_relations, doc_embeddings, doc_role_access RESTART IDENTITY"
+            )
+        )
         session.commit()
 
 
@@ -203,6 +226,7 @@ def live_env():
     if os.environ.get("RAGENT_LIVE_LLM") != "1":
         pytest.skip("未设置 RAGENT_LIVE_LLM=1，跳过真实 API 测试")
     from dotenv import dotenv_values
+
     vals = dotenv_values(".env")
     mm_key = (vals.get("MINIMAX_API_KEY") or "").strip()
     sf_key = (vals.get("SILICONFLOW_API_KEY") or "").strip()
@@ -211,14 +235,19 @@ def live_env():
 
     from app.llm.chat import minimax_client
     from app.llm.embedding import sf_embedding
+
     # live 模型切换：RAGENT_LIVE_MODEL 指定（如 deepseek-ai/DeepSeek-V3）
     live_model = os.environ.get("RAGENT_LIVE_MODEL", "").strip()
     saved = (
-        settings.minimax_api_key, settings.siliconflow_api_key,
-        settings.chat_model, settings.minimax_model,
-        minimax_client._client, minimax_client._client_loop_id,
+        settings.minimax_api_key,
+        settings.siliconflow_api_key,
+        settings.chat_model,
+        settings.minimax_model,
+        minimax_client._client,
+        minimax_client._client_loop_id,
         minimax_client._active_provider,
-        sf_embedding._client, sf_embedding._client_loop_id,
+        sf_embedding._client,
+        sf_embedding._client_loop_id,
     )
     settings.minimax_api_key = mm_key
     settings.siliconflow_api_key = sf_key
@@ -230,8 +259,14 @@ def live_env():
     sf_embedding._client = None
     sf_embedding._client_loop_id = None
     yield
-    (settings.minimax_api_key, settings.siliconflow_api_key,
-     settings.chat_model, settings.minimax_model,
-     minimax_client._client, minimax_client._client_loop_id,
-     minimax_client._active_provider,
-     sf_embedding._client, sf_embedding._client_loop_id) = saved
+    (
+        settings.minimax_api_key,
+        settings.siliconflow_api_key,
+        settings.chat_model,
+        settings.minimax_model,
+        minimax_client._client,
+        minimax_client._client_loop_id,
+        minimax_client._active_provider,
+        sf_embedding._client,
+        sf_embedding._client_loop_id,
+    ) = saved

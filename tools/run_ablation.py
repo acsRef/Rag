@@ -18,6 +18,7 @@
 用法：
     D:/miniConda/envs/rag/python.exe tools/run_ablation.py
 """
+
 from __future__ import annotations
 
 import json
@@ -128,7 +129,11 @@ def _run_eval_regression(tier: str = "regression", top_k: int = 10) -> dict:
     env = os.environ.copy()
     proc = subprocess.run(
         [sys.executable, str(EVAL_PY), "--tier", tier, "--top-k", str(top_k)],
-        cwd=str(ROOT), env=env, capture_output=True, text=True, timeout=300,
+        cwd=str(ROOT),
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=300,
     )
     if proc.returncode != 0:
         print(f"  eval error: {proc.stderr[-500:]}")
@@ -158,8 +163,7 @@ def _kill_backend():
     """停止可能残留的 backend 进程。"""
     if sys.platform == "win32":
         # taskkill /F /IM python.exe 风险大（会杀其他 python）；用 tasklist 找进程
-        subprocess.run(["taskkill", "/F", "/FI", "WINDOWTITLE eq ragent*"],
-                       capture_output=True)
+        subprocess.run(["taskkill", "/F", "/FI", "WINDOWTITLE eq ragent*"], capture_output=True)
         # 兜底：find PID by netstat 8000 + kill
         try:
             r = subprocess.run(["netstat", "-ano"], capture_output=True, text=True)
@@ -190,8 +194,11 @@ def main():
         env["LOG_LEVEL"] = "INFO"
         proc = subprocess.Popen(
             [sys.executable, "-m", "app.main"],
-            cwd=str(ROOT), env=env,
-            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+            cwd=str(ROOT),
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
         )
         print(f"  started PID {proc.pid}")
         if not _wait_backend():
@@ -205,22 +212,26 @@ def main():
         elapsed = time.monotonic() - t0
         print(f"  eval elapsed {elapsed:.1f}s")
         if result:
-            print(f"  hit@5={result['agg'].get('hit@5', 0):.3f}  "
-                  f"hit@10={result['agg'].get('hit@10', 0):.3f}  "
-                  f"recall@5={result['agg'].get('recall@5', 0):.3f}  "
-                  f"recall@10={result['agg'].get('recall@10', 0):.3f}  "
-                  f"MRR={result['agg'].get('mrr', 0):.3f}  "
-                  f"avg_latency={result['avg_latency_ms']:.0f}ms")
-            aggregated.append({
-                "name": cfg["name"],
-                "desc": cfg["desc"],
-                "env": cfg["env"],
-                "metrics": result["agg"],
-                "n_total": result["n_total"],
-                "n_with_gold": result["n_with_gold"],
-                "avg_latency_ms": result["avg_latency_ms"],
-                "eval_elapsed_s": round(elapsed, 1),
-            })
+            print(
+                f"  hit@5={result['agg'].get('hit@5', 0):.3f}  "
+                f"hit@10={result['agg'].get('hit@10', 0):.3f}  "
+                f"recall@5={result['agg'].get('recall@5', 0):.3f}  "
+                f"recall@10={result['agg'].get('recall@10', 0):.3f}  "
+                f"MRR={result['agg'].get('mrr', 0):.3f}  "
+                f"avg_latency={result['avg_latency_ms']:.0f}ms"
+            )
+            aggregated.append(
+                {
+                    "name": cfg["name"],
+                    "desc": cfg["desc"],
+                    "env": cfg["env"],
+                    "metrics": result["agg"],
+                    "n_total": result["n_total"],
+                    "n_with_gold": result["n_with_gold"],
+                    "avg_latency_ms": result["avg_latency_ms"],
+                    "eval_elapsed_s": round(elapsed, 1),
+                }
+            )
 
         # 4. 停 backend（下一轮重启前）
         try:
@@ -236,12 +247,16 @@ def main():
         json.dump(aggregated, f, ensure_ascii=False, indent=2)
     print(f"\n汇总写入 {OUTPUT_PATH}")
     print("\n=== 汇总表 ===")
-    print(f"{'Config':<24}{'hit@5':<10}{'hit@10':<10}{'recall@5':<11}{'recall@10':<11}{'MRR':<10}{'latency':<10}")
+    print(
+        f"{'Config':<24}{'hit@5':<10}{'hit@10':<10}{'recall@5':<11}{'recall@10':<11}{'MRR':<10}{'latency':<10}"
+    )
     for a in aggregated:
         m = a["metrics"]
-        print(f"{a['name']:<24}{m.get('hit@5', 0):<10.3f}{m.get('hit@10', 0):<10.3f}"
-              f"{m.get('recall@5', 0):<11.3f}{m.get('recall@10', 0):<11.3f}"
-              f"{m.get('mrr', 0):<10.3f}{a['avg_latency_ms']:<10.0f}")
+        print(
+            f"{a['name']:<24}{m.get('hit@5', 0):<10.3f}{m.get('hit@10', 0):<10.3f}"
+            f"{m.get('recall@5', 0):<11.3f}{m.get('recall@10', 0):<11.3f}"
+            f"{m.get('mrr', 0):<10.3f}{a['avg_latency_ms']:<10.0f}"
+        )
 
 
 if __name__ == "__main__":

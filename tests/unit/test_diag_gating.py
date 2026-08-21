@@ -3,11 +3,13 @@
 设计审查 P0-1：diagnostics_enabled 之前是死的——chat 路径无条件创建 DiagContext，
 关闭开关也照写遥测文件。此处验证开关真正生效。
 """
+
 import app.api.chat as chat_mod
 
 
 class _Recorder:
     """DiagContext 替身：记录实例化次数，不做任何文件写入。"""
+
     calls: int = 0
 
     def __init__(self, query: str = "") -> None:

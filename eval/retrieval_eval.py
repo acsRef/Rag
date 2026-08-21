@@ -13,6 +13,7 @@
     - admin/admin123 默认账号；调 RAGENT_KB_NAME_HINT 改 KB 名称匹配关键词
     - 结果写到 eval/sany_annual_reports/retrieval_results.json
 """
+
 from __future__ import annotations
 
 import argparse
@@ -94,8 +95,7 @@ def _find_kb_id(base_url: str, token: str) -> str:
     )
     if not kb_id:
         sys.exit(
-            f"ERROR: 找不到含 '{DEFAULT_KB_HINT}' 的知识库；"
-            f"用 RAGENT_KB_NAME_HINT 改匹配关键词"
+            f"ERROR: 找不到含 '{DEFAULT_KB_HINT}' 的知识库；用 RAGENT_KB_NAME_HINT 改匹配关键词"
         )
     return kb_id
 
@@ -128,7 +128,9 @@ def _print_summary(results: list[dict]) -> None:
             if err:
                 print(f"  {r['id']}: ❌ {err}")
             else:
-                print(f"  {r['id']}: top1={top1}  hits={r['retrieved_count']}  {r['elapsed_ms']:.0f}ms")
+                print(
+                    f"  {r['id']}: top1={top1}  hits={r['retrieved_count']}  {r['elapsed_ms']:.0f}ms"
+                )
         return
     keys = list(have_gold[0]["metrics"].keys())
     agg = {k: sum(r["metrics"][k] for r in have_gold) / len(have_gold) for k in keys}
@@ -166,13 +168,15 @@ def main() -> None:
             data = _retrieve(args.base_url, token, q["问题"], kb_id, args.top_k)
         except Exception as e:
             print(f"[{i}/{len(questions)}] {q['id']} ❌ retrieve error: {e}", flush=True)
-            results.append({
-                "id": q["id"],
-                "category": q.get("类别"),
-                "difficulty": q.get("难度"),
-                "question": q["问题"],
-                "error": str(e),
-            })
+            results.append(
+                {
+                    "id": q["id"],
+                    "category": q.get("类别"),
+                    "difficulty": q.get("难度"),
+                    "question": q["问题"],
+                    "error": str(e),
+                }
+            )
             continue
         elapsed_ms = (time.monotonic() - t0) * 1000
         items = data.get("items", [])

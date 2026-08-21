@@ -8,6 +8,7 @@
 直接跳过；并发的摘要区间集合（fake LLM 记录的 new_turns 文本去解析得到的
 消息集合）必须互斥。
 """
+
 import asyncio
 
 import pytest
@@ -28,7 +29,8 @@ def _concurrency_users(integration_db):
 
 
 async def test_concurrent_summaries_cover_disjoint_intervals(
-        integration_db, monkeypatch, fake_llm_stack):
+    integration_db, monkeypatch, fake_llm_stack
+):
     """两个并发 fire-and-forget 摘要任务各自记录其 prompt 涵盖的消息集合；
     两个集合必须互斥（不重复摘要同一区间）。"""
     from app.core import memory as memory_mod
@@ -51,13 +53,14 @@ async def test_concurrent_summaries_cover_disjoint_intervals(
 
     # 创建 conversation
     conv = await asyncio.to_thread(
-        conversation_memory.get_or_create_conversation, None, "race-user")
+        conversation_memory.get_or_create_conversation, None, "race-user"
+    )
     # 用足够多的消息让两个并发摘要同时触发（每条约 24 token → 窗口装 2 条 →
     # 第 3 条起触发摘要；连续 add_message 让两个任务并发触发）
     for i in range(10):
         await conversation_memory.add_message(
-            conv, "user", "M%d" % i + "x" * 33,
-            user_id="race-user")
+            conv, "user", "M%d" % i + "x" * 33, user_id="race-user"
+        )
     # 让 fire-and-forget 摘要任务 + 排水循环跑完；0.5s 足够并发场景触发
     # ≥2 次 LLM 调用（每条 add_message 后任务启动；锁竞争让其中一些返回 False）
     await asyncio.sleep(0.5)
@@ -76,15 +79,15 @@ async def test_concurrent_summaries_cover_disjoint_intervals(
         return idxs
 
     intervals = [parse_msg_indices(p) for p in captured]
-    assert len(intervals) >= 2, (
-        "并发场景必须实际触发 ≥2 次 LLM 调用；本次仅 %d 次" % len(intervals))
+    assert len(intervals) >= 2, "并发场景必须实际触发 ≥2 次 LLM 调用；本次仅 %d 次" % len(intervals)
     # 不变量：任意两次摘要的区间互不重叠（修复前 = 同一区间被折叠两次）
     for i in range(len(intervals)):
         for j in range(i + 1, len(intervals)):
             overlap = intervals[i] & intervals[j]
             assert not overlap, (
                 "摘要区间重叠：第 %d 次调用 [len=%d] 与第 %d 次 [len=%d] 重叠元素 %s"
-                % (i, len(intervals[i]), j, len(intervals[j]), sorted(overlap)))
+                % (i, len(intervals[i]), j, len(intervals[j]), sorted(overlap))
+            )
 
     # 锁前移后：每次摘要必然自上次 watermark 之后推进；区间连续覆盖
     # 已扫描的消息（最多偶发的轻微延迟，但不重叠）

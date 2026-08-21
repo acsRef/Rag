@@ -23,6 +23,7 @@ def _fresh_db_breaker():
 
 # ── DB-1 熔断计数 ──────────────────────────────────────────
 
+
 def test_search_kb_records_failure_on_exception(monkeypatch):
     _fresh_db_breaker()
     b = llm_base.provider_health.get("postgres")
@@ -33,7 +34,7 @@ def test_search_kb_records_failure_on_exception(monkeypatch):
     monkeypatch.setattr(pgvector_store, "hybrid_search", boom)
 
     out = _search_kb("kb1", [0.1] * 4, "q", user_role_ids=[1], can_read_all=False, top_k=5)
-    assert out == []   # 仍然容错（子查询失败）
+    assert out == []  # 仍然容错（子查询失败）
     with b._lock:
         assert b.failure_count == 1, "DB 失败必须计入 postgres 熔断"
 

@@ -20,7 +20,7 @@ class SFRerank:
         self.base_url = settings.siliconflow_base_url
         self.model = settings.rerank_model
         self._client: httpx.AsyncClient | None = None
-        self._client_loop_id: int = -1   # 对齐 embedding/chat 的 loop 重建模式
+        self._client_loop_id: int = -1  # 对齐 embedding/chat 的 loop 重建模式
 
     def _get_client(self) -> httpx.AsyncClient:
         # httpx.AsyncClient 绑死在创建它的事件循环上；跨 loop 调用会报

@@ -1,4 +1,5 @@
 """Auth API: register, login, me."""
+
 import threading
 import time
 from collections import defaultdict
@@ -39,13 +40,19 @@ def _client_ip(request) -> str:
     first = fwd.split(",")[0].strip() if fwd else ""
     return first or (request.client.host if request.client else "unknown")
 
+
 # 假哈希：用户不存在时也跑一次 bcrypt，拉平两条路径的耗时，防用户名枚举
 _DUMMY_HASH = hash_password("ragent-dummy-password-for-timing-equalization")
 
 
 def _get_workspace_kb_id(user_id: str) -> str:
     with get_db_ctx() as session:
-        kb = session.query(KnowledgeBase).filter(KnowledgeBase.owner_id == user_id).order_by(KnowledgeBase.created_at).first()
+        kb = (
+            session.query(KnowledgeBase)
+            .filter(KnowledgeBase.owner_id == user_id)
+            .order_by(KnowledgeBase.created_at)
+            .first()
+        )
         return kb.id if kb else ""
 
 
@@ -70,8 +77,7 @@ def _check_rate_limit(key: str, message: str = "登录尝试过于频繁，请�
 
 @router.post("/register", response_model=TokenResponse)
 def register(body: RegisterRequest, request: Request):
-    _check_rate_limit("register:" + _client_ip(request),
-                      message="注册过于频繁，请稍后再试")
+    _check_rate_limit("register:" + _client_ip(request), message="注册过于频繁，请稍后再试")
     if get_user_by_username(body.username):
         raise HTTPException(status_code=400, detail="Username already exists")
     user_role = next((r for r in list_roles() if r.name == "user"), None)
@@ -104,9 +110,12 @@ def register(body: RegisterRequest, request: Request):
     return TokenResponse(
         access_token=token,
         user=UserResponse(
-            id=user.id, username=user.username,
-            display_name=user.display_name, email=user.email,
-            is_active=user.is_active, role_ids=role_ids,
+            id=user.id,
+            username=user.username,
+            display_name=user.display_name,
+            email=user.email,
+            is_active=user.is_active,
+            role_ids=role_ids,
             roles=[r.name for r in list_roles() if r.id in role_ids],
             permissions=permissions,
             workspace_kb_id=workspace_kb_id,
@@ -119,7 +128,7 @@ def login(body: LoginRequest, request: Request):
     _check_rate_limit(_client_ip(request))
     user = get_user_by_username(body.username)
     if user is None:
-        verify_password(body.password, _DUMMY_HASH)   # 时序拉平：存在/不存在耗时一致
+        verify_password(body.password, _DUMMY_HASH)  # 时序拉平：存在/不存在耗时一致
         raise HTTPException(status_code=401, detail="Invalid username or password")
     if not verify_password(body.password, user.hashed_password):
         raise HTTPException(status_code=401, detail="Invalid username or password")
@@ -132,9 +141,12 @@ def login(body: LoginRequest, request: Request):
     return TokenResponse(
         access_token=token,
         user=UserResponse(
-            id=user.id, username=user.username,
-            display_name=user.display_name, email=user.email,
-            is_active=user.is_active, role_ids=role_ids,
+            id=user.id,
+            username=user.username,
+            display_name=user.display_name,
+            email=user.email,
+            is_active=user.is_active,
+            role_ids=role_ids,
             roles=[r.name for r in roles],
             permissions=permissions,
             workspace_kb_id=_get_workspace_kb_id(user.id),
@@ -149,9 +161,12 @@ def me(current_user: dict = Depends(get_current_user)):
     roles = [r for r in list_roles() if r.id in role_ids]
     permissions = get_user_permissions(user.id)
     return UserResponse(
-        id=user.id, username=user.username,
-        display_name=user.display_name, email=user.email,
-        is_active=user.is_active, role_ids=role_ids,
+        id=user.id,
+        username=user.username,
+        display_name=user.display_name,
+        email=user.email,
+        is_active=user.is_active,
+        role_ids=role_ids,
         roles=[r.name for r in roles],
         permissions=permissions,
         workspace_kb_id=_get_workspace_kb_id(user.id),

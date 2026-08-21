@@ -1,4 +1,5 @@
 """锁定 app/llm/base.py 行为：熔断状态机 / 错误分类 / JSON 容错 / 退避 / 重试策略。"""
+
 import pytest
 
 import app.llm.base as base
@@ -15,6 +16,7 @@ from app.llm.base import (
 )
 
 # ── 熔断器 ──────────────────────────────────────────────
+
 
 def test_breaker_closed_allows_requests():
     cb = CircuitBreaker(failure_threshold=3, cooldown_seconds=30.0)
@@ -47,7 +49,7 @@ def test_breaker_probe_success_closes(monkeypatch):
     cb = CircuitBreaker(failure_threshold=1, cooldown_seconds=30.0)
     cb.on_failure()
     clock[0] = 31.0
-    cb.allow_request()          # 触发 OPEN → HALF_OPEN
+    cb.allow_request()  # 触发 OPEN → HALF_OPEN
     cb.on_success()
     assert cb.state == CircuitState.CLOSED
     assert cb.failure_count == 0
@@ -60,7 +62,7 @@ def test_breaker_probe_failure_reopens(monkeypatch):
     cb.on_failure()
     clock[0] = 31.0
     cb.allow_request()
-    cb.on_failure()             # probe 失败
+    cb.on_failure()  # probe 失败
     assert cb.state == CircuitState.OPEN
     assert cb.allow_request() is False
 
@@ -71,13 +73,14 @@ def test_breaker_half_open_allows_exactly_one_probe(monkeypatch):
     cb = CircuitBreaker(failure_threshold=1, cooldown_seconds=30.0)
     cb.on_failure()
     clock[0] = 31.0
-    first = cb.allow_request()      # 转换调用
-    second = cb.allow_request()     # 期望：总共只允许一个 probe
+    first = cb.allow_request()  # 转换调用
+    second = cb.allow_request()  # 期望：总共只允许一个 probe
     assert first is True
     assert second is False
 
 
 # ── 错误分类 ────────────────────────────────────────────
+
 
 class _FakeHTTPError(Exception):
     def __init__(self, status_code: int):
@@ -118,6 +121,7 @@ def test_classify_circuit_open_is_not_retried():
 
 # ── JSON 容错解析 ───────────────────────────────────────
 
+
 def test_robust_json_plain_object():
     assert robust_json_parse('{"a": 1}') == {"a": 1}
 
@@ -127,7 +131,7 @@ def test_robust_json_code_fenced():
 
 
 def test_robust_json_think_wrapped():
-    raw = "<think>blah" + chr(10) + "</think>" + chr(10)*2 + '{"a": 1}'
+    raw = "<think>blah" + chr(10) + "</think>" + chr(10) * 2 + '{"a": 1}'
     assert robust_json_parse(raw) == {"a": 1}
 
 
@@ -149,6 +153,7 @@ def test_robust_json_garbage_returns_none():
 
 # ── 退避 ────────────────────────────────────────────────
 
+
 def test_jittered_backoff_bounds():
     for attempt, lo in ((0, 1.0), (1, 2.0), (3, 8.0)):
         v = jittered_backoff(attempt)
@@ -156,6 +161,7 @@ def test_jittered_backoff_bounds():
 
 
 # ── 重试策略 ────────────────────────────────────────────
+
 
 @pytest.fixture
 def no_backoff(monkeypatch):

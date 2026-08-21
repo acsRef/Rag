@@ -14,6 +14,7 @@ EMBEDDING_TEXT_VERSION = 2 跟 db.embedding_version 对齐——所有用 build_
 重 embed 的 chunk 都标 version=2，hybrid_search 加 AND embedding_version = 2 过滤
 隔离新旧 embedding。
 """
+
 from __future__ import annotations
 
 from typing import TYPE_CHECKING

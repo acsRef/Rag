@@ -1,4 +1,5 @@
 """会话 IDOR 回归测试：不得凭 conversation_id 触碰他人会话。"""
+
 import asyncio
 
 import pytest
@@ -31,7 +32,7 @@ async def test_cannot_hijack_other_users_conversation(integration_db):
     # 用户 B 拿着 A 的 conversation_id 进来
     conv_b = await _to_thread(conversation_memory.get_or_create_conversation, conv_a, "user-b")
 
-    assert conv_b != conv_a                      # 应为 B 新建的会话
+    assert conv_b != conv_a  # 应为 B 新建的会话
     assert conversation_memory.get_history(conv_b) == []
     # A 的历史原样保留、未被 B 写入污染
     history_a = conversation_memory.get_history(conv_a)

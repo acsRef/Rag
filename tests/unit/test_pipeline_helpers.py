@@ -4,6 +4,7 @@ from app.core.pipeline import _needs_decomposition, _norm, _sse_safe
 
 # ── _needs_decomposition ────────────────────────────────
 
+
 def test_decomp_comparison_pattern():
     assert _needs_decomposition("JWT 和 Session 有什么区别") is True
 
@@ -33,12 +34,14 @@ def test_decomp_qi_ta_not_anaphoric():
 
 # ── _sse_safe ───────────────────────────────────────────
 
+
 def test_sse_safe_escapes_newline_and_strips_cr():
     # _NL 是字面 反斜杠+n（两个字符），\r 被删除
     assert _sse_safe("a\nb\rc") == "a" + chr(92) + "nbc"
 
 
 # ── _norm ───────────────────────────────────────────────
+
 
 def test_norm_collapses_excess_blank_lines():
     assert _norm("a\n\n\n\nb") == "a\n\nb"

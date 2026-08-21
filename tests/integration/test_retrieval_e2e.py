@@ -1,11 +1,14 @@
 """检索全链路测试：embedding → 混合检索 → 跨文档 → rerank → MMR。"""
+
 from app.config import settings
 from app.core.retrieval import retrieval_engine
 
 
 async def test_retrieval_end_to_end_returns_ranked_chunks(ingest_docs):
     results = await retrieval_engine.retrieve(
-        "Transformer 多头注意力 QKV 计算", None, can_read_all=True,
+        "Transformer 多头注意力 QKV 计算",
+        None,
+        can_read_all=True,
     )
     assert results, "全链路检索返回空"
     assert len(results) <= settings.rerank_top_k
@@ -26,12 +29,10 @@ async def test_rerank_partial_return_keeps_all_candidates(ingest_docs, monkeypat
     monkeypatch.setattr(s, "rerank_top_k", 20)
 
     async def truncating_rerank(query, texts, **kw):
-        return [{"index": i, "relevance_score": 1.0 - i * 0.1}
-                for i in range(min(2, len(texts)))]
+        return [{"index": i, "relevance_score": 1.0 - i * 0.1} for i in range(min(2, len(texts)))]
 
     monkeypatch.setattr(sf_rerank, "rerank", truncating_rerank)
-    results = await retrieval_engine.retrieve(
-        "Transformer 多头注意力 QKV", None, can_read_all=True)
+    results = await retrieval_engine.retrieve("Transformer 多头注意力 QKV", None, can_read_all=True)
     # 语料三文档多 chunk：即使 rerank 只返回 2 个索引，最终结果也应 > 2
     assert len(results) > 2, "rerank 部分返回导致候选被静默丢弃"
 
@@ -47,7 +48,9 @@ async def test_retrieval_results_belong_to_corpus(ingest_docs):
             r[0] for r in session.execute(sqlt("SELECT document_id FROM documents")).all()
         }
     results = await retrieval_engine.retrieve(
-        "Transformer", None, can_read_all=True,
+        "Transformer",
+        None,
+        can_read_all=True,
     )
     assert results
     assert all(r.document_id in all_doc_ids for r in results)

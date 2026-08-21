@@ -45,7 +45,7 @@ def test_dedup_years_preserves_order():
 
 
 def test_filter_non_year_four_digit_numbers():
-    """"4,527,498" / "P5" / "5,975" 等 4 位数字不应误判为年份。"""
+    """ "4,527,498" / "P5" / "5,975" 等 4 位数字不应误判为年份。"""
     # 4,527 → 4527，不在 2020-2029 区间，忽略
     p = parse_query("归母净利润为 4,527,498 千元")
     assert p.years is None

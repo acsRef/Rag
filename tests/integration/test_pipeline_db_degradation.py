@@ -13,6 +13,7 @@ from fastapi.testclient import TestClient
 def test_health_endpoint_reports_db_status(integration_db):
     """DB-4：/health 反映 DB 状态。集成环境下 PG 可达 → ok/db: true。"""
     from app.main import app
+
     with TestClient(app) as c:
         resp = c.get("/health")
     assert resp.status_code == 200
@@ -25,6 +26,7 @@ def _open_postgres_breaker():
     """把 postgres 熔断器强制置 OPEN：模拟 DB 长时间不可用。"""
     from app.llm import base as llm_base
     from app.llm.base import CircuitState
+
     b = llm_base.provider_health.get("postgres")
     with b._lock:
         b.state = CircuitState.OPEN
@@ -33,6 +35,7 @@ def _open_postgres_breaker():
 
 def _close_postgres_breaker(b):
     from app.llm.base import CircuitState
+
     with b._lock:
         b.state = CircuitState.CLOSED
         b.failure_count = 0
@@ -42,6 +45,7 @@ def _close_postgres_breaker_safe():
     """try-close without exception（cleanup 用）。"""
     from app.llm import base as llm_base
     from app.llm.base import CircuitState
+
     if "postgres" in llm_base.provider_health._breakers:
         with llm_base.provider_health._breakers["postgres"]._lock:
             llm_base.provider_health._breakers["postgres"].state = CircuitState.CLOSED
@@ -51,6 +55,7 @@ def _close_postgres_breaker_safe():
 async def _collect(req, **kwargs):
     """消费 rag_pipeline.execute 单例产出。"""
     from app.core.pipeline import rag_pipeline
+
     out = []
     async for e in rag_pipeline.execute(req, **kwargs):
         out.append(e)
@@ -75,7 +80,8 @@ async def test_db_down_lists_kb_ids_does_not_crash(monkeypatch, fake_llm_stack):
 
 
 async def test_retrieval_empty_with_db_open_emits_error_not_no_context(
-        monkeypatch, integration_db, fake_llm_stack):
+    monkeypatch, integration_db, fake_llm_stack
+):
     """DB-3：检索空 + postgres 熔断 OPEN → error 事件告知用户，不走 LLM。"""
     from app.core import retrieval as retrieval_mod
     from app.llm import chat as chat_mod
@@ -84,12 +90,11 @@ async def test_retrieval_empty_with_db_open_emits_error_not_no_context(
     _open_postgres_breaker()
     try:
         # 检索返回空
-        monkeypatch.setattr(
-            retrieval_mod, "_search_kb",
-            lambda *a, **kw: [])
+        monkeypatch.setattr(retrieval_mod, "_search_kb", lambda *a, **kw: [])
 
         # LLM 若被调用说明测试失败——用计数器断言
         chat_calls = []
+
         async def chat_stub(messages, **kw):
             chat_calls.append("chat")
             return "不应该被调用"
@@ -115,7 +120,8 @@ async def test_retrieval_empty_with_db_open_emits_error_not_no_context(
 
 
 async def test_retrieval_empty_with_db_healthy_emits_no_context(
-        monkeypatch, integration_db, ingest_docs, fake_llm_stack):
+    monkeypatch, integration_db, ingest_docs, fake_llm_stack
+):
     """DB 健康时空结果仍走 no_context（不进 LLM 也是 try—但保留 LLM 路径以触发 fallback）。
 
     校验：postgres 熔断 CLOSED + 检索空 → 发 no_context（不是 error）。
@@ -128,11 +134,10 @@ async def test_retrieval_empty_with_db_healthy_emits_no_context(
     async def fake_stream(messages, **kw):
         yield "answer"
         return
+
     monkeypatch.setattr(chat_mod.minimax_client, "chat_stream", fake_stream)
 
-    monkeypatch.setattr(
-        retrieval_mod, "_search_kb",
-        lambda *a, **kw: [])
+    monkeypatch.setattr(retrieval_mod, "_search_kb", lambda *a, **kw: [])
 
     req = ChatRequest(query="查询")
     out = await _collect(req, user_id="test-user")
@@ -146,5 +151,6 @@ async def test_retrieval_empty_with_db_healthy_emits_no_context(
     for i, start in enumerate(event_starts):
         end = event_starts[i + 1] if i + 1 < len(event_starts) else len(out)
         actual_events.append(out[start:end].split("\n", 1)[0])
-    assert "event: error" not in actual_events, \
+    assert "event: error" not in actual_events, (
         f"DB 健康时不应触发 DB-3 的 error 事件，实际事件序列：{actual_events}"
+    )

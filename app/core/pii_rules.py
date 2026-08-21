@@ -15,7 +15,6 @@
   - exclusion_words 防误报关键词列表,前后 20 字符命中即跳过
 """
 
-
 DEFAULT_RULES = [
     {
         "rule_name": "cn_id_card",
@@ -104,7 +103,13 @@ def validate_id_card(value: str) -> bool:
 def validate_phone(value: str) -> bool:
     """Validate Chinese phone number by first two digits."""
     return len(value) == 11 and value[:2] in (
-        "13", "14", "15", "16", "17", "18", "19",
+        "13",
+        "14",
+        "15",
+        "16",
+        "17",
+        "18",
+        "19",
     )
 
 
@@ -147,27 +152,32 @@ VALIDATORS = {
 def seed_pii_rules():
     """Sync DEFAULT_RULES to sensitive_rules table on startup."""
     from app.store.db import SensitiveRule, get_session, utc_now
+
     session = None
     try:
         session = get_session()
         for rule in DEFAULT_RULES:
-            existing = session.query(SensitiveRule).filter(
-                SensitiveRule.rule_name == rule["rule_name"]
-            ).first()
+            existing = (
+                session.query(SensitiveRule)
+                .filter(SensitiveRule.rule_name == rule["rule_name"])
+                .first()
+            )
             if existing:
                 continue
-            session.add(SensitiveRule(
-                rule_name=rule["rule_name"],
-                display_name=rule["display_name"],
-                pattern=rule["pattern"],
-                validation_fn=rule["validation_fn"],
-                strategy=rule["strategy"],
-                mask_mode=rule["mask_mode"],
-                exclusion_words=rule["exclusion_words"],
-                description=rule.get("description", ""),
-                is_active=rule["is_active"],
-                created_at=utc_now(),
-            ))
+            session.add(
+                SensitiveRule(
+                    rule_name=rule["rule_name"],
+                    display_name=rule["display_name"],
+                    pattern=rule["pattern"],
+                    validation_fn=rule["validation_fn"],
+                    strategy=rule["strategy"],
+                    mask_mode=rule["mask_mode"],
+                    exclusion_words=rule["exclusion_words"],
+                    description=rule.get("description", ""),
+                    is_active=rule["is_active"],
+                    created_at=utc_now(),
+                )
+            )
         session.commit()
     finally:
         if session:

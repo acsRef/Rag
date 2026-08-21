@@ -26,8 +26,8 @@ def test_doc_ids_with_any_entity_converges_candidates(ingest_docs):
 
     cands = pgvector_store.get_doc_ids_with_any_entity(terms)
     assert doc1 in cands
-    assert doc2 in cands          # 共享术语 → 入选
-    assert doc3 not in cands      # 无实体重叠 → 不入选（语料有界）
+    assert doc2 in cands  # 共享术语 → 入选
+    assert doc3 not in cands  # 无实体重叠 → 不入选（语料有界）
 
 
 def test_get_chunks_by_document_includes_document_id(ingest_docs):
@@ -69,7 +69,11 @@ async def test_cross_doc_jump_returns_related_doc_chunks(ingest_docs):
         c["document_id"] = doc1
 
     extras = await cross_doc_retriever.retrieve(
-        "QKV 投影如何实现", None, ["test-kb"], initial, can_read_all=True,
+        "QKV 投影如何实现",
+        None,
+        ["test-kb"],
+        initial,
+        can_read_all=True,
     )
     assert extras, "跨文档跳转未返回任何补充 chunk"
     extra_docs = {c["document_id"] for c in extras}
@@ -96,10 +100,11 @@ async def test_cross_doc_extras_reach_final_results(ingest_docs, monkeypatch):
     d1_chunks = pgvector_store.get_chunks_by_document(doc1)[:5]
     assert d1_chunks
     for i, c in enumerate(d1_chunks):
-        c["score"] = 0.02 - i * 0.001   # RRF 量级的直连分
+        c["score"] = 0.02 - i * 0.001  # RRF 量级的直连分
 
-    async def fake_collect(kb_ids, query_emb, query, user_role_ids, can_read_all,
-                           top_k, seen_ids, results, user_id=""):
+    async def fake_collect(
+        kb_ids, query_emb, query, user_role_ids, can_read_all, top_k, seen_ids, results, user_id=""
+    ):
         for c in d1_chunks:
             seen_ids.add(c["chunk_id"])
             results.append(dict(c))
@@ -127,7 +132,11 @@ async def test_channel3_discovers_semantically_related_doc(ingest_docs, monkeypa
     initial = pgvector_store.get_chunks_by_document(doc1)[:2]
     # 查询词与文档 3 无词法交集 → channel 1/2 不会发现它，只有 channel 3 能
     extras = await cross_doc_retriever.retrieve(
-        "缩放点积公式推导", [0.1] * 4096, ["test-kb"], initial, can_read_all=True,
+        "缩放点积公式推导",
+        [0.1] * 4096,
+        ["test-kb"],
+        initial,
+        can_read_all=True,
     )
     extra_docs = {c["document_id"] for c in extras}
     assert doc3 in extra_docs, "channel 3 未能独立发现语义相关文档"

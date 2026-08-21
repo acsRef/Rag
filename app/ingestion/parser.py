@@ -20,14 +20,25 @@ from app.llm.vision import image_describer
 
 FILE_TYPE_MAP = {
     ".pdf": "pdf",
-    ".docx": "docx", ".doc": "doc",
-    ".xlsx": "xlsx", ".xls": "xls",
-    ".pptx": "pptx", ".ppt": "ppt",
-    ".txt": "text", ".md": "text", ".csv": "text",
-    ".json": "json", ".xml": "xml",
-    ".html": "html", ".htm": "html",
-    ".png": "image", ".jpg": "image", ".jpeg": "image",
-    ".gif": "image", ".bmp": "image", ".webp": "image",
+    ".docx": "docx",
+    ".doc": "doc",
+    ".xlsx": "xlsx",
+    ".xls": "xls",
+    ".pptx": "pptx",
+    ".ppt": "ppt",
+    ".txt": "text",
+    ".md": "text",
+    ".csv": "text",
+    ".json": "json",
+    ".xml": "xml",
+    ".html": "html",
+    ".htm": "html",
+    ".png": "image",
+    ".jpg": "image",
+    ".jpeg": "image",
+    ".gif": "image",
+    ".bmp": "image",
+    ".webp": "image",
 }
 
 
@@ -54,6 +65,7 @@ class DocumentParser:
             return handler(content, filename)
         except Exception:
             import logging
+
             logging.getLogger(__name__).exception("Handler %s failed for %s", file_type, filename)
             raise
 
@@ -111,7 +123,7 @@ class DocumentParser:
 
     # ── Embedded image replacement ────────────────────────
 
-    _IMG_PATTERN = re.compile(r'!\[([^\]]*)\]\(([^)]+)\)')
+    _IMG_PATTERN = re.compile(r"!\[([^\]]*)\]\(([^)]+)\)")
 
     def _replace_embedded_images(self, md: str, pictures, doc) -> str:
         """Replace each Markdown image in Docling output with a text description from vision API.
@@ -151,7 +163,11 @@ class DocumentParser:
         result_md = md
         for batch_idx, pic_idx in pic_to_match_idx.items():
             placeholder = matches[pic_idx].group(0)
-            desc = f"[图片：{descriptions[batch_idx]}]" if batch_idx < len(descriptions) else "[图片描述失败]"
+            desc = (
+                f"[图片：{descriptions[batch_idx]}]"
+                if batch_idx < len(descriptions)
+                else "[图片描述失败]"
+            )
             result_md = result_md.replace(placeholder, desc, 1)
 
         return result_md
@@ -164,6 +180,7 @@ class DocumentParser:
             return image_describer.describe_sync(content, filename)
         except Exception:
             import logging
+
             logging.getLogger(__name__).exception("Vision API failed for %s", filename)
             return "[图片描述失败]"
 
@@ -194,6 +211,7 @@ class DocumentParser:
         import tempfile
 
         import pymupdf4llm
+
         try:
             # pymupdf4llm needs a file path, not bytes
             suffix = ".pdf"
@@ -209,10 +227,14 @@ class DocumentParser:
                 return md
             finally:
                 import os
+
                 os.unlink(tmp_path)
         except Exception:
             import logging
-            logging.getLogger(__name__).exception("pymupdf4llm failed for %s, falling back to basic", filename)
+
+            logging.getLogger(__name__).exception(
+                "pymupdf4llm failed for %s, falling back to basic", filename
+            )
             return self._parse_pdf_basic(content, filename)
 
     @staticmethod
@@ -228,6 +250,7 @@ class DocumentParser:
 
         # 统计短行出现频率，找出页眉/页脚候选
         from collections import Counter
+
         short_lines = Counter()
         for line in lines:
             stripped = line.strip()
@@ -237,7 +260,7 @@ class DocumentParser:
         # 出现 5+ 次的短行视为页眉/页脚（年报 250 页，页眉至少出现 100+ 次）
         noise_patterns = {text for text, count in short_lines.items() if count >= 5}
         # 页码模式 "**N** / **M**" 或 "N / M"
-        page_num_re = re.compile(r'^\*?\*?\d+\*?\*?\s*/\s*\*?\*?\d+\*?\*?$')
+        page_num_re = re.compile(r"^\*?\*?\d+\*?\*?\s*/\s*\*?\*?\d+\*?\*?$")
 
         for line in lines:
             stripped = line.strip()
@@ -254,6 +277,7 @@ class DocumentParser:
     def _parse_pdf_basic(self, content: bytes, filename: str) -> str:
         """Fallback: basic PyMuPDF text extraction (fast but no table structure)."""
         import fitz
+
         doc = fitz.open(stream=content, filetype="pdf")
         pages_md: list[str] = []
         for i, page in enumerate(doc, 1):

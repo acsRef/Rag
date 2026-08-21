@@ -8,6 +8,7 @@ provider_health allow_request/on_failure）与降级计数，由调用方自行�
 鉴权：admin / doc.read_all bypass；否则按 KB visibility + 角色访问判定
 （与 list_kb 语义一致）。
 """
+
 import asyncio
 import logging
 
@@ -37,8 +38,11 @@ def _assert_kb_readable(session, user: dict, kb_ids: list[str]) -> None:
     for kb_id in kb_ids:
         kb = session.query(KnowledgeBase).filter(KnowledgeBase.id == kb_id).first()
         if not kb:
-            logger.warning("retrieve.kb_denied user_id=%s kb_id=%s reason=missing_or_unreadable",
-                           user["id"], kb_id)
+            logger.warning(
+                "retrieve.kb_denied user_id=%s kb_id=%s reason=missing_or_unreadable",
+                user["id"],
+                kb_id,
+            )
             raise HTTPException(status_code=403, detail=f"知识库不存在或不可读: {kb_id}")
         if kb.visibility == "public" or kb.owner_id == user["id"]:
             continue
@@ -51,8 +55,9 @@ def _assert_kb_readable(session, user: dict, kb_ids: list[str]) -> None:
                 .first()
             )
         if not hit:
-            logger.warning("retrieve.kb_denied user_id=%s kb_id=%s reason=no_role_access",
-                           user["id"], kb_id)
+            logger.warning(
+                "retrieve.kb_denied user_id=%s kb_id=%s reason=no_role_access", user["id"], kb_id
+            )
             raise HTTPException(status_code=403, detail=f"无权读取知识库: {kb_id}")
 
 
@@ -70,8 +75,10 @@ async def retrieve(body: RetrieveRequest, current_user: dict = Depends(get_curre
     query_emb, degraded = await embed_query_with_fallback(body.query)
     if query_emb is None:
         # 纯向量模式 + embedding 熔断/失败：零向量余弦排序未定义，宁可空结果
-        logger.warning("retrieve.pure_vector_degraded — embedding unavailable with hybrid off, "
-                       "returning empty items")
+        logger.warning(
+            "retrieve.pure_vector_degraded — embedding unavailable with hybrid off, "
+            "returning empty items"
+        )
         return RetrieveResponse(items=[], degraded=True)
 
     user_role_ids = current_user["role_ids"]  # _build_user_dict 保证键齐全（与 list_kb 一致）

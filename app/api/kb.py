@@ -1,4 +1,5 @@
 """Knowledge Base CRUD API."""
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import or_
 
@@ -47,15 +48,23 @@ def list_kb(current_user: dict = Depends(get_current_user)):
             conditions = [or_(public_cond, owner_cond)]
             if has_roles:
                 conditions.append(
-                    KnowledgeBase.visibility.in_(["internal", "restricted"]) &
-                    KnowledgeBase.id.in_(
-                        session.query(KBRoleAccess.kb_id).filter(KBRoleAccess.role_id.in_(role_ids)).subquery()
+                    KnowledgeBase.visibility.in_(["internal", "restricted"])
+                    & KnowledgeBase.id.in_(
+                        session.query(KBRoleAccess.kb_id)
+                        .filter(KBRoleAccess.role_id.in_(role_ids))
+                        .subquery()
                     )
                 )
-            kbs = session.query(KnowledgeBase).filter(
-                *conditions
-            ).order_by(KnowledgeBase.created_at.desc()).all()
-        return [KBResponse(id=k.id, name=k.name, visibility=k.visibility, owner_id=k.owner_id) for k in kbs]
+            kbs = (
+                session.query(KnowledgeBase)
+                .filter(*conditions)
+                .order_by(KnowledgeBase.created_at.desc())
+                .all()
+            )
+        return [
+            KBResponse(id=k.id, name=k.name, visibility=k.visibility, owner_id=k.owner_id)
+            for k in kbs
+        ]
     finally:
         session.close()
 
@@ -72,12 +81,16 @@ def delete_kb(kb_id: str, current_user: dict = Depends(get_current_user)):
         if not current_user["is_admin"] and kb.owner_id != current_user["id"]:
             raise HTTPException(status_code=403, detail="无权删除不属于自己的知识库")
         # Collect doc IDs before deletion (needed for PII cleanup)
-        doc_ids = [r[0] for r in session.query(Document.document_id).filter(Document.kb_id == kb_id).all()]
+        doc_ids = [
+            r[0] for r in session.query(Document.document_id).filter(Document.kb_id == kb_id).all()
+        ]
         if doc_ids:
-            session.query(DocRoleAccess).filter(
-                DocRoleAccess.document_id.in_(doc_ids)
-            ).delete(synchronize_session=False)
-            session.query(Chunk).filter(Chunk.document_id.in_(doc_ids)).delete(synchronize_session=False)
+            session.query(DocRoleAccess).filter(DocRoleAccess.document_id.in_(doc_ids)).delete(
+                synchronize_session=False
+            )
+            session.query(Chunk).filter(Chunk.document_id.in_(doc_ids)).delete(
+                synchronize_session=False
+            )
             session.query(Document).filter(Document.kb_id == kb_id).delete()
             session.query(PiiAlert).filter(
                 PiiAlert.source_id.in_(doc_ids), PiiAlert.source_type == "document"
@@ -92,6 +105,7 @@ def delete_kb(kb_id: str, current_user: dict = Depends(get_current_user)):
         # 设计审查 P0-3 + P0-3 的健壮性：显式清理 doc_relations 入边/出边。
         # 与 delete_document 一致，DB cascade 之外双保险（防旧表缺 FK）。
         from app.store import pgvector_store
+
         for did in doc_ids:
             pgvector_store.delete_doc_relations_by_doc_id(did)
 
@@ -101,7 +115,9 @@ def delete_kb(kb_id: str, current_user: dict = Depends(get_current_user)):
 
 
 @router.put("/{kb_id}/roles")
-def set_kb_role_access(kb_id: str, body: KBRoleAccessRequest, current_user: dict = Depends(get_current_user)):
+def set_kb_role_access(
+    kb_id: str, body: KBRoleAccessRequest, current_user: dict = Depends(get_current_user)
+):
     if not current_user["is_admin"] and "kb.manage_visibility" not in current_user["permissions"]:
         raise HTTPException(status_code=403, detail="Permission denied")
     session = get_session()

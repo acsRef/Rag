@@ -1,4 +1,5 @@
 """MCP 工具分发：stub 掉 client/introspect，只测 server 编排与错误契约。"""
+
 import asyncio
 import json
 
@@ -13,7 +14,12 @@ from mcp_server.client import RagentClientError
 class FakeClient:
     def __init__(self, kb_id="kb-9", upload=None, wait=None, retrieve=None, docs=None):
         self.kb_id = kb_id
-        self._upload = upload or {"document_id": "d1", "filename": "f.md", "status": "processing", "chunk_count": 0}
+        self._upload = upload or {
+            "document_id": "d1",
+            "filename": "f.md",
+            "status": "processing",
+            "chunk_count": 0,
+        }
         self._wait = wait or {"document_id": "d1", "status": "indexed", "chunk_count": 2}
         self._retrieve = retrieve or {"items": [], "degraded": False}
         self._docs = docs if docs is not None else []
@@ -40,10 +46,26 @@ class FakeClient:
 
 def test_ingest_table_schemas_happy(monkeypatch):
     monkeypatch.setenv("DICT_PG_DSN", "postgresql://fake")
-    monkeypatch.setattr(srv, "introspect_schema", lambda dsn, schema, tables=None: [{
-        "schema": "public", "table": "fact_sales", "table_comment": "销售",
-        "columns": [{"name": "sale_id", "type": "integer", "comment": "主键", "enums": None, "fk": None}],
-    }])
+    monkeypatch.setattr(
+        srv,
+        "introspect_schema",
+        lambda dsn, schema, tables=None: [
+            {
+                "schema": "public",
+                "table": "fact_sales",
+                "table_comment": "销售",
+                "columns": [
+                    {
+                        "name": "sale_id",
+                        "type": "integer",
+                        "comment": "主键",
+                        "enums": None,
+                        "fk": None,
+                    }
+                ],
+            }
+        ],
+    )
     fake = FakeClient()
     monkeypatch.setattr(srv, "RagentClient", lambda: fake)
     out = json.loads(asyncio.run(srv.cmd_ingest_table_schemas({"schema": "public"})))
@@ -59,8 +81,13 @@ def test_ingest_table_schemas_missing_dsn(monkeypatch):
 
 def test_ingest_ragent_error_is_text(monkeypatch):
     monkeypatch.setenv("DICT_PG_DSN", "postgresql://fake")
-    monkeypatch.setattr(srv, "introspect_schema", lambda dsn, schema, tables=None: [
-        {"schema": "public", "table": "t", "table_comment": "", "columns": []}])
+    monkeypatch.setattr(
+        srv,
+        "introspect_schema",
+        lambda dsn, schema, tables=None: [
+            {"schema": "public", "table": "t", "table_comment": "", "columns": []}
+        ],
+    )
 
     class Boom(FakeClient):
         async def ensure_kb(self, name, visibility="internal"):
@@ -74,10 +101,17 @@ def test_ingest_ragent_error_is_text(monkeypatch):
 def test_upsert_api_dictionary_renders_and_uploads(monkeypatch):
     fake = FakeClient()
     monkeypatch.setattr(srv, "RagentClient", lambda: fake)
-    out = json.loads(asyncio.run(srv.cmd_upsert_api_dictionary({
-        "name": "orders", "description": "订单接口",
-        "fields": [{"name": "amt", "type": "number", "required": True, "desc": "金额"}],
-    })))
+    out = json.loads(
+        asyncio.run(
+            srv.cmd_upsert_api_dictionary(
+                {
+                    "name": "orders",
+                    "description": "订单接口",
+                    "fields": [{"name": "amt", "type": "number", "required": True, "desc": "金额"}],
+                }
+            )
+        )
+    )
     assert out["status"] == "indexed"
     fname, content = fake.last_upload
     assert fname == "dict-api_orders.md"
@@ -92,8 +126,17 @@ def test_search_dictionary_empty_semantics(monkeypatch):
 
 
 def test_list_dictionary_docs(monkeypatch):
-    fake = FakeClient(docs=[{"document_id": "d1", "filename": "dict-table_public_fact_sales.md",
-                             "status": "indexed", "kb_id": "kb-9", "chunk_count": 2}])
+    fake = FakeClient(
+        docs=[
+            {
+                "document_id": "d1",
+                "filename": "dict-table_public_fact_sales.md",
+                "status": "indexed",
+                "kb_id": "kb-9",
+                "chunk_count": 2,
+            }
+        ]
+    )
     monkeypatch.setattr(srv, "RagentClient", lambda: fake)
     out = json.loads(asyncio.run(srv.cmd_list_dictionary_docs({})))
     assert out[0]["filename"].startswith("dict-")
@@ -104,18 +147,27 @@ def test_mcp_tool_surface():
     names = {t.name for t in tools}
     # 字典桥 4 工具 + Schema FAQ 3 工具（ingest_faq/search_faq/list_faq_docs）
     assert names == {
-        "ingest_table_schemas", "upsert_api_dictionary", "search_dictionary", "list_dictionary_docs",
-        "ingest_faq", "search_faq", "list_faq_docs",
+        "ingest_table_schemas",
+        "upsert_api_dictionary",
+        "search_dictionary",
+        "list_dictionary_docs",
+        "ingest_faq",
+        "search_faq",
+        "list_faq_docs",
     }
 
 
 def test_ingest_table_schemas_partial_failure(monkeypatch):
     """(a) 第二张表抛 RagentClientError → results 数组长度 2，第二项有 error，第一项正常。"""
     monkeypatch.setenv("DICT_PG_DSN", "postgresql://fake")
-    monkeypatch.setattr(srv, "introspect_schema", lambda dsn, schema, tables=None: [
-        {"schema": "public", "table": "t_ok", "table_comment": "", "columns": []},
-        {"schema": "public", "table": "t_bad", "table_comment": "", "columns": []},
-    ])
+    monkeypatch.setattr(
+        srv,
+        "introspect_schema",
+        lambda dsn, schema, tables=None: [
+            {"schema": "public", "table": "t_ok", "table_comment": "", "columns": []},
+            {"schema": "public", "table": "t_bad", "table_comment": "", "columns": []},
+        ],
+    )
 
     class PartialBoom(FakeClient):
         async def upload_document(self, kb_id, filename, content):
@@ -151,9 +203,13 @@ def test_cmd_returns_text_when_ragent_url_missing(monkeypatch):
         def __init__(self, *args, **kwargs):
             raise RagentClientError("RAGENT_URL 未配置")
 
-    monkeypatch.setattr(srv, "introspect_schema", lambda dsn, schema, tables=None: [
-        {"schema": "public", "table": "t", "table_comment": "", "columns": []}
-    ])
+    monkeypatch.setattr(
+        srv,
+        "introspect_schema",
+        lambda dsn, schema, tables=None: [
+            {"schema": "public", "table": "t", "table_comment": "", "columns": []}
+        ],
+    )
     monkeypatch.setattr(srv, "RagentClient", lambda: NoUrlClient())
     for cmd, args in [
         (srv.cmd_ingest_table_schemas, {"schema": "public"}),
@@ -173,10 +229,14 @@ def test_ingest_table_filename_error_keeps_batch(monkeypatch):
     """
     monkeypatch.setenv("RAGENT_URL", "http://fake:8000")
     monkeypatch.setenv("DICT_PG_DSN", "postgresql://fake")
-    monkeypatch.setattr(srv, "introspect_schema", lambda dsn, schema, tables=None: [
-        {"schema": "public", "table": "t_ok", "table_comment": "", "columns": []},
-        {"schema": "public", "table": "t_bad", "table_comment": "", "columns": []},
-    ])
+    monkeypatch.setattr(
+        srv,
+        "introspect_schema",
+        lambda dsn, schema, tables=None: [
+            {"schema": "public", "table": "t_ok", "table_comment": "", "columns": []},
+            {"schema": "public", "table": "t_bad", "table_comment": "", "columns": []},
+        ],
+    )
 
     real_table_filename = srv.table_filename
 

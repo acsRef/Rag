@@ -6,7 +6,8 @@
 
 
 async def test_circuit_open_streams_degraded_reply(
-        integration_db, fake_llm_stack, ingest_docs, monkeypatch):
+    integration_db, fake_llm_stack, ingest_docs, monkeypatch
+):
     from app.core.pipeline import rag_pipeline
     from app.llm.base import CircuitOpenError
     from app.llm.chat import minimax_client
@@ -20,8 +21,7 @@ async def test_circuit_open_streams_degraded_reply(
     monkeypatch.setattr(minimax_client, "chat_stream", open_circuit)
 
     events = []
-    async for raw in rag_pipeline.execute(
-            ChatRequest(query="什么是 RAG"), user_id="test-user"):
+    async for raw in rag_pipeline.execute(ChatRequest(query="什么是 RAG"), user_id="test-user"):
         events.append(raw)
 
     joined = "".join(events)
@@ -31,7 +31,10 @@ async def test_circuit_open_streams_degraded_reply(
 
     # 兜底文案同样要持久化（供历史会话加载）
     with get_db_ctx() as session:
-        msgs = session.query(Message).filter(
-            Message.role == "assistant").order_by(Message.id.desc()).all()
-    assert any("AI 服务暂时不可用" in (m.content or "") for m in msgs), \
-        "熔断兜底文案未入库"
+        msgs = (
+            session.query(Message)
+            .filter(Message.role == "assistant")
+            .order_by(Message.id.desc())
+            .all()
+        )
+    assert any("AI 服务暂时不可用" in (m.content or "") for m in msgs), "熔断兜底文案未入库"

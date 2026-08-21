@@ -23,8 +23,16 @@ logger = logging.getLogger(__name__)
 
 # Provider registry: name → (api_key, base_url, model)
 _PROVIDER_CONFIGS = {
-    "siliconflow": lambda: (settings.siliconflow_api_key, settings.siliconflow_base_url, settings.chat_model),
-    "minimax": lambda: (settings.minimax_api_key, settings.minimax_base_url, settings.minimax_model),
+    "siliconflow": lambda: (
+        settings.siliconflow_api_key,
+        settings.siliconflow_base_url,
+        settings.chat_model,
+    ),
+    "minimax": lambda: (
+        settings.minimax_api_key,
+        settings.minimax_base_url,
+        settings.minimax_model,
+    ),
 }
 
 

@@ -40,7 +40,7 @@ class Settings(BaseSettings):
     complex_rerank_top_k: int = 10
     intent_min_score: float = 0.35
     max_intent_count: int = 3
-    max_sub_questions: int = 4   # rewrite 拆题上限（防 LLM 无限展开 + 重排/嵌入并发雪崩）
+    max_sub_questions: int = 4  # rewrite 拆题上限（防 LLM 无限展开 + 重排/嵌入并发雪崩）
     hybrid_search_enabled: bool = True
     hybrid_search_top_k: int = 20  # 单路搜多取一些用于 RRF 合并
     hybrid_rrf_k: int = 60  # RRF 常数
@@ -54,9 +54,9 @@ class Settings(BaseSettings):
 
     # Token budget — 控制注入 LLM 的 prompt 各部分大小
     # 默认值基于 MiniMax M3 128K 上下文,留足余量
-    prompt_max_tokens: int = 10000      # 总预算(不含 LLM 输出预留)
-    history_max_tokens: int = 2000      # 近期对话的 token 预算
-    summary_max_tokens: int = 800       # 历史摘要的最大 token 数
+    prompt_max_tokens: int = 10000  # 总预算(不含 LLM 输出预留)
+    history_max_tokens: int = 2000  # 近期对话的 token 预算
+    summary_max_tokens: int = 800  # 历史摘要的最大 token 数
     summary_trigger_tokens: int = 2000  # 旧消息累积超过此值时触发摘要
 
     # PII / Sensitive data
@@ -76,12 +76,12 @@ class Settings(BaseSettings):
     embedding_rate_limit_rps: int = 5
 
     # Circuit breaker
-    circuit_breaker_enabled: bool = True     # env: CIRCUIT_BREAKER_ENABLED
-    circuit_breaker_threshold: int = 10      # consecutive failures before OPEN
-    circuit_breaker_cooldown: float = 30.0   # seconds before HALF_OPEN probe
+    circuit_breaker_enabled: bool = True  # env: CIRCUIT_BREAKER_ENABLED
+    circuit_breaker_threshold: int = 10  # consecutive failures before OPEN
+    circuit_breaker_cooldown: float = 30.0  # seconds before HALF_OPEN probe
 
     # Embedding cache (see app/core/cache.py::EmbeddingCache)
-    embedding_cache_enabled: bool = True     # env: EMBEDDING_CACHE_ENABLED
+    embedding_cache_enabled: bool = True  # env: EMBEDDING_CACHE_ENABLED
 
     # Active embedding schema version used by retrieval SQL filters.
     # 1 = baseline (c.text embedded directly); 2 = build_embedding_text() output
@@ -90,46 +90,46 @@ class Settings(BaseSettings):
     # showed v2 introduces prefix noise that measurably hurts MRR — default v1.
     # Re-running the v2 ablation: set CURRENT_EMBEDDING_VERSION=2 + run
     # tools/reembed_v2.py --use-build-embedding-text --target-version 2.
-    current_embedding_version: int = 1      # env: CURRENT_EMBEDDING_VERSION
+    current_embedding_version: int = 1  # env: CURRENT_EMBEDDING_VERSION
 
     # Retrieval cache (see app/core/cache.py::RetrievalCache)
-    retrieval_cache_enabled: bool = True     # env: RETRIEVAL_CACHE_ENABLED
+    retrieval_cache_enabled: bool = True  # env: RETRIEVAL_CACHE_ENABLED
 
     # Retrieval strategies default off: the 8-group ablation on the Sany corpus
     # (docs/plans/2026-08-23-ablation-report.md) showed no recall gain and
     # slightly negative MRR vs baseline. Env vars keep each strategy available
     # for single-point re-evaluation (e.g. CROSS_DOC_ENABLED=true).
-    cross_doc_enabled: bool = False          # env: CROSS_DOC_ENABLED
-    section_boost_enabled: bool = False      # env: SECTION_BOOST_ENABLED
-    section_supplement_enabled: bool = False # env: SECTION_SUPPLEMENT_ENABLED
-    year_supplement_enabled: bool = False    # env: YEAR_SUPPLEMENT_ENABLED
-    query_decomposition_enabled: bool = False # env: QUERY_DECOMPOSITION_ENABLED
-    evidence_gate_enabled: bool = False      # env: EVIDENCE_GATE_ENABLED
-    evidence_min_coverage: float = 0.7       # env: EVIDENCE_MIN_COVERAGE
+    cross_doc_enabled: bool = False  # env: CROSS_DOC_ENABLED
+    section_boost_enabled: bool = False  # env: SECTION_BOOST_ENABLED
+    section_supplement_enabled: bool = False  # env: SECTION_SUPPLEMENT_ENABLED
+    year_supplement_enabled: bool = False  # env: YEAR_SUPPLEMENT_ENABLED
+    query_decomposition_enabled: bool = False  # env: QUERY_DECOMPOSITION_ENABLED
+    evidence_gate_enabled: bool = False  # env: EVIDENCE_GATE_ENABLED
+    evidence_min_coverage: float = 0.7  # env: EVIDENCE_MIN_COVERAGE
 
     # Multi-channel retrieval: question embedding channel
-    question_channel_enabled: bool = True       # env: QUESTION_CHANNEL_ENABLED
-    question_channel_top_k: int = 10           # per-question vector search top_k
+    question_channel_enabled: bool = True  # env: QUESTION_CHANNEL_ENABLED
+    question_channel_top_k: int = 10  # per-question vector search top_k
     question_channel_rrf_weight: float = 0.15  # RRF fusion weight (low to avoid noise)
 
     # Cross-doc relation
     cross_doc_embedding_threshold: float = 0.7  # doc embedding cosine threshold (channel 3)
-    cross_doc_source_label: str = "来源"        # [来源: filename] label prefix
+    cross_doc_source_label: str = "来源"  # [来源: filename] label prefix
 
     # Degradation hints
-    degradation_hint_enabled: bool = True    # env: DEGRADATION_HINT_ENABLED
+    degradation_hint_enabled: bool = True  # env: DEGRADATION_HINT_ENABLED
 
     # Logging
-    log_level: str = "INFO"                # env: LOG_LEVEL (DEBUG/INFO/WARNING/ERROR)
-    log_dir: str = "logs"                  # env: LOG_DIR
+    log_level: str = "INFO"  # env: LOG_LEVEL (DEBUG/INFO/WARNING/ERROR)
+    log_dir: str = "logs"  # env: LOG_DIR
     log_max_bytes: int = 10 * 1024 * 1024  # 10MB per file
-    log_backup_count: int = 7              # 保留 7 个 backup 文件
-    log_to_console: bool = True            # 同步输出 stderr 方便开发
+    log_backup_count: int = 7  # 保留 7 个 backup 文件
+    log_to_console: bool = True  # 同步输出 stderr 方便开发
 
     # Diagnostics
-    diagnostics_enabled: bool = True       # env: DIAGNOSTICS_ENABLED
-    diagnostics_dir: str = "diagnostics"   # env: DIAGNOSTICS_DIR
-    diagnostics_max_index: int = 500       # env: DIAGNOSTICS_MAX_INDEX
+    diagnostics_enabled: bool = True  # env: DIAGNOSTICS_ENABLED
+    diagnostics_dir: str = "diagnostics"  # env: DIAGNOSTICS_DIR
+    diagnostics_max_index: int = 500  # env: DIAGNOSTICS_MAX_INDEX
 
     # Server
     host: str = "0.0.0.0"

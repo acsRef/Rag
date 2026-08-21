@@ -6,6 +6,7 @@ unit 测试不得触碰真实 DB / 网络 / LLM：
 app.store.db import 期创建的 engine 会绑定到不存在的地址，
 任何误触真实服务的 unit 测试将立即失败。
 """
+
 import os
 
 os.environ["DATABASE_URL"] = "postgresql://test:test@127.0.0.1:1/ragent_test_nonexistent"

@@ -5,6 +5,7 @@
 - 每个问题单独跑，单独评分（避免批量 API 限流）
 - 输出对比报告，便于看每次改动效果
 """
+
 import json
 import os
 import re
@@ -38,9 +39,13 @@ TARGET_QUESTIONS = [
 
 
 def login():
-    resp = requests.post(f"{BASE_URL}/api/v1/auth/login", json={
-        "username": "admin", "password": "admin123",
-    })
+    resp = requests.post(
+        f"{BASE_URL}/api/v1/auth/login",
+        json={
+            "username": "admin",
+            "password": "admin123",
+        },
+    )
     return resp.json()["access_token"]
 
 
@@ -59,7 +64,9 @@ def call_rag(token, kb_id, query, conversation_id=None):
     resp = requests.post(
         f"{BASE_URL}/api/v1/chat/stream",
         headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
-        json=body, stream=True, timeout=180,
+        json=body,
+        stream=True,
+        timeout=180,
     )
     answer = ""
     event_type = None
@@ -92,8 +99,8 @@ def judge(question_data, rag_answer):
     # 紧凑 prompt，避免长 prompt 触发超时
     prompt = f"""根据参考答案判断RAG回答的准确度(0-3分)。
 
-问题: {question_data['问题']}
-参考答案: {question_data['参考答案'][:300]}
+问题: {question_data["问题"]}
+参考答案: {question_data["参考答案"][:300]}
 RAG回答: {rag_answer[:800]}
 
 3=完全正确;2=基本正确有小偏差;1=部分正确有明显错误;0=错误/拒答/编造。
@@ -106,15 +113,17 @@ RAG回答: {rag_answer[:800]}
         try:
             resp = requests.post(
                 f"{base_url}/chat/completions",
-                headers={"Authorization": f"Bearer {api_key}",
-                         "Content-Type": "application/json"},
-                json={"model": model,
-                      "messages": [{"role": "user", "content": prompt}],
-                      "temperature": 0.1, "max_tokens": 200},
+                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                json={
+                    "model": model,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "temperature": 0.1,
+                    "max_tokens": 200,
+                },
                 timeout=60,
             )
             content = resp.json()["choices"][0]["message"]["content"] or ""
-            content = re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL).strip()
+            content = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL).strip()
             if not content:
                 if attempt < 1:
                     time.sleep(2)
@@ -166,6 +175,7 @@ def run(limit=None):
                 time.sleep(1)
             if scores:
                 from collections import Counter
+
                 final_score = Counter(s for s, _ in scores).most_common(1)[0][0]
                 final_reason = scores[0][1]
             else:
@@ -173,23 +183,32 @@ def run(limit=None):
                 final_reason = "all judge failed"
 
             print(f"  Score: {final_score} - {final_reason[:80]}")
-            results.append({"qid": qid, "score": final_score, "reason": final_reason,
-                          "answer": answer, "sources_count": len(rag["sources"])})
+            results.append(
+                {
+                    "qid": qid,
+                    "score": final_score,
+                    "reason": final_reason,
+                    "answer": answer,
+                    "sources_count": len(rag["sources"]),
+                }
+            )
         except Exception as e:
             print(f"  ERROR: {e}")
-            results.append({"qid": qid, "score": -1, "reason": str(e), "answer": "", "sources_count": 0})
+            results.append(
+                {"qid": qid, "score": -1, "reason": str(e), "answer": "", "sources_count": 0}
+            )
 
         time.sleep(2)
 
     # 汇总
     scored = [r for r in results if r["score"] >= 0]
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print(f"汇总 ({len(scored)}/{len(results)} 评分成功)")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
     if scored:
         total = sum(r["score"] for r in scored)
-        print(f"总分: {total}/{len(scored)*3} ({total/len(scored)*3/3*100:.1f}%)")
-        print(f"平均: {total/len(scored):.2f}/3")
+        print(f"总分: {total}/{len(scored) * 3} ({total / len(scored) * 3 / 3 * 100:.1f}%)")
+        print(f"平均: {total / len(scored):.2f}/3")
     for r in results:
         score_str = str(r["score"]) if r["score"] >= 0 else "未评"
         print(f"  {r['qid']}: {score_str} - {r['reason'][:60]}")
@@ -199,6 +218,7 @@ def run(limit=None):
 
 if __name__ == "__main__":
     import argparse
+
     parser = argparse.ArgumentParser()
     parser.add_argument("--limit", type=int, default=None, help="只测前N题")
     args = parser.parse_args()

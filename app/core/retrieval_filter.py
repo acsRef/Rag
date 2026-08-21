@@ -9,6 +9,7 @@
 hybrid_search 当前翻译 document_ids 与 kb_ids；years/section_names/source_types
 接口已留好，依赖 chunks 上的对应列就绪后接通。
 """
+
 from __future__ import annotations
 
 from collections.abc import Iterable

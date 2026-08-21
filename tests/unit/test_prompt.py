@@ -18,7 +18,7 @@ def test_trim_history_keeps_summary_and_chronological_order_when_fits():
     text, tokens = prompt_builder._trim_history(history, "旧摘要", 999999)
     assert "## 对话历史摘要" in text
     assert "旧摘要" in text
-    assert text.index("第一条") < text.index("第二条")   # 时间顺序
+    assert text.index("第一条") < text.index("第二条")  # 时间顺序
     assert tokens > 0
 
 
@@ -28,13 +28,15 @@ def test_trim_history_keeps_chronological_order_when_trimming():
     # 按出现位置排序，才能捕获渲染顺序（range 序遍历永远有序，断言会恒真）
     present = sorted((m for i in range(6) for m in ["msg-%d" % i] if m in text), key=text.index)
     assert len(present) >= 2
-    assert present == sorted(present)   # 期望：旧消息在前
+    assert present == sorted(present)  # 期望：旧消息在前
 
 
 # ── D7：单块巨型 chunk 截断兜底 ──────────────────────────
 
+
 def _chunk(text: str, chunk_id: str = "c1"):
     from app.models.schemas import RetrievedChunk
+
     return RetrievedChunk(chunk_id=chunk_id, document_id="d1", text=text, score=0.5)
 
 

@@ -3,6 +3,7 @@
 通用清洗(line endings / control chars / unicode / invisible / page markers / blank lines)
 加 4 条 Docling 解析产物修复(PUA / fullwidth / CJK spacing / image placeholder)。
 """
+
 import re
 import unicodedata
 
@@ -42,6 +43,7 @@ class DocumentCleaner:
     def _normalize_unicode(self, text: str) -> str:
         try:
             import ftfy
+
             text = ftfy.fix_text(text, normalization="NFC")
         except ImportError:
             text = unicodedata.normalize("NFC", text)
@@ -97,9 +99,17 @@ class DocumentCleaner:
         if not text:
             return text
         return re.sub(
-            "[" + chr(0xE000) + "-" + chr(0xF8FF)
-                + chr(0xF0000) + "-" + chr(0xFFFFD)
-                + chr(0x100000) + "-" + chr(0x10FFFD) + "]",
+            "["
+            + chr(0xE000)
+            + "-"
+            + chr(0xF8FF)
+            + chr(0xF0000)
+            + "-"
+            + chr(0xFFFFD)
+            + chr(0x100000)
+            + "-"
+            + chr(0x10FFFD)
+            + "]",
             "",
             text,
         )

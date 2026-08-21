@@ -13,6 +13,7 @@ def test_intent_prompt_contains_kb_names(integration_db, monkeypatch):
 
     monkeypatch.setattr(minimax_client, "chat", fake_chat)
     import asyncio
+
     asyncio.run(intent_classifier.classify("什么是 Transformer", ["test-kb"]))
     assert captured
     assert "测试知识库" in captured[0], "意图 prompt 里没有 KB 名称，LLM 无法语义路由"

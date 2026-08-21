@@ -1,4 +1,5 @@
 """跨进程 ragent-py token 共享缓存 + RagentClient 接入测试。"""
+
 import asyncio
 import time
 
@@ -21,6 +22,7 @@ def test_set_get_roundtrip(iso_cache):
 
 def test_expired_returns_none(iso_cache):
     import json
+
     with open(iso_cache, "w", encoding="utf-8") as f:
         json.dump({"http://x": {"token": "tok", "expires_at": time.time() - 10}}, f)
     assert token_cache.get_token("http://x") is None
@@ -52,9 +54,12 @@ def test_ragent_client_login_real_when_cache_empty(iso_cache, monkeypatch):
 
     async def run():
         c = RagentClient(base_url="http://fake2", username="admin", password="admin123")
-        c._http = httpx.AsyncClient(transport=httpx.MockTransport(
-            lambda request: httpx.Response(200, json={"access_token": "fresh"}),
-        ), base_url="http://fake2")
+        c._http = httpx.AsyncClient(
+            transport=httpx.MockTransport(
+                lambda request: httpx.Response(200, json={"access_token": "fresh"}),
+            ),
+            base_url="http://fake2",
+        )
         try:
             await c._login()
             assert c._token == "fresh"

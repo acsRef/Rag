@@ -20,18 +20,21 @@ class _Stub:
 async def test_sub_questions_capped(monkeypatch):
     monkeypatch.setattr(settings, "max_sub_questions", 3)
     monkeypatch.setattr(
-        minimax_client, "chat",
+        minimax_client,
+        "chat",
         _Stub({"rewritten_query": "Q", "sub_questions": ["a", "b", "c", "d", "e"]}),
     )
     out = await query_rewrite_service.rewrite("q", [], "")
-    assert out.sub_questions == ["a", "b", "c"], \
+    assert out.sub_questions == ["a", "b", "c"], (
         "LLM 控制的 sub_questions 数量无封顶会触发 gather 并发雪崩（rerank 无内置限流）"
+    )
 
 
 async def test_sub_questions_under_cap_pass_through(monkeypatch):
     monkeypatch.setattr(settings, "max_sub_questions", 4)
     monkeypatch.setattr(
-        minimax_client, "chat",
+        minimax_client,
+        "chat",
         _Stub({"rewritten_query": "Q", "sub_questions": ["a", "b"]}),
     )
     out = await query_rewrite_service.rewrite("q", [], "")
@@ -41,7 +44,8 @@ async def test_sub_questions_under_cap_pass_through(monkeypatch):
 async def test_sub_questions_falls_back_to_rewritten_query(monkeypatch):
     monkeypatch.setattr(settings, "max_sub_questions", 3)
     monkeypatch.setattr(
-        minimax_client, "chat",
+        minimax_client,
+        "chat",
         _Stub({"rewritten_query": "Q", "sub_questions": []}),
     )
     out = await query_rewrite_service.rewrite("q", [], "")
@@ -51,7 +55,8 @@ async def test_sub_questions_falls_back_to_rewritten_query(monkeypatch):
 async def test_sub_questions_filters_non_string_items(monkeypatch):
     monkeypatch.setattr(settings, "max_sub_questions", 5)
     monkeypatch.setattr(
-        minimax_client, "chat",
+        minimax_client,
+        "chat",
         _Stub({"rewritten_query": "Q", "sub_questions": ["a", 42, None, "b", "  ", "c"]}),
     )
     out = await query_rewrite_service.rewrite("q", [], "")

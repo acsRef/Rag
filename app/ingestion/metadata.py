@@ -55,16 +55,20 @@ class ChunkMetadataGenerator:
 
         try:
             # 经统一策略层：单次客户端 + 类型感知重试（chat 本身不再重试）
-            resp = asyncio.run(call_llm_with_retry(
-                minimax_client.chat,
-                [{"role": "user", "content": prompt}],
-                tag="metadata",
-                max_retries=1,
-                max_tokens=ntoks,
-                timeout=min(120, 15 * len(chunks)),
-            ))
+            resp = asyncio.run(
+                call_llm_with_retry(
+                    minimax_client.chat,
+                    [{"role": "user", "content": prompt}],
+                    tag="metadata",
+                    max_retries=1,
+                    max_tokens=ntoks,
+                    timeout=min(120, 15 * len(chunks)),
+                )
+            )
             if not resp or not resp.strip():
-                logger.warning("Metadata generation returned empty response for %d chunks", len(chunks))
+                logger.warning(
+                    "Metadata generation returned empty response for %d chunks", len(chunks)
+                )
                 return chunks
             data = robust_json_parse(resp)
             if not data:

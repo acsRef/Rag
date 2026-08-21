@@ -11,6 +11,7 @@
 
 无意图命中时,上层 `RAGPipeline` 会把 query 撒向所有 KB 做兜底。
 """
+
 import asyncio
 import logging
 
@@ -88,7 +89,9 @@ INTENT_CLASSIFIER_PROMPT = """你是一个知识库路由分类器，只做一�
 
 
 def _normalize_matches(
-    raw, kb_ids: list[str], kb_names: dict[str, str],
+    raw,
+    kb_ids: list[str],
+    kb_names: dict[str, str],
 ) -> list[IntentMatch]:
     """归一 LLM 的 matches 输出：容忍畸形条目，名称反查 id。
 
@@ -124,7 +127,9 @@ def _normalize_matches(
 
 
 class IntentClassifier:
-    async def classify(self, question: str, kb_ids: list[str] | None = None, ctx=None) -> IntentResult:
+    async def classify(
+        self, question: str, kb_ids: list[str] | None = None, ctx=None
+    ) -> IntentResult:
         """把 question 路由到最相关的 1-3 个 KB。
 
         输入:用户问题 + 可用 KB id 列表(由上层从 DB 读出)
@@ -141,8 +146,7 @@ class IntentClassifier:
         kb_names: dict[str, str] = {}
         try:
             kb_names = await asyncio.to_thread(_resolve_kb_names, kb_ids)
-            kb_list_str = "\n".join(
-                f"- {kid}（{kb_names.get(kid, '未命名')}）" for kid in kb_ids)
+            kb_list_str = "\n".join(f"- {kid}（{kb_names.get(kid, '未命名')}）" for kid in kb_ids)
         except Exception:
             logger.warning("intent: KB name resolution failed, using bare ids")
             kb_list_str = "\n".join(f"- {kid}" for kid in kb_ids)
@@ -168,13 +172,15 @@ class IntentClassifier:
         if data is None:
             logger.warning("Intent parse failed (first 200): %s", result[:200])
             if ctx:
-                ctx.track_error("intent", "JSONDecodeError", "failed to parse LLM JSON output", degraded=True)
+                ctx.track_error(
+                    "intent", "JSONDecodeError", "failed to parse LLM JSON output", degraded=True
+                )
             return IntentResult(sub_question=question, matches=[], intent_type="KB")
         matches = _normalize_matches(data.get("matches"), kb_ids, kb_names)
         matches = [m for m in matches if m.score >= settings.intent_min_score]
         return IntentResult(
             sub_question=question,
-            matches=matches[:settings.max_intent_count],
+            matches=matches[: settings.max_intent_count],
             intent_type=data.get("intent_type", "KB"),
         )
 
@@ -182,9 +188,13 @@ class IntentClassifier:
 def _resolve_kb_names(kb_ids: list[str]) -> dict[str, str]:
     """kb_id → 名称，供意图 prompt 使用（LLM 只对名称能做语义路由）。"""
     from app.store.db import KnowledgeBase, get_db_ctx
+
     with get_db_ctx() as session:
-        rows = session.query(KnowledgeBase.id, KnowledgeBase.name).filter(
-            KnowledgeBase.id.in_(kb_ids)).all()
+        rows = (
+            session.query(KnowledgeBase.id, KnowledgeBase.name)
+            .filter(KnowledgeBase.id.in_(kb_ids))
+            .all()
+        )
         return {r.id: r.name for r in rows}
 
 

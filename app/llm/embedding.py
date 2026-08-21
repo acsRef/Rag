@@ -141,7 +141,9 @@ class SFEmbedding:
                 logger.exception("Embedding API failed for single text: %s", typed)
                 raise typed
 
-    async def embed_single_chunk(self, text: str, attempt: int = 0) -> tuple[list[float] | None, str | None]:
+    async def embed_single_chunk(
+        self, text: str, attempt: int = 0
+    ) -> tuple[list[float] | None, str | None]:
         # 单条路径与 embed() 共享同一个 cache：相同 text 不重复打 API。
         # 注：此路径不走 rate limiter（旧设计），故 cache hit 无 token 节省，
         # 但仍能避免重复网络往返 + provider_health 计数。
@@ -162,7 +164,7 @@ class SFEmbedding:
             raise
         except (OpenAIRateLimitError, RateLimitError) as e:
             # 429 可重试但不计数——AGENTS §8
-            retry_after = _parse_retry_after(e) or (settings.embedding_backoff_base * (2 ** attempt))
+            retry_after = _parse_retry_after(e) or (settings.embedding_backoff_base * (2**attempt))
             if attempt < settings.embedding_max_retries:
                 await _jittered_sleep(retry_after)
                 return await self.embed_single_chunk(text, attempt + 1)
@@ -172,7 +174,7 @@ class SFEmbedding:
             # 路径处理，此处 status_code 在 400–499 范围内的最终态计数会穿透——
             # 修正为仅 >=500 才计失败）
             if e.status_code >= 500 and attempt < settings.embedding_max_retries:
-                backoff = settings.embedding_backoff_base * (2 ** attempt)
+                backoff = settings.embedding_backoff_base * (2**attempt)
                 await _jittered_sleep(backoff)
                 return await self.embed_single_chunk(text, attempt + 1)
             self._on_failure() if e.status_code >= 500 else None
@@ -182,25 +184,31 @@ class SFEmbedding:
             logger.warning("Embedding chunk failed: %s", e)
             return (None, str(e))
 
-    async def embed_with_fallback(self, texts: list[str]) -> list[tuple[list[float] | None, str | None]]:
+    async def embed_with_fallback(
+        self, texts: list[str]
+    ) -> list[tuple[list[float] | None, str | None]]:
         if not texts:
             return []
 
         t0 = time.monotonic()
         results: list[tuple[list[float] | None, str | None]] = []
         for start in range(0, len(texts), _EMBED_BATCH_SIZE):
-            batch = texts[start:start + _EMBED_BATCH_SIZE]
+            batch = texts[start : start + _EMBED_BATCH_SIZE]
             t_batch = time.monotonic()
             logger.debug("embed.batch.start batch=%d", len(batch))
             batch_result = await _try_batch_with_retry(self, batch)
             if batch_result is not None:
-                logger.info("embed.batch.ok batch=%d elapsed_ms=%.1f",
-                            len(batch), (time.monotonic() - t_batch) * 1000)
+                logger.info(
+                    "embed.batch.ok batch=%d elapsed_ms=%.1f",
+                    len(batch),
+                    (time.monotonic() - t_batch) * 1000,
+                )
                 results.extend((emb, None) for emb in batch_result)
                 continue
 
-            logger.warning("Batch embedding failed for %d texts, falling back to single-chunk",
-                           len(batch))
+            logger.warning(
+                "Batch embedding failed for %d texts, falling back to single-chunk", len(batch)
+            )
             ok_count = 0
             for i, text in enumerate(batch):
                 t_chunk = time.monotonic()
@@ -208,16 +216,28 @@ class SFEmbedding:
                 chunk_ms = (time.monotonic() - t_chunk) * 1000
                 if emb is not None:
                     ok_count += 1
-                    logger.debug("embed.single.ok idx=%d/%d elapsed_ms=%.1f", i + 1, len(batch), chunk_ms)
+                    logger.debug(
+                        "embed.single.ok idx=%d/%d elapsed_ms=%.1f", i + 1, len(batch), chunk_ms
+                    )
                 else:
-                    logger.warning("embed.single.fail idx=%d/%d elapsed_ms=%.1f err=%s",
-                                   i + 1, len(batch), chunk_ms, err)
+                    logger.warning(
+                        "embed.single.fail idx=%d/%d elapsed_ms=%.1f err=%s",
+                        i + 1,
+                        len(batch),
+                        chunk_ms,
+                        err,
+                    )
                 results.append((emb, err))
-            logger.info("embed.fallback.done batch=%d ok=%d fail=%d elapsed_ms=%.1f",
-                        len(batch), ok_count, len(batch) - ok_count,
-                        (time.monotonic() - t_batch) * 1000)
-        logger.info("embed.all.done total=%d elapsed_ms=%.1f",
-                    len(texts), (time.monotonic() - t0) * 1000)
+            logger.info(
+                "embed.fallback.done batch=%d ok=%d fail=%d elapsed_ms=%.1f",
+                len(batch),
+                ok_count,
+                len(batch) - ok_count,
+                (time.monotonic() - t_batch) * 1000,
+            )
+        logger.info(
+            "embed.all.done total=%d elapsed_ms=%.1f", len(texts), (time.monotonic() - t0) * 1000
+        )
         return results
 
 
@@ -225,7 +245,10 @@ class SFEmbedding:
 # Internal helpers
 # ------------------------------------------------------------------
 
-async def _try_batch_with_retry(sf: SFEmbedding, texts: list[str], attempt: int = 0) -> list[list[float]] | None:
+
+async def _try_batch_with_retry(
+    sf: SFEmbedding, texts: list[str], attempt: int = 0
+) -> list[list[float]] | None:
     sf._check_breaker()
     await sf.limiter.acquire()
     try:
@@ -236,7 +259,7 @@ async def _try_batch_with_retry(sf: SFEmbedding, texts: list[str], attempt: int 
         raise
     except (OpenAIRateLimitError, RateLimitError) as e:
         # 429 可重试但不计熔断（AGENTS §8）
-        retry_after = _parse_retry_after(e) or (settings.embedding_backoff_base * (2 ** attempt))
+        retry_after = _parse_retry_after(e) or (settings.embedding_backoff_base * (2**attempt))
         if attempt < settings.embedding_max_retries:
             await _jittered_sleep(retry_after)
             return await _try_batch_with_retry(sf, texts, attempt + 1)
@@ -245,13 +268,18 @@ async def _try_batch_with_retry(sf: SFEmbedding, texts: list[str], attempt: int 
         # 仅 5xx 计熔断失败；4xx 是永久错误（OpenAI SDK 默认抛 APIStatusError
         # 时不分类，需要显式不计数）
         if e.status_code >= 500 and attempt < settings.embedding_max_retries:
-            backoff = settings.embedding_backoff_base * (2 ** attempt)
+            backoff = settings.embedding_backoff_base * (2**attempt)
             await _jittered_sleep(backoff)
             return await _try_batch_with_retry(sf, texts, attempt + 1)
         sf._on_failure() if e.status_code >= 500 else None
         return None
     except Exception as e:
-        logger.debug("embed.batch.exception attempt=%d type=%s msg=%s", attempt, type(e).__name__, str(e)[:200])
+        logger.debug(
+            "embed.batch.exception attempt=%d type=%s msg=%s",
+            attempt,
+            type(e).__name__,
+            str(e)[:200],
+        )
         sf._on_failure()
         return None
 

@@ -1,4 +1,5 @@
 """Document upload & status API with auth."""
+
 import asyncio
 import json
 import logging
@@ -75,7 +76,8 @@ def _resolve_sse_user(request: Request) -> dict | None:
     role_ids = get_user_role_ids(user.id)
     permissions = get_user_permissions(user.id)
     return {
-        "id": user.id, "username": user.username,
+        "id": user.id,
+        "username": user.username,
         "display_name": user.display_name,
         "role_ids": role_ids,
         "permissions": permissions,
@@ -93,6 +95,7 @@ def set_main_loop(loop: asyncio.AbstractEventLoop) -> None:
     with _main_loop_lock:
         _main_loop = loop
     from app.llm.base import set_main_loop as set_llm_main_loop
+
     set_llm_main_loop(loop)
 
 
@@ -106,9 +109,7 @@ async def subscribe_doc_events(user_id: str = "") -> asyncio.Queue:
 
 async def unsubscribe_doc_events(q: asyncio.Queue) -> None:
     async with _subscribers_lock:
-        _doc_event_subscribers[:] = [
-            sub for sub in _doc_event_subscribers if sub["queue"] is not q
-        ]
+        _doc_event_subscribers[:] = [sub for sub in _doc_event_subscribers if sub["queue"] is not q]
 
 
 def _should_deliver(event_uid: str, sub_uid: str) -> bool:
@@ -159,6 +160,7 @@ def emit_doc_progress(event: dict) -> None:
 def _get_kb_visibility(kb_id: str) -> tuple[str, list[int]]:
     """Return (visibility, allowed_role_ids) for a KB."""
     from app.store.db import KBRoleAccess, KnowledgeBase
+
     with get_db_ctx() as session:
         kb = session.query(KnowledgeBase).filter(KnowledgeBase.id == kb_id).first()
         if not kb:
@@ -175,10 +177,14 @@ def _resolve_document_id(filename: str, kb_id: str, client_doc_id: str | None) -
     """
     if client_doc_id:
         with get_db_ctx() as session:
-            doc = session.query(Document).filter(
-                Document.document_id == client_doc_id,
-                Document.kb_id == kb_id,
-            ).first()
+            doc = (
+                session.query(Document)
+                .filter(
+                    Document.document_id == client_doc_id,
+                    Document.kb_id == kb_id,
+                )
+                .first()
+            )
             if not doc:
                 raise HTTPException(status_code=404, detail="Document not found in this KB")
             return client_doc_id
@@ -219,23 +225,40 @@ def _upsert_processing_document(doc_id: str, filename: str, kb_id: str, user_id:
             existing.filename = filename
             existing.updated_at = utc_now()
         else:
-            session.add(Document(
-                document_id=doc_id, kb_id=kb_id, filename=filename,
-                owner_id=user_id, status="processing", chunk_count=0,
-                content_hash="", created_at=utc_now(), updated_at=utc_now(),
-            ))
+            session.add(
+                Document(
+                    document_id=doc_id,
+                    kb_id=kb_id,
+                    filename=filename,
+                    owner_id=user_id,
+                    status="processing",
+                    chunk_count=0,
+                    content_hash="",
+                    created_at=utc_now(),
+                    updated_at=utc_now(),
+                )
+            )
         session.commit()
 
 
 async def _run_ingestion_background(
-    filename: str, content: bytes, kb_id: str, user_id: str,
-    visibility: str, allowed_roles: list[int], document_id: str,
+    filename: str,
+    content: bytes,
+    kb_id: str,
+    user_id: str,
+    visibility: str,
+    allowed_roles: list[int],
+    document_id: str,
 ):
     try:
         await ingestion_pipeline.run(
-            filename=filename, content=content, kb_id=kb_id,
-            user_id=user_id, visibility=visibility,
-            allowed_roles=allowed_roles, document_id=document_id,
+            filename=filename,
+            content=content,
+            kb_id=kb_id,
+            user_id=user_id,
+            visibility=visibility,
+            allowed_roles=allowed_roles,
+            document_id=document_id,
         )
     except Exception:
         logger.exception("Background ingestion failed for doc_id=%s", document_id)
@@ -261,9 +284,11 @@ async def upload_document(
         # 设计审查 P1-11：同步 DB 查询包 to_thread，避免阻塞事件循环
         def _owns_kb() -> bool:
             from app.store.db import KnowledgeBase
+
             with get_db_ctx() as session:
                 kb = session.query(KnowledgeBase).filter(KnowledgeBase.id == kb_id).first()
                 return bool(kb and kb.owner_id == current_user["id"])
+
         if not await asyncio.to_thread(_owns_kb):
             raise HTTPException(status_code=403, detail="无权向该知识库上传文档")
 
@@ -271,22 +296,28 @@ async def upload_document(
     if file.size is not None and file.size > max_bytes:
         raise HTTPException(
             status_code=413,
-            detail=f"文件过大（{file.size//1024//1024}MB），最大允许 {settings.max_upload_size_mb}MB",
+            detail=f"文件过大（{file.size // 1024 // 1024}MB），最大允许 {settings.max_upload_size_mb}MB",
         )
     content = await file.read()
     if len(content) > max_bytes:
         raise HTTPException(
             status_code=413,
-            detail=f"文件过大（{len(content)//1024//1024}MB），最大允许 {settings.max_upload_size_mb}MB",
+            detail=f"文件过大（{len(content) // 1024 // 1024}MB），最大允许 {settings.max_upload_size_mb}MB",
         )
 
     # 设计审查 P1-11：三个同步 DB 调用包 to_thread
     visibility, allowed_roles = await asyncio.to_thread(_get_kb_visibility, kb_id)
     resolved_id = _ensure_document_id(
-        await asyncio.to_thread(_resolve_document_id, file.filename or "unknown", kb_id, document_id)
+        await asyncio.to_thread(
+            _resolve_document_id, file.filename or "unknown", kb_id, document_id
+        )
     )
     await asyncio.to_thread(
-        _upsert_processing_document, resolved_id, file.filename or "unknown", kb_id, current_user["id"]
+        _upsert_processing_document,
+        resolved_id,
+        file.filename or "unknown",
+        kb_id,
+        current_user["id"],
     )
 
     background_tasks.add_task(
@@ -365,6 +396,7 @@ def delete_document(document_id: str, current_user: dict = Depends(get_current_u
     # 建表时带 FK 的库有效，但 init_db 用 CREATE TABLE IF NOT EXISTS——若线上
     # 表早于该 FK 存在，cascade 缺失会泄漏关系边，故显式调用 helper 双保险。
     from app.store import pgvector_store
+
     pgvector_store.delete_doc_relations_by_doc_id(document_id)
 
     return {"message": "Document deleted", "document_id": document_id}

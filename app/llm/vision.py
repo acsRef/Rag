@@ -67,7 +67,9 @@ class ImageDescriber:
     - Concurrent batch via asyncio.gather
     """
 
-    def __init__(self, max_workers=5, size_threshold=32, file_size_threshold=5 * 1024, max_cache=1000):
+    def __init__(
+        self, max_workers=5, size_threshold=32, file_size_threshold=5 * 1024, max_cache=1000
+    ):
         self.max_workers = max_workers
         self.size_threshold = size_threshold
         self.file_size_threshold = file_size_threshold
@@ -113,15 +115,25 @@ class ImageDescriber:
 
         try:
             from app.config import settings as _settings
+
             # 固定走多模态模型：文本模型可能是非多模态的 highspeed 变体。
             # Qwen2.5-VL 支持 system 角色（DeepSeek-OCR 曾因不支持才并入 user，已回退）。
-            resp = await minimax_client.chat([
-                {"role": "system", "content": "你是一个图片分析助手，擅长识别图片类型并提取关键信息。"},
-                {"role": "user", "content": [
-                    {"type": "text", "text": IMAGE_DESCRIBE_PROMPT},
-                    {"type": "image_url", "image_url": {"url": data_url}},
-                ]},
-            ], model=_settings.vision_model)
+            resp = await minimax_client.chat(
+                [
+                    {
+                        "role": "system",
+                        "content": "你是一个图片分析助手，擅长识别图片类型并提取关键信息。",
+                    },
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": IMAGE_DESCRIBE_PROMPT},
+                            {"type": "image_url", "image_url": {"url": data_url}},
+                        ],
+                    },
+                ],
+                model=_settings.vision_model,
+            )
         except Exception as e:
             return f"[未知] 图片描述失败：{str(e)}"
 
@@ -130,6 +142,7 @@ class ImageDescriber:
 
     async def describe_batch(self, images: list[tuple[bytes, str]]) -> list[str]:
         """Describe multiple images concurrently."""
+
         async def describe_one(content: bytes, name: str) -> str:
             async with self._semaphore:
                 try:
@@ -157,6 +170,7 @@ class ImageDescriber:
         回落 asyncio.run 兜底。
         """
         from app.llm.base import get_main_loop
+
         loop = get_main_loop()
         if loop is not None and loop.is_running():
             try:

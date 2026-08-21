@@ -40,10 +40,15 @@ def _mark_variants(core: str) -> list[str]:
 # 各状态下需要识别的完整标记（含空白前缀变体）。ANSWER_* 无前缀漂移。
 # THINK_OPEN/CLOSE 同时承认「带空白的标准形式」（向后兼容原有 API）
 _MARKS = {
-    _NORMAL: (THINK_OPEN,) + tuple(_mark_variants(THINK_OPEN_CORE)) + (THINK_CLOSE,)
-            + tuple(_mark_variants(THINK_CLOSE_CORE)) + (ANSWER_OPEN,),
+    _NORMAL: (THINK_OPEN,)
+    + tuple(_mark_variants(THINK_OPEN_CORE))
+    + (THINK_CLOSE,)
+    + tuple(_mark_variants(THINK_CLOSE_CORE))
+    + (ANSWER_OPEN,),
     _IN_THINK: (THINK_CLOSE,) + tuple(_mark_variants(THINK_CLOSE_CORE)),
-    _AFTER_THINK: (THINK_CLOSE,) + tuple(_mark_variants(THINK_CLOSE_CORE)) + (ANSWER_OPEN, ANSWER_CLOSE),
+    _AFTER_THINK: (THINK_CLOSE,)
+    + tuple(_mark_variants(THINK_CLOSE_CORE))
+    + (ANSWER_OPEN, ANSWER_CLOSE),
 }
 _ALL_MARKS = frozenset(m for ms in _MARKS.values() for m in ms)
 _MAX_MARK_LEN = max(len(m) for m in _ALL_MARKS)
@@ -92,7 +97,7 @@ class TagStreamParser:
                 #   before 内不可能藏更靠前的未闭合片段——它不含任何完整标记，
                 #   而其尾部前缀与 idx 处的完整标记重叠，已被该标记覆盖。）
                 self._emit(events, self._buf[:idx])
-                self._buf = self._buf[idx + len(mark):]
+                self._buf = self._buf[idx + len(mark) :]
                 self._apply(mark)
                 continue
 

@@ -32,7 +32,7 @@ _locks_guard = threading.Lock()
 
 # 摘要失败退避：{conv_id: (连续失败次数, 上次失败时间)}
 _summary_failures: dict[str, tuple[int, float]] = {}
-_SUMMARY_PROMPT_CHAR_CAP = 8000   # fresh 摘要 prompt 的对话文本上限
+_SUMMARY_PROMPT_CHAR_CAP = 8000  # fresh 摘要 prompt 的对话文本上限
 
 _SUMMARY_SECTIONS = (
     "严格按以下四个小节输出（每节 1-3 行，无内容可写「无」）：\n"
@@ -77,7 +77,7 @@ def _estimate_tokens(text: str) -> int:
     return max(1, int(len(text) / 1.5))
 
 
-_HISTORY_SCAN_LIMIT = 100   # 窗口回看上限：预算内正常消息远少于此
+_HISTORY_SCAN_LIMIT = 100  # 窗口回看上限：预算内正常消息远少于此
 
 
 class ConversationMemory:
@@ -90,9 +90,9 @@ class ConversationMemory:
     ) -> str:
         with get_db_ctx() as session:
             if conversation_id:
-                conv = session.query(Conversation).filter_by(
-                    conversation_id=conversation_id
-                ).first()
+                conv = (
+                    session.query(Conversation).filter_by(conversation_id=conversation_id).first()
+                )
                 # owner 校验：命中他人会话时静默新建，
                 # 防止凭 conversation_id 读他人历史/摘要或向他人会话写入（IDOR）
                 if conv and conv.user_id == user_id:
@@ -137,9 +137,7 @@ class ConversationMemory:
 
     def get_summary(self, conversation_id: str) -> str:
         with get_db_ctx() as session:
-            conv = session.query(Conversation).filter_by(
-                conversation_id=conversation_id
-            ).first()
+            conv = session.query(Conversation).filter_by(conversation_id=conversation_id).first()
             return (conv.summary or "") if conv else ""
 
     def get_context(self, conversation_id: str) -> tuple[list[dict], str]:
@@ -157,9 +155,9 @@ class ConversationMemory:
     ) -> None:
         def _sync():
             with get_db_ctx() as session:
-                conv = session.query(Conversation).filter_by(
-                    conversation_id=conversation_id
-                ).first()
+                conv = (
+                    session.query(Conversation).filter_by(conversation_id=conversation_id).first()
+                )
                 msg = Message(
                     message_id=new_id(),
                     conversation_id=conversation_id,
@@ -176,6 +174,7 @@ class ConversationMemory:
                     if role == "user" and content and not conv.title:
                         conv.title = content[:30]
                 session.commit()
+
         await asyncio.to_thread(_sync)
         # 摘要移出请求路径：fire-and-forget，本轮对话用旧摘要即可
         try:
@@ -223,9 +222,11 @@ class ConversationMemory:
 
             try:
                 with get_db_ctx() as session:
-                    conv = session.query(Conversation).filter_by(
-                        conversation_id=conversation_id
-                    ).first()
+                    conv = (
+                        session.query(Conversation)
+                        .filter_by(conversation_id=conversation_id)
+                        .first()
+                    )
                     if not conv:
                         return False
                     recent = (
@@ -249,13 +250,16 @@ class ConversationMemory:
 
                     watermark = conv.last_summarized_msg_id or 0
                     # 触发判断走 SQL 聚合，不拉数据：字符数 / 1.5 ≈ token 估算
-                    chars = session.query(
-                        func.coalesce(func.sum(func.length(Message.content)), 0)
-                    ).filter(
-                        Message.conversation_id == conversation_id,
-                        Message.id < boundary_id,
-                        Message.id > watermark,
-                    ).scalar() or 0
+                    chars = (
+                        session.query(func.coalesce(func.sum(func.length(Message.content)), 0))
+                        .filter(
+                            Message.conversation_id == conversation_id,
+                            Message.id < boundary_id,
+                            Message.id > watermark,
+                        )
+                        .scalar()
+                        or 0
+                    )
                     if chars / 1.5 < settings.summary_trigger_tokens:
                         return False
                     outside = (
@@ -313,7 +317,9 @@ class ConversationMemory:
                 _summary_failures.pop(conversation_id, None)
                 logger.info(
                     "summary.updated conv=%s msgs=%d watermark=%s",
-                    conversation_id[:8], len(outside_items), new_watermark,
+                    conversation_id[:8],
+                    len(outside_items),
+                    new_watermark,
                 )
                 return True
             except Exception:
@@ -333,6 +339,7 @@ class ConversationMemory:
 # ------------------------------------------------------------------
 # Helpers
 # ------------------------------------------------------------------
+
 
 def _consume_task_exception(task: asyncio.Task) -> None:
     """fire-and-forget 摘要任务的 done-callback：消费异常，避免告警噪音。"""

@@ -3,6 +3,7 @@
 背景：H类（错误前提纠偏）60%→53.3%、I类（拒答边界）仍用错误数据糊弄，根因是
 prompt 里的相关规则太弱（多为 checklist 里的「是否」软问句）。本测试锁定强指令存在。
 """
+
 from app.core.prompt import SYSTEM_PROMPT
 
 

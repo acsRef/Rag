@@ -41,20 +41,33 @@ def test_add_chunks_microsecond_overflow(integration_db):
     # chunks 外键引用 documents，先按 API 契约建行
     with get_db_ctx() as session:
         if not session.query(Document).filter_by(document_id="ovf-doc").first():
-            session.add(Document(document_id="ovf-doc", kb_id="test-kb",
-                                 filename="ovf.md", owner_id="test-user",
-                                 status="indexing"))
+            session.add(
+                Document(
+                    document_id="ovf-doc",
+                    kb_id="test-kb",
+                    filename="ovf.md",
+                    owner_id="test-user",
+                    status="indexing",
+                )
+            )
             session.commit()
 
     base = utc_now().replace(microsecond=999998)
     original = pgvector_store.utc_now
     pgvector_store.utc_now = lambda: base
     try:
-        pgvector_store.add_chunks([
-            {"chunk_id": "ovf_%d" % i, "document_id": "ovf-doc", "kb_id": "test-kb",
-             "text": "溢出测试 %d" % i, "embedding": [0.1] * 4096}
-            for i in range(4)
-        ])
+        pgvector_store.add_chunks(
+            [
+                {
+                    "chunk_id": "ovf_%d" % i,
+                    "document_id": "ovf-doc",
+                    "kb_id": "test-kb",
+                    "text": "溢出测试 %d" % i,
+                    "embedding": [0.1] * 4096,
+                }
+                for i in range(4)
+            ]
+        )
     finally:
         pgvector_store.utc_now = original
     got = pgvector_store.get_chunks_by_document("ovf-doc")

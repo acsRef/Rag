@@ -17,6 +17,7 @@ from app.config import settings
 @dataclass
 class Chunk:
     """A single document chunk with metadata to be filled later by ChunkMetadataGenerator."""
+
     text: str = ""
     title: str = ""
     summary: str = ""
@@ -172,7 +173,7 @@ class TextChunker:
 
     # ── Hard split fallback for oversized sections ─────────────────────────
 
-    _SPLIT_OVERLAP = 64   # 相邻硬切片段的重叠窗口（保留切点上下文）
+    _SPLIT_OVERLAP = 64  # 相邻硬切片段的重叠窗口（保留切点上下文）
 
     def _pack_oversized(self, elements: list, section_path: list[str], title: str) -> list[Chunk]:
         """超长 section 的元素级装箱：按元素边界打包，atomic 块（代码/表格/图片）
@@ -189,9 +190,13 @@ class TextChunker:
         def flush() -> None:
             nonlocal cur_parts, cur_len
             if cur_parts:
-                packed.append(Chunk(
-                    text=header + "\n".join(cur_parts),
-                    title=title, section_path=list(section_path)))
+                packed.append(
+                    Chunk(
+                        text=header + "\n".join(cur_parts),
+                        title=title,
+                        section_path=list(section_path),
+                    )
+                )
                 cur_parts = []
                 cur_len = len(header)
 
@@ -233,15 +238,15 @@ class TextChunker:
             if len(piece) <= self.max_chunk_size:
                 if piece.strip():
                     result.append(
-                        Chunk(text=piece.strip(), title=title, section_path=list(section_path)))
+                        Chunk(text=piece.strip(), title=title, section_path=list(section_path))
+                    )
                 continue
             end = self._find_break_point(piece, self.max_chunk_size)
             first = piece[:end].strip()
             rest = piece[end:].strip()
             if first:
-                result.append(
-                    Chunk(text=first, title=title, section_path=list(section_path)))
-                prev_tail = first[-self._SPLIT_OVERLAP:]
+                result.append(Chunk(text=first, title=title, section_path=list(section_path)))
+                prev_tail = first[-self._SPLIT_OVERLAP :]
             if rest:
                 pending.append(rest)
         return result
@@ -265,7 +270,7 @@ class TextChunker:
                 pos = search_start + m.end()
                 if pos > 0 and pos < len(text):
                     next_ch = text[pos]
-                    if re.match(r'[\u4e00-\u9fff\w]', next_ch) and pattern in (r"\n", r"\s"):
+                    if re.match(r"[\u4e00-\u9fff\w]", next_ch) and pattern in (r"\n", r"\s"):
                         continue
                 if pos > 0 and priority < best_priority:
                     best = pos

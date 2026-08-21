@@ -36,11 +36,7 @@ class _FakeGateResult:
 async def _fake_retrieve(*args, **kwargs):
     from app.models.schemas import RetrievedChunk
 
-    return [
-        RetrievedChunk(
-            chunk_id="c1", document_id="d1", text="证据文本", score=0.9
-        )
-    ]
+    return [RetrievedChunk(chunk_id="c1", document_id="d1", text="证据文本", score=0.9)]
 
 
 async def test_gate_refuse_path_completes_without_error(monkeypatch):
@@ -56,21 +52,11 @@ async def test_gate_refuse_path_completes_without_error(monkeypatch):
         "get_or_create_conversation",
         lambda conv_id, user_id: "conv-1",
     )
-    monkeypatch.setattr(
-        pipeline_mod.conversation_memory, "get_history", lambda cid: []
-    )
-    monkeypatch.setattr(
-        pipeline_mod.conversation_memory, "get_summary", lambda cid: ""
-    )
-    monkeypatch.setattr(
-        pipeline_mod.retrieval_engine, "retrieve", _fake_retrieve
-    )
-    monkeypatch.setattr(
-        pipeline_mod.evidence_organizer, "organize", lambda **kw: None
-    )
-    monkeypatch.setattr(
-        pipeline_mod, "build_evidence_result", lambda table: _FakeGateResult()
-    )
+    monkeypatch.setattr(pipeline_mod.conversation_memory, "get_history", lambda cid: [])
+    monkeypatch.setattr(pipeline_mod.conversation_memory, "get_summary", lambda cid: "")
+    monkeypatch.setattr(pipeline_mod.retrieval_engine, "retrieve", _fake_retrieve)
+    monkeypatch.setattr(pipeline_mod.evidence_organizer, "organize", lambda **kw: None)
+    monkeypatch.setattr(pipeline_mod, "build_evidence_result", lambda table: _FakeGateResult())
 
     events: list[str] = []
     async for ev in RAGPipeline().execute(

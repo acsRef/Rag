@@ -6,6 +6,7 @@
 用法：
     D:/miniConda/envs/rag/python.exe eval_sany.py [--limit N] [--skip-judge] [--resume]
 """
+
 import argparse
 import json
 import os
@@ -24,15 +25,21 @@ REPORT_PATH = Path(__file__).parent / "sany_annual_reports" / "eval_report.md"
 
 # ── Auth ──────────────────────────────────────────────────
 
+
 def login() -> str:
-    resp = requests.post(f"{BASE_URL}/api/v1/auth/login", json={
-        "username": "admin", "password": "admin123",
-    })
+    resp = requests.post(
+        f"{BASE_URL}/api/v1/auth/login",
+        json={
+            "username": "admin",
+            "password": "admin123",
+        },
+    )
     resp.raise_for_status()
     return resp.json()["access_token"]
 
 
 # ── SSE stream parser ─────────────────────────────────────
+
 
 def call_rag(query: str, token: str, kb_id: str, conversation_id: str | None = None) -> dict:
     """Call the chat/stream endpoint and collect the full response.
@@ -146,7 +153,9 @@ JUDGE_PROMPT = """你是一个严格的RAG系统评测裁判。你的任务是�
 {{"score": 0-3, "reason": "简短理由（50字以内）"}}"""
 
 
-def judge_answer(question_data: dict, rag_answer: str, api_key: str, base_url: str, model: str) -> dict:
+def judge_answer(
+    question_data: dict, rag_answer: str, api_key: str, base_url: str, model: str
+) -> dict:
     """Use LLM to judge the RAG answer."""
     prompt = JUDGE_PROMPT.format(
         question=question_data["问题"],
@@ -176,7 +185,7 @@ def judge_answer(question_data: dict, rag_answer: str, api_key: str, base_url: s
             content = resp.json()["choices"][0]["message"]["content"] or ""
 
             # Strip <think>...</think> tags (MiniMax reasoning model outputs them)
-            content = re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL).strip()
+            content = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL).strip()
 
             if not content:
                 if attempt < 2:
@@ -191,11 +200,11 @@ def judge_answer(question_data: dict, rag_answer: str, api_key: str, base_url: s
                 score = int(score_match.group(1))
                 reason_match = re.search(r'"reason"\s*:\s*"((?:[^"\\]|\\.)*)"', content)
                 reason = reason_match.group(1) if reason_match else ""
-                reason = reason.replace('\\"', '"').replace('\\n', ' ')
+                reason = reason.replace('\\"', '"').replace("\\n", " ")
                 return {"score": score, "reason": reason[:80]}
 
             # Fallback: try parsing any JSON object
-            match = re.search(r'\{[^}]+\}', content)
+            match = re.search(r"\{[^}]+\}", content)
             if match:
                 try:
                     result = json.loads(match.group())
@@ -215,6 +224,7 @@ def judge_answer(question_data: dict, rag_answer: str, api_key: str, base_url: s
 
 
 # ── Main evaluation loop ──────────────────────────────────
+
 
 def run_eval(limit: int | None = None, skip_judge: bool = False, resume: bool = True):
     token = login()
@@ -253,10 +263,14 @@ def run_eval(limit: int | None = None, skip_judge: bool = False, resume: bool = 
     for i, q in enumerate(questions):
         qid = q["id"]
         if qid in results and results[qid].get("rag_answer"):
-            print(f"[{i+1}/{len(questions)}] {qid} 已有结果，跳过")
+            print(f"[{i + 1}/{len(questions)}] {qid} 已有结果，跳过")
             continue
 
-        print(f"[{i+1}/{len(questions)}] {qid} ({q['难度']}) {q['问题'][:40]}...", end=" ", flush=True)
+        print(
+            f"[{i + 1}/{len(questions)}] {qid} ({q['难度']}) {q['问题'][:40]}...",
+            end=" ",
+            flush=True,
+        )
 
         try:
             rag_result = call_rag(q["问题"], token, kb_id)
@@ -301,10 +315,16 @@ def run_eval(limit: int | None = None, skip_judge: bool = False, resume: bool = 
         print("\n=== 评分阶段 ===")
         # Read env for judge LLM — default to SiliconFlow DeepSeek-V3
         from dotenv import load_dotenv
+
         load_dotenv(Path(__file__).parent / ".env")
         api_key = os.environ.get("SILICONFLOW_API_KEY", "") or os.environ.get("MINIMAX_API_KEY", "")
-        base_url = os.environ.get("JUDGE_BASE_URL", os.environ.get("SILICONFLOW_BASE_URL", "https://api.siliconflow.cn/v1"))
-        model = os.environ.get("JUDGE_MODEL", os.environ.get("CHAT_MODEL", "deepseek-ai/DeepSeek-V3"))
+        base_url = os.environ.get(
+            "JUDGE_BASE_URL",
+            os.environ.get("SILICONFLOW_BASE_URL", "https://api.siliconflow.cn/v1"),
+        )
+        model = os.environ.get(
+            "JUDGE_MODEL", os.environ.get("CHAT_MODEL", "deepseek-ai/DeepSeek-V3")
+        )
 
         if not api_key:
             print("WARNING: SILICONFLOW_API_KEY not set, skipping judge phase")
@@ -314,10 +334,10 @@ def run_eval(limit: int | None = None, skip_judge: bool = False, resume: bool = 
                 if qid not in results or not results[qid].get("rag_answer"):
                     continue
                 if results[qid].get("judge_score") is not None and results[qid]["judge_score"] >= 0:
-                    print(f"[{i+1}/{len(questions)}] {qid} 已评分，跳过")
+                    print(f"[{i + 1}/{len(questions)}] {qid} 已评分，跳过")
                     continue
 
-                print(f"[{i+1}/{len(questions)}] 评分 {qid}...", end=" ", flush=True)
+                print(f"[{i + 1}/{len(questions)}] 评分 {qid}...", end=" ", flush=True)
                 try:
                     judge = judge_answer(q, results[qid]["rag_answer"], api_key, base_url, model)
                     results[qid]["judge_score"] = judge["score"]
@@ -347,8 +367,14 @@ def generate_report(results: dict, questions: list):
         f"\n题目总数: {len(questions)}",
     ]
 
-    scored = {qid: r for qid, r in results.items() if r.get("judge_score") is not None and r["judge_score"] >= 0}
-    unscored = {qid: r for qid, r in results.items() if r.get("judge_score") is None or r["judge_score"] < 0}
+    scored = {
+        qid: r
+        for qid, r in results.items()
+        if r.get("judge_score") is not None and r["judge_score"] >= 0
+    }
+    unscored = {
+        qid: r for qid, r in results.items() if r.get("judge_score") is None or r["judge_score"] < 0
+    }
 
     if scored:
         total_score = sum(r["judge_score"] for r in scored.values())
@@ -358,15 +384,17 @@ def generate_report(results: dict, questions: list):
         partial = sum(1 for r in scored.values() if r["judge_score"] == 2)
         wrong = sum(1 for r in scored.values() if r["judge_score"] <= 1)
 
-        lines.extend([
-            "\n## 总体结果",
-            f"- 已评分: {len(scored)}/{len(questions)}",
-            f"- 总分: {total_score}/{max_score} ({total_score/max_score*100:.1f}%)",
-            f"- 平均分: {avg_score:.2f}/3",
-            f"- 完全正确(3分): {perfect} ({perfect/len(scored)*100:.1f}%)",
-            f"- 基本正确(2分): {partial} ({partial/len(scored)*100:.1f}%)",
-            f"- 部分/完全错误(0-1分): {wrong} ({wrong/len(scored)*100:.1f}%)",
-        ])
+        lines.extend(
+            [
+                "\n## 总体结果",
+                f"- 已评分: {len(scored)}/{len(questions)}",
+                f"- 总分: {total_score}/{max_score} ({total_score / max_score * 100:.1f}%)",
+                f"- 平均分: {avg_score:.2f}/3",
+                f"- 完全正确(3分): {perfect} ({perfect / len(scored) * 100:.1f}%)",
+                f"- 基本正确(2分): {partial} ({partial / len(scored) * 100:.1f}%)",
+                f"- 部分/完全错误(0-1分): {wrong} ({wrong / len(scored) * 100:.1f}%)",
+            ]
+        )
 
     # By category
     categories = {}
@@ -384,8 +412,12 @@ def generate_report(results: dict, questions: list):
         for cat in sorted(categories.keys()):
             c = categories[cat]
             avg = c["total"] / c["count"]
-            perfect_count = sum(1 for qid, r in scored.items() if r.get("category") == cat and r["judge_score"] == 3)
-            lines.append(f"| {cat} | {c['count']} | {c['total']}/{c['count']*3} | {avg:.2f} | {perfect_count/c['count']*100:.0f}% |")
+            perfect_count = sum(
+                1 for qid, r in scored.items() if r.get("category") == cat and r["judge_score"] == 3
+            )
+            lines.append(
+                f"| {cat} | {c['count']} | {c['total']}/{c['count'] * 3} | {avg:.2f} | {perfect_count / c['count'] * 100:.0f}% |"
+            )
 
     # By difficulty
     difficulties = {}
@@ -404,7 +436,9 @@ def generate_report(results: dict, questions: list):
             if diff in difficulties:
                 d = difficulties[diff]
                 avg = d["total"] / d["count"]
-                lines.append(f"| {diff} | {d['count']} | {d['total']}/{d['count']*3} | {avg:.2f} |")
+                lines.append(
+                    f"| {diff} | {d['count']} | {d['total']}/{d['count'] * 3} | {avg:.2f} |"
+                )
 
     # Detail table
     lines.append("\n## 详细结果")
@@ -417,7 +451,9 @@ def generate_report(results: dict, questions: list):
         score_str = str(score) if score is not None and score >= 0 else "未评"
         reason = (r.get("judge_reason") or "")[:40]
         q_summary = q["问题"][:25] + "..." if len(q["问题"]) > 25 else q["问题"]
-        lines.append(f"| {qid} | {q['类别'][:8]} | {q['难度']} | {q_summary} | {score_str} | {reason} |")
+        lines.append(
+            f"| {qid} | {q['类别'][:8]} | {q['难度']} | {q_summary} | {score_str} | {reason} |"
+        )
 
     # Failed / error cases
     errors = {qid: r for qid, r in results.items() if r.get("error")}

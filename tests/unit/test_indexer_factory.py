@@ -3,6 +3,7 @@
 旧实现 `_meta_fut.result()` 抛异常时 `_embed_fut` 不被 await/cancel，embedding
 线程悬空、异常静默丢失。`_collect_future_pair` 保证任一失败时取消并吞掉另一个。
 """
+
 import concurrent.futures
 import time
 

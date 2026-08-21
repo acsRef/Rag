@@ -1,4 +1,5 @@
 """app/core/cache.py 测试：EmbeddingCache + RetrievalCache（Day 1 上午）。"""
+
 from app.core.cache import EmbeddingCache, RetrievalCache
 
 # ── EmbeddingCache ──────────────────────────────────────────

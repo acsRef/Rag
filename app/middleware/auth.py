@@ -1,4 +1,5 @@
 """JWT authentication middleware."""
+
 import asyncio
 import time
 from datetime import UTC, datetime, timedelta
@@ -15,7 +16,7 @@ bearer_optional = HTTPBearer(auto_error=False)
 
 _admin_role_id: int | None = None
 _admin_role_ts: float = 0.0
-_ADMIN_ROLE_TTL = 300.0   # 设计审查 P3-18：admin 角色 id 缓存加 TTL，避免永不过期
+_ADMIN_ROLE_TTL = 300.0  # 设计审查 P3-18：admin 角色 id 缓存加 TTL，避免永不过期
 
 # 设计审查 P1-10：每请求 3 次 DB 查询（user + roles + permissions），
 # 按 user_id 做进程内 TTL 缓存（60s）。角色/权限变更走 invalidate_user_cache。
@@ -40,6 +41,7 @@ def _get_admin_role_id() -> int:
     now = time.monotonic()
     if _admin_role_id is None or (now - _admin_role_ts) >= _ADMIN_ROLE_TTL:
         from app.store.db import Role, get_session
+
         session = get_session()
         try:
             role = session.query(Role).filter(Role.name == "admin").first()

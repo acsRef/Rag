@@ -3,6 +3,7 @@
 旧实现每个鉴权请求都打 3 次 DB（user + roles + permissions）。缓存命中后
 同一 60s 窗口内不再打 DB；invalidate_user_cache 使角色/权限变更立即可见。
 """
+
 from types import SimpleNamespace
 
 import app.middleware.auth as auth_mod
@@ -78,11 +79,11 @@ def test_admin_role_cached_and_invalidated(monkeypatch):
     monkeypatch.setattr(db_mod, "get_session", _FakeSession)
 
     assert auth_mod._get_admin_role_id() == 7
-    assert auth_mod._get_admin_role_id() == 7     # 命中缓存，不重查
+    assert auth_mod._get_admin_role_id() == 7  # 命中缓存，不重查
     assert calls["n"] == 1
 
     auth_mod.invalidate_admin_role()
-    assert auth_mod._get_admin_role_id() == 7     # 失效后重查
+    assert auth_mod._get_admin_role_id() == 7  # 失效后重查
     assert calls["n"] == 2
 
 

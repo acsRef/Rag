@@ -1,4 +1,5 @@
 """FAQ MCP 工具分发：stub 掉 client，只测 server 编排与错误契约。"""
+
 import asyncio
 import json
 
@@ -13,7 +14,12 @@ from mcp_server.client import RagentClientError
 class FakeClient:
     def __init__(self, kb_id="kb-faq", upload=None, wait=None, retrieve=None, docs=None):
         self.kb_id = kb_id
-        self._upload = upload or {"document_id": "d1", "filename": "f.md", "status": "processing", "chunk_count": 0}
+        self._upload = upload or {
+            "document_id": "d1",
+            "filename": "f.md",
+            "status": "processing",
+            "chunk_count": 0,
+        }
         self._wait = wait or {"document_id": "d1", "status": "indexed", "chunk_count": 1}
         self._retrieve = retrieve or {"items": [], "degraded": False}
         self._docs = docs if docs is not None else []
@@ -79,9 +85,15 @@ def test_ingest_faq_partial_failure_keeps_batch(monkeypatch):
             return dict(self._upload)
 
     monkeypatch.setattr(srv, "RagentClient", lambda: PartialBoom())
-    out = json.loads(asyncio.run(srv.cmd_ingest_faq({
-        "faqs": [dict(_FAQ), {"id": "bad", "question": "坏", "sql": "SELECT 1"}],
-    })))
+    out = json.loads(
+        asyncio.run(
+            srv.cmd_ingest_faq(
+                {
+                    "faqs": [dict(_FAQ), {"id": "bad", "question": "坏", "sql": "SELECT 1"}],
+                }
+            )
+        )
+    )
     assert len(out) == 2
     assert out[0]["status"] == "indexed"
     assert out[1]["status"] == "error"
@@ -98,9 +110,20 @@ def test_ingest_faq_slug_default_id(monkeypatch):
 
 
 def test_search_faq_hits(monkeypatch):
-    fake = FakeClient(retrieve={"items": [{"chunk_id": "c1", "document_id": "d1",
-                                          "text": "# 退货率…", "title": "退货率", "score": 0.8}],
-                                 "degraded": False})
+    fake = FakeClient(
+        retrieve={
+            "items": [
+                {
+                    "chunk_id": "c1",
+                    "document_id": "d1",
+                    "text": "# 退货率…",
+                    "title": "退货率",
+                    "score": 0.8,
+                }
+            ],
+            "degraded": False,
+        }
+    )
     monkeypatch.setattr(srv, "RagentClient", lambda: fake)
     out = json.loads(asyncio.run(srv.cmd_search_faq({"query": "退货率", "top_k": 3})))
     assert out["matches"][0]["score"] == 0.8
@@ -125,8 +148,17 @@ def test_search_faq_bad_top_k(monkeypatch):
 
 
 def test_list_faq_docs(monkeypatch):
-    fake = FakeClient(docs=[{"document_id": "d1", "filename": "faq-faq-001.md",
-                             "status": "indexed", "kb_id": "kb-faq", "chunk_count": 1}])
+    fake = FakeClient(
+        docs=[
+            {
+                "document_id": "d1",
+                "filename": "faq-faq-001.md",
+                "status": "indexed",
+                "kb_id": "kb-faq",
+                "chunk_count": 1,
+            }
+        ]
+    )
     monkeypatch.setattr(srv, "RagentClient", lambda: fake)
     out = json.loads(asyncio.run(srv.cmd_list_faq_docs({})))
     assert out[0]["filename"].startswith("faq-")

@@ -4,6 +4,7 @@ delete_doc_relations_by_doc_id 之前从未被任何 API 路径调用，删除�
 doc_relations 残留指向该 doc 的边，导致跨文档检索引用幽灵文档。
 这里锁定两条删除路径都会清理 source+target 两侧。
 """
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -11,24 +12,27 @@ from fastapi.testclient import TestClient
 @pytest.fixture(scope="module")
 def client(integration_db):
     from app.main import app
+
     with TestClient(app) as c:
         yield c
 
 
 @pytest.fixture(scope="module")
 def admin_token(client):
-    resp = client.post("/api/v1/auth/login",
-                       json={"username": "admin", "password": "admin123"})
+    resp = client.post("/api/v1/auth/login", json={"username": "admin", "password": "admin123"})
     assert resp.status_code == 200, resp.text
     return resp.json()["access_token"]
 
 
 def _find_relations(doc_id: str) -> list:
     from app.store.db import DocRelation, get_db_ctx
+
     with get_db_ctx() as session:
-        return session.query(DocRelation).filter(
-            (DocRelation.source_doc == doc_id) | (DocRelation.target_doc == doc_id)
-        ).all()
+        return (
+            session.query(DocRelation)
+            .filter((DocRelation.source_doc == doc_id) | (DocRelation.target_doc == doc_id))
+            .all()
+        )
 
 
 def test_delete_document_cleans_relation_edges(client, admin_token, ingest_docs):
@@ -66,29 +70,62 @@ def test_delete_kb_cleans_relation_edges(client, admin_token, integration_db):
 
     with get_db_ctx() as session:
         kb_id = new_id()
-        session.add(KnowledgeBase(
-            id=kb_id, name="删除测试 KB", visibility="public", owner_id=admin_id,
-        ))
+        session.add(
+            KnowledgeBase(
+                id=kb_id,
+                name="删除测试 KB",
+                visibility="public",
+                owner_id=admin_id,
+            )
+        )
         session.flush()
         doc_id = new_id()
         other1 = new_id()
         other2 = new_id()
-        session.add(Document(
-            document_id=doc_id, kb_id=kb_id, filename="del.md", owner_id=admin_id,
-            status="indexed", created_at=utc_now(), updated_at=utc_now(),
-        ))
+        session.add(
+            Document(
+                document_id=doc_id,
+                kb_id=kb_id,
+                filename="del.md",
+                owner_id=admin_id,
+                status="indexed",
+                created_at=utc_now(),
+                updated_at=utc_now(),
+            )
+        )
         # 邻居文档须真实存在（doc_relations 两侧都有 FK 指向 documents）
         for oid in (other1, other2):
-            session.add(Document(
-                document_id=oid, kb_id=kb_id, filename="neighbor.md", owner_id=admin_id,
-                status="indexed", created_at=utc_now(), updated_at=utc_now(),
-            ))
+            session.add(
+                Document(
+                    document_id=oid,
+                    kb_id=kb_id,
+                    filename="neighbor.md",
+                    owner_id=admin_id,
+                    status="indexed",
+                    created_at=utc_now(),
+                    updated_at=utc_now(),
+                )
+            )
         session.flush()
         # 双向边 + 第三方边，全部应随 KB 删除清空
-        session.add(DocRelation(source_doc=doc_id, target_doc=other1,
-                                cosine=0.5, entity_jaccard=0.1, relation_type="tfidf"))
-        session.add(DocRelation(source_doc=other2, target_doc=doc_id,
-                                cosine=0.5, entity_jaccard=0.1, relation_type="tfidf"))
+        session.add(
+            DocRelation(
+                source_doc=doc_id,
+                target_doc=other1,
+                cosine=0.5,
+                entity_jaccard=0.1,
+                relation_type="tfidf",
+            )
+        )
+        session.add(
+            DocRelation(
+                source_doc=other2,
+                target_doc=doc_id,
+                cosine=0.5,
+                entity_jaccard=0.1,
+                relation_type="tfidf",
+            )
+        )
         session.commit()
         kb_under_test = kb_id
         doc_under_test = doc_id

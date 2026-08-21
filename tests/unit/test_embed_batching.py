@@ -4,6 +4,7 @@
 后整单失败，静默退化为逐条调用（慢一个量级）。现按 32 条分片，
 失败批只退化该批。
 """
+
 from app.llm import embedding as emb_mod
 
 
@@ -28,7 +29,7 @@ async def test_failed_batch_falls_back_only_for_that_batch(monkeypatch):
 
     async def fake_batch(self, texts, attempt=0):
         if texts and texts[0].startswith("bad"):
-            return None                      # 该批整批失败
+            return None  # 该批整批失败
         return [[0.2, 0.2] for _ in texts]
 
     singles = []

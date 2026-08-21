@@ -3,6 +3,7 @@
 diag_detail 的 `{diag_id:path}` 转换器允许斜杠，未校验时可拼出
 `../` 读目录外的 .json 文件。白名单：字母数字开头，仅含字母数字与连字符。
 """
+
 from app.api.diagnostics import _is_safe_id
 
 
@@ -25,7 +26,7 @@ def test_empty_and_overlong_rejected():
 
 
 def test_special_chars_rejected():
-    assert _is_safe_id("id.json") is False      # 双扩展名注入
+    assert _is_safe_id("id.json") is False  # 双扩展名注入
     assert _is_safe_id("id\0") is False
     assert _is_safe_id("id\\x") is False
-    assert _is_safe_id("-abc") is False          # 连字符不得开头
+    assert _is_safe_id("-abc") is False  # 连字符不得开头

@@ -1,4 +1,5 @@
 """embed_query_with_fallback：熔断/异常降级为零向量（BM25-only），纯向量模式返回 None。"""
+
 from app.config import settings
 from app.llm.base import CircuitOpenError
 

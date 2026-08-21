@@ -5,6 +5,7 @@
 
 不出图测试: 用 PIL 现画一张含中文文字的 PNG，无需上传正文。
 """
+
 import asyncio
 import io
 import time
@@ -14,14 +15,17 @@ from app.llm.chat import minimax_client
 
 INTENT_PROBE_QUESTIONS = [
     "三一重工2023年营业收入是多少？",
-    "科创板开户需要什么条件？",          # 与知识库无关，应返回空 matches
-    "2024年与2025年研发投入对比如何？",   # 多 KB 场景
+    "科创板开户需要什么条件？",  # 与知识库无关，应返回空 matches
+    "2024年与2025年研发投入对比如何？",  # 多 KB 场景
 ]
 
 
-def _make_text_image(width=600, height=200, lines=("三一重工 2023年 营业收入 732.22亿元", "研发费用 同比增长 18%")):
+def _make_text_image(
+    width=600, height=200, lines=("三一重工 2023年 营业收入 732.22亿元", "研发费用 同比增长 18%")
+):
     """用 PIL 现画含中文的图片，避免依赖本地图片文件。"""
     from PIL import Image, ImageDraw, ImageFont
+
     img = Image.new("RGB", (width, height), "white")
     d = ImageDraw.Draw(img)
     try:
@@ -40,11 +44,18 @@ def _make_text_image(width=600, height=200, lines=("三一重工 2023年 营业�
 async def smoke_intent():
     print("=== 意图路由: DeepSeek-R1 ===")
     for q in INTENT_PROBE_QUESTIONS:
-        messages = [{"role": "user", "content": f"把问题路由到知识库: {q}\n可用的知识库: ['docs-a', 'docs-b']"}]
+        messages = [
+            {
+                "role": "user",
+                "content": f"把问题路由到知识库: {q}\n可用的知识库: ['docs-a', 'docs-b']",
+            }
+        ]
         t0 = time.time()
         try:
             resp = await minimax_client.chat(
-                messages, model=settings.intent_model, max_tokens=4096,
+                messages,
+                model=settings.intent_model,
+                max_tokens=4096,
             )
         except Exception as e:
             print(f"  [{q[:20]}] 调用失败: {type(e).__name__}: {e}")
@@ -54,6 +65,7 @@ async def smoke_intent():
         print(f"  [{q[:20]}] 延迟 {dt:.1f}s | 长度 {len(resp)} | 前缀: {head}")
         try:
             import json
+
             json.loads(resp.split("```json")[-1].split("```")[0].strip())
             print("    -> JSON 完整 OK")
         except Exception:
@@ -63,6 +75,7 @@ async def smoke_intent():
 def smoke_vision():
     print("\n=== 视觉: %s ===" % settings.vision_model)
     from app.llm.vision import image_describer
+
     img = _make_text_image()
     t0 = time.time()
     out = image_describer.describe_sync(img, "smoke.png")

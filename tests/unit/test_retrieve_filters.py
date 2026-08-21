@@ -5,6 +5,7 @@
 - 不传时（默认 None）行为与改造前完全一致
 - 日志/diag 记录 filters 字段便于排查
 """
+
 import pytest
 
 from app.core.retrieval_filter import RetrievalFilter
@@ -18,8 +19,16 @@ def capture_pipeline(monkeypatch):
     captured = {}
 
     async def fake_collect(
-        kb_ids, query_emb, query, user_role_ids, can_read_all,
-        top_k, seen_ids, results, user_id="", document_ids=None,
+        kb_ids,
+        query_emb,
+        query,
+        user_role_ids,
+        can_read_all,
+        top_k,
+        seen_ids,
+        results,
+        user_id="",
+        document_ids=None,
         filters=None,
     ):
         captured["kb_ids"] = kb_ids
@@ -32,23 +41,22 @@ def capture_pipeline(monkeypatch):
 
     # 旁路 chunking / year enrichment / cross_doc / rerank / mmr
     monkeypatch.setattr(
-        ret_mod.RetrievalEngine, "_cross_doc_extra",
+        ret_mod.RetrievalEngine,
+        "_cross_doc_extra",
         lambda self, *a, **kw: __import__("asyncio").sleep(0, result=([], 0)),
         raising=False,
     )
-    monkeypatch.setattr(ret_mod, "_supplement_missing_years",
-                        lambda *a, **kw: a[0])
-    monkeypatch.setattr(ret_mod, "_boost_by_section_type",
-                        lambda *a, **kw: a[0])
+    monkeypatch.setattr(ret_mod, "_supplement_missing_years", lambda *a, **kw: a[0])
+    monkeypatch.setattr(ret_mod, "_boost_by_section_type", lambda *a, **kw: a[0])
 
     # 关键：embed_query_with_fallback 异步返回
     async def fake_embed(*a, **kw):
         return ([0.0] * 4, False)
+
     monkeypatch.setattr(ret_mod, "embed_query_with_fallback", fake_embed)
 
     # 列表 kb_ids（避免 list_kb_ids 触 DB）
-    monkeypatch.setattr(ret_mod.pgvector_store, "list_kb_ids",
-                        lambda: ["kb-test"])
+    monkeypatch.setattr(ret_mod.pgvector_store, "list_kb_ids", lambda: ["kb-test"])
 
     return captured
 

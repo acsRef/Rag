@@ -4,12 +4,14 @@
 队列满时 put 失败被静默吞掉（慢客户端可能恰好丢终态事件，UI 卡死在
 indexing），且每个 chunk 广播一次（500 块 = 500 条 × 全体订阅者）。
 """
+
 import asyncio
 
 from app.api.documents import _put_or_drop_oldest, _should_deliver
 from app.ingestion.indexer import _emit_progress, _progress_buckets
 
 # ── _should_deliver：按用户过滤 ─────────────────────────
+
 
 def test_event_without_uid_broadcasts():
     assert _should_deliver("", "alice") is True
@@ -29,6 +31,7 @@ def test_admin_channel_receives_all():
 
 # ── _put_or_drop_oldest：满队列丢旧保新 ─────────────────
 
+
 async def test_full_queue_drops_oldest_keeps_latest():
     q: asyncio.Queue = asyncio.Queue(maxsize=2)
     q.put_nowait({"n": 1})
@@ -46,6 +49,7 @@ async def test_non_full_queue_plain_put():
 
 # ── _emit_progress：5% 桶节流 + 终态必发 ────────────────
 
+
 def test_intermediate_progress_throttled_by_5pct_bucket(monkeypatch):
     import app.api.documents as docs_mod
 
@@ -53,7 +57,7 @@ def test_intermediate_progress_throttled_by_5pct_bucket(monkeypatch):
     monkeypatch.setattr(docs_mod, "emit_doc_progress", lambda e: sent.append(e))
     _progress_buckets.clear()
     try:
-        for embedded in (1, 2, 3, 4, 5, 6):   # total=100 → 桶 0,0,0,0,1,1
+        for embedded in (1, 2, 3, 4, 5, 6):  # total=100 → 桶 0,0,0,0,1,1
             _emit_progress("doc-x", "alice", embedded, 100, "indexing")
         assert len(sent) == 2, "同一 5% 桶内的中间进度不应重复广播"
         assert all(e["user_id"] == "alice" for e in sent)

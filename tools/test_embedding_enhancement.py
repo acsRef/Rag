@@ -1,4 +1,5 @@
 """POC test for embedding_text enhancement using Qwen2.5-14B-Instruct."""
+
 from app.ingestion.chunker import Chunk
 from app.ingestion.metadata import embedding_text_enhancer
 

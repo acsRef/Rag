@@ -48,21 +48,22 @@ _COMPLEMENTARY_THRESHOLD = 0.3  # cosine >= this -> complementary candidate
 _DUPLICATE_JACCARD_LIMIT = 0.5  # jaccard >= this -> mark as duplicate, not complementary
 _QUERY_KEYWORD_MATCH_RATIO = 0.2  # channel-2 minimum coverage
 _CH2_MAX_CANDIDATES = 200  # channel-2 max docs to evaluate per query
-_CH3_FULL_SCAN_LIMIT = 200  # channel-3 语料 ≤ 此值时全量评估文档 embedding，否则只对 ch1/ch2 候选求交
+_CH3_FULL_SCAN_LIMIT = (
+    200  # channel-3 语料 ≤ 此值时全量评估文档 embedding，否则只对 ch1/ch2 候选求交
+)
 _MAX_NEIGHBORS_PER_QUERY = 5  # cap on cross-doc neighbor count
 
 
 # ── Tokenization ─────────────────────────────────────────────────────────
 
+
 def _tokenize(text: str) -> list[str]:
     """Tokenize text via jieba; drop stopwords and single-char tokens."""
-    return [
-        w for w in jieba.cut(text)
-        if w.strip() and w not in _STOPWORDS and len(w) > 1
-    ]
+    return [w for w in jieba.cut(text) if w.strip() and w not in _STOPWORDS and len(w) > 1]
 
 
 # ── Unified chunk accessor (handles RetrievedChunk objects and dicts) ───
+
 
 def _chunk_attr(chunk: Any, key: str, default: str = "") -> str:
     """Read an attribute from a RetrievedChunk object or a dict uniformly."""
@@ -72,6 +73,7 @@ def _chunk_attr(chunk: Any, key: str, default: str = "") -> str:
 
 
 # ── TF-IDF feature extractor ─────────────────────────────────────────────
+
 
 class TfidfFeatureExtractor:
     """Compute TF-IDF weighted term lists and cosine between two documents.
@@ -129,7 +131,7 @@ class TfidfFeatureExtractor:
             freq[w] = freq.get(w, 0) + 1
         terms = [(w, f) for w, f in freq.items() if f >= _MIN_TERM_FREQ]
         terms.sort(key=lambda x: x[1], reverse=True)
-        return terms[:self.max_terms]
+        return terms[: self.max_terms]
 
     def extract_from_text(self, text: str) -> list[tuple[str, int]]:
         """Extract from raw text. Queries are typically short; no min-freq filter."""
@@ -137,7 +139,7 @@ class TfidfFeatureExtractor:
         for w in _tokenize(text):
             freq[w] = freq.get(w, 0) + 1
         terms = sorted(freq.items(), key=lambda x: x[1], reverse=True)
-        return terms[:self.max_terms]
+        return terms[: self.max_terms]
 
     def cosine_between(
         self,
@@ -201,6 +203,7 @@ class TfidfFeatureExtractor:
 
 # ── Document relation builder ────────────────────────────────────────────
 
+
 class DocRelationBuilder:
     """Build and persist inter-document relation edges.
 
@@ -231,9 +234,7 @@ class DocRelationBuilder:
 
         # 设计审查 P1-8：candidate 收敛为"与本文档实体有重叠的文档"——
         # 无重叠者 cosine 必为 0(阈值下解)，无需全量拖进内存。global DF 走 SQL 聚合。
-        all_ids = pgvector_store.get_doc_ids_with_any_entity(
-            [e for e, _ in doc_entities]
-        )
+        all_ids = pgvector_store.get_doc_ids_with_any_entity([e for e, _ in doc_entities])
         other_ids = [did for did in all_ids if did != doc_id]
         if not other_ids:
             return
@@ -254,18 +255,22 @@ class DocRelationBuilder:
             cosine_scaled = int(cosine * 1000)
             jaccard_scaled = int(jaccard * 1000)
             for src, tgt in ((doc_id, other_id), (other_id, doc_id)):
-                relations.append({
-                    "source_doc": src,
-                    "target_doc": tgt,
-                    "cosine": cosine_scaled,
-                    "entity_jaccard": jaccard_scaled,
-                    "relation_type": rtype,
-                })
+                relations.append(
+                    {
+                        "source_doc": src,
+                        "target_doc": tgt,
+                        "cosine": cosine_scaled,
+                        "entity_jaccard": jaccard_scaled,
+                        "relation_type": rtype,
+                    }
+                )
 
         pgvector_store.replace_doc_relations(doc_id, relations)
         logger.info(
             "cross_doc.updated doc=%s entities=%d relations=%d",
-            doc_id[:8], len(doc_entities), len(relations),
+            doc_id[:8],
+            len(doc_entities),
+            len(relations),
         )
 
     def rebuild_all(self) -> None:
@@ -275,6 +280,7 @@ class DocRelationBuilder:
         and embeddings for any docs that lack them, then computes relations.
         """
         from app.store.db import Document, get_db_ctx
+
         with get_db_ctx() as session:
             rows = session.query(Document.document_id).all()
         all_ids = [r[0] for r in rows]
@@ -284,6 +290,7 @@ class DocRelationBuilder:
 
         all_entities: dict[str, list[tuple[str, int]]] = {}
         import numpy as np
+
         for doc_id in all_ids:
             entities = pgvector_store.get_doc_entities_bulk([doc_id]).get(doc_id)
             if not entities:
@@ -321,22 +328,26 @@ class DocRelationBuilder:
                 cosine_scaled = int(cosine * 1000)
                 jaccard_scaled = int(jaccard * 1000)
                 for src, tgt in ((doc_id, other_id), (other_id, doc_id)):
-                    relations.append({
-                        "source_doc": src,
-                        "target_doc": tgt,
-                        "cosine": cosine_scaled,
-                        "entity_jaccard": jaccard_scaled,
-                        "relation_type": rtype,
-                    })
+                    relations.append(
+                        {
+                            "source_doc": src,
+                            "target_doc": tgt,
+                            "cosine": cosine_scaled,
+                            "entity_jaccard": jaccard_scaled,
+                            "relation_type": rtype,
+                        }
+                    )
 
         pgvector_store.bulk_save_relations(relations)
         logger.info(
             "cross_doc.rebuild_all docs=%d relations=%d",
-            len(all_ids), len(relations),
+            len(all_ids),
+            len(relations),
         )
 
 
 # ── Cross-document retriever ─────────────────────────────────────────────
+
 
 class CrossDocRetriever:
     """Three-channel cross-document jump decision.
@@ -365,7 +376,12 @@ class CrossDocRetriever:
     ) -> list[dict]:
         """兼容入口：内部全同步，事件循环中应改用 retrieve_sync + to_thread。"""
         return self.retrieve_sync(
-            query, query_emb, kb_ids, initial_chunks, user_role_ids, can_read_all,
+            query,
+            query_emb,
+            kb_ids,
+            initial_chunks,
+            user_role_ids,
+            can_read_all,
             user_id,
         )
 
@@ -414,9 +430,9 @@ class CrossDocRetriever:
         # matching entity terms, regardless of whether channel 1 found them.
         if query_term_set:
             all_entity_ids = pgvector_store.get_all_doc_ids_with_entities(kb_ids)
-            ch2_candidates = [
-                d for d in all_entity_ids if d not in matched_doc_ids
-            ][:_CH2_MAX_CANDIDATES]
+            ch2_candidates = [d for d in all_entity_ids if d not in matched_doc_ids][
+                :_CH2_MAX_CANDIDATES
+            ]
             if ch2_candidates:
                 for ndoc_id, entities in pgvector_store.get_doc_entities_bulk(
                     ch2_candidates
@@ -475,8 +491,11 @@ class CrossDocRetriever:
 
         logger.info(
             "cross_doc.retrieve query_terms=%d matched_docs=%d neighbors=%d extra=%d elapsed_ms=%.1f",
-            len(query_term_set), len(matched_doc_ids), len(neighbor_scores),
-            len(extra_chunks), (time.monotonic() - t0) * 1000,
+            len(query_term_set),
+            len(matched_doc_ids),
+            len(neighbor_scores),
+            len(extra_chunks),
+            (time.monotonic() - t0) * 1000,
         )
         return extra_chunks
 
@@ -493,6 +512,7 @@ def _cosine_similarity(a: list[float], b: list[float]) -> float:
 
 
 # ── Cross-document synthesizer ───────────────────────────────────────────
+
 
 class CrossDocSynthesizer:
     """Group chunks by document, annotate source labels for LLM synthesis.
@@ -535,12 +555,14 @@ class CrossDocSynthesizer:
                 else:
                     parts.append(f"  {text}")
             annotated_texts.append("\n".join(parts))
-            doc_groups.append({
-                "document_id": doc_id,
-                "filename": group["filename"],
-                "title": group["title"] or group["filename"] or doc_id[:8],
-                "chunk_count": len(group["chunks"]),
-            })
+            doc_groups.append(
+                {
+                    "document_id": doc_id,
+                    "filename": group["filename"],
+                    "title": group["title"] or group["filename"] or doc_id[:8],
+                    "chunk_count": len(group["chunks"]),
+                }
+            )
         return annotated_texts, doc_groups
 
 

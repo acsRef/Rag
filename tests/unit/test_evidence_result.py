@@ -6,6 +6,7 @@ plan §五 + §十风险 §7：
 - build_evidence_result(table) 转换
 - evidence_gate_should_refuse(result, threshold) → bool 给 pipeline 用
 """
+
 import pytest
 
 from app.core.evidence import (
@@ -20,13 +21,20 @@ from app.core.evidence import (
 def _slot(sub_q, doc_ids, covered=True):
     """构造一个 EvidenceSlot；空 chunks 表示 uncovered."""
     from app.models.schemas import RetrievedChunk
+
     chunks = []
     if covered:
         for doc_id in doc_ids:
-            chunks.append(RetrievedChunk(
-                chunk_id=f"c_{doc_id}", document_id=doc_id, text=f"text for {doc_id}",
-                score=0.5, title="", section_path="",
-            ))
+            chunks.append(
+                RetrievedChunk(
+                    chunk_id=f"c_{doc_id}",
+                    document_id=doc_id,
+                    text=f"text for {doc_id}",
+                    score=0.5,
+                    title="",
+                    section_path="",
+                )
+            )
     return EvidenceSlot(sub_question=sub_q, chunks=chunks)
 
 
@@ -81,9 +89,9 @@ def test_build_evidence_result_partial_coverage():
     table = EvidenceTable(
         query="q",
         slots=[
-            _slot("sub1", {"d1"}),         # covered
+            _slot("sub1", {"d1"}),  # covered
             _slot("sub2", set(), covered=False),  # uncovered
-            _slot("sub3", {"d3"}),         # covered
+            _slot("sub3", {"d3"}),  # covered
         ],
     )
     r = build_evidence_result(table)
@@ -117,6 +125,7 @@ def test_build_evidence_result_sources_collected():
 def test_build_evidence_result_passes_through_conflicts():
     """EvidenceTable.conflicts 透传到 EvidenceResult.conflicts"""
     from app.core.evidence import Conflict
+
     c = Conflict(metric="revenue", values=[], severity="high")
     table = EvidenceTable(query="q", slots=[_slot("s", {"d1"})], conflicts=[c])
     r = build_evidence_result(table)
@@ -126,6 +135,7 @@ def test_build_evidence_result_passes_through_conflicts():
 def test_build_evidence_result_temporal_consistent_false_on_conflicts():
     """有冲突 → temporal_consistent=False（plan §五.1）"""
     from app.core.evidence import Conflict
+
     c = Conflict(metric="x", values=[], conflict_type="year_mismatch")
     table = EvidenceTable(query="q", slots=[_slot("s", {"d1", "d2"})], conflicts=[c])
     r = build_evidence_result(table)
@@ -152,20 +162,36 @@ def test_build_evidence_result_coverage_by_year_empty_when_no_year_field():
 def test_build_evidence_result_coverage_by_year_uses_chunk_year():
     """当 chunks 有 year 字段时，按年份统计覆盖"""
     from app.models.schemas import RetrievedChunk
-    chunks_2024 = [RetrievedChunk(
-        chunk_id="c1", document_id="d1", text="2024 data", score=0.5,
-        title="", section_path="",
-    )]
+
+    chunks_2024 = [
+        RetrievedChunk(
+            chunk_id="c1",
+            document_id="d1",
+            text="2024 data",
+            score=0.5,
+            title="",
+            section_path="",
+        )
+    ]
     chunks_2024[0].year = "2024年"
-    chunks_2023 = [RetrievedChunk(
-        chunk_id="c2", document_id="d2", text="2023 data", score=0.5,
-        title="", section_path="",
-    )]
+    chunks_2023 = [
+        RetrievedChunk(
+            chunk_id="c2",
+            document_id="d2",
+            text="2023 data",
+            score=0.5,
+            title="",
+            section_path="",
+        )
+    ]
     chunks_2023[0].year = "2023年"
-    table = EvidenceTable(query="q", slots=[
-        EvidenceSlot(sub_question="s1", chunks=chunks_2024),
-        EvidenceSlot(sub_question="s2", chunks=chunks_2023),
-    ])
+    table = EvidenceTable(
+        query="q",
+        slots=[
+            EvidenceSlot(sub_question="s1", chunks=chunks_2024),
+            EvidenceSlot(sub_question="s2", chunks=chunks_2023),
+        ],
+    )
     r = build_evidence_result(table)
     # 2 个 slot，每个 slot 都来自单一 year；每个 year 覆盖 1/2 slot
     assert r.coverage_by_year == {"2024年": 0.5, "2023年": 0.5}

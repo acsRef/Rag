@@ -1,4 +1,5 @@
 """环境护栏冒烟：证明 unit 测试跑在哨兵配置下。"""
+
 from app.config import settings
 
 

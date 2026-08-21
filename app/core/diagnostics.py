@@ -62,14 +62,16 @@ class DiagContext:
         degraded: bool = False,
     ) -> None:
         """Record a LLM error/retry/degradation event for diagnostics."""
-        self.errors.append({
-            "step": step,
-            "type": error_type,
-            "message": message,
-            "retried": retried,
-            "degraded": degraded,
-            "elapsed_ms": round((time.time() - self._start_time) * 1000, 1),
-        })
+        self.errors.append(
+            {
+                "step": step,
+                "type": error_type,
+                "message": message,
+                "retried": retried,
+                "degraded": degraded,
+                "elapsed_ms": round((time.time() - self._start_time) * 1000, 1),
+            }
+        )
 
     def append(self, step: str, value: Any) -> None:
         """Append a value to a list-typed step (for multi-round calls).
@@ -137,8 +139,13 @@ class DiagContext:
         raw = self.steps.get("intent")
         if raw:
             rounds = raw if isinstance(raw, list) else [raw]
-            kbs = [kb["name"] for r in rounds if isinstance(r, dict)
-                   for kb in (r.get("kbs") or []) if isinstance(kb, dict) and kb.get("name")]
+            kbs = [
+                kb["name"]
+                for r in rounds
+                if isinstance(r, dict)
+                for kb in (r.get("kbs") or [])
+                if isinstance(kb, dict) and kb.get("name")
+            ]
             if kbs:
                 entry["kbs"] = kbs
 

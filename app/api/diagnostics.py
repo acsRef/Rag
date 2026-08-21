@@ -3,6 +3,7 @@
 安全约束：遥测含全量用户 query 与 chunk 文本，所有端点仅 admin 可访问。
 查看器（tools/diagnostics.html）从磁盘打开并携带 admin token 调用本 API。
 """
+
 import json
 import re
 from pathlib import Path
@@ -44,6 +45,7 @@ def diag_chunks(ids: str, current_user: dict = Depends(get_current_user)):
     chunk_ids = [c.strip() for c in ids.split(",") if c.strip()]
     # 与 /admin/chunks 共用查询实现（此前两处重复）
     from app.api.admin import chunk_info_rows
+
     return chunk_info_rows(chunk_ids)
 
 
@@ -79,12 +81,14 @@ def diag_chunk_docs(current_user: dict = Depends(get_current_user)):
             try:
                 with open(f, encoding="utf-8") as fh:
                     data = json.load(fh)
-                    docs.append({
-                        "document_id": data.get("document_id", f.stem),
-                        "filename": data.get("filename", ""),
-                        "chunk_count": len(data.get("chunks", [])),
-                        "section_count": len(data.get("sections", [])),
-                    })
+                    docs.append(
+                        {
+                            "document_id": data.get("document_id", f.stem),
+                            "filename": data.get("filename", ""),
+                            "chunk_count": len(data.get("chunks", [])),
+                            "section_count": len(data.get("sections", [])),
+                        }
+                    )
             except (json.JSONDecodeError, OSError):
                 pass
     return docs

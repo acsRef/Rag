@@ -3,15 +3,16 @@ Document structure analyzer.
 Transforms cleaned text into a structured tree of sections and elements,
 marking code blocks, tables, and images as atomic (unsplittable).
 """
+
 import re
 from dataclasses import dataclass, field
 
 
 @dataclass
 class Element:
-    type: str          # heading / paragraph / list / code / table / image
+    type: str  # heading / paragraph / list / code / table / image
     text: str
-    level: int = 0     # heading level (1-6), 0 for non-heading
+    level: int = 0  # heading level (1-6), 0 for non-heading
     is_atomic: bool = False  # True for code/table/image: chunker must NOT split these
 
 
@@ -25,8 +26,16 @@ class StructuredSection:
 # 标题黑名单:这些是 PDF 头部/末尾的"非真正章节",遇到就跳过
 # (并连同后面跟着的"声明段落"一起丢弃,直到下一个真正的标题)
 _TITLE_BLACKLIST = (
-    "注意事项", "前言", "目录", "公告", "声明",
-    "编者按", "版权", "本报告以", "本刊以", "免责声明",
+    "注意事项",
+    "前言",
+    "目录",
+    "公告",
+    "声明",
+    "编者按",
+    "版权",
+    "本报告以",
+    "本刊以",
+    "免责声明",
 )
 
 
@@ -74,7 +83,7 @@ class DocumentStructurer:
             # Code block: mark as atomic (must not be split across chunks)
             if stripped.startswith("```"):
                 end = self._find_block_end(lines, i, "```")
-                code_text = "\n".join(lines[i:end + 1])
+                code_text = "\n".join(lines[i : end + 1])
                 current_section.elements.append(Element("code", code_text, is_atomic=True))
                 i = end + 1
                 continue
@@ -82,7 +91,7 @@ class DocumentStructurer:
             # Table: detect by header-separator pattern, mark as atomic
             if "|" in stripped and i + 1 < len(lines) and re.match(r"^[\s|:\-]+$", lines[i + 1]):
                 end = self._find_table_end(lines, i)
-                table_text = "\n".join(lines[i:end + 1])
+                table_text = "\n".join(lines[i : end + 1])
                 current_section.elements.append(Element("table", table_text, is_atomic=True))
                 i = end + 1
                 continue
@@ -96,7 +105,7 @@ class DocumentStructurer:
             # List: collect consecutive list items
             if re.match(r"^(\s*[-*+]\s|\s*\d+[.)]\s)", stripped):
                 end = self._find_list_end(lines, i)
-                list_text = "\n".join(lines[i:end + 1])
+                list_text = "\n".join(lines[i : end + 1])
                 current_section.elements.append(Element("list", list_text))
                 i = end + 1
                 continue
@@ -108,9 +117,15 @@ class DocumentStructurer:
                 next_stripped = lines[j].strip()
                 if not next_stripped:
                     break
-                if re.match(r"^(#{1,6}\s|```|!\[.*?\]\(.*?\)|\s*[-*+]\s|\s*\d+[.)]\s)", next_stripped):
+                if re.match(
+                    r"^(#{1,6}\s|```|!\[.*?\]\(.*?\)|\s*[-*+]\s|\s*\d+[.)]\s)", next_stripped
+                ):
                     break
-                if "|" in next_stripped and j + 1 < len(lines) and re.match(r"^[\s|:\-]+$", lines[j + 1]):
+                if (
+                    "|" in next_stripped
+                    and j + 1 < len(lines)
+                    and re.match(r"^[\s|:\-]+$", lines[j + 1])
+                ):
                     break
                 para_lines.append(next_stripped)
                 j += 1

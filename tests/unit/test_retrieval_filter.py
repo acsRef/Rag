@@ -6,6 +6,7 @@
 - frozenset 而非 set：frozen=True 要求字段可哈希；frozenset 也更明确"只读"
 - set 输入自动转 frozenset（外部传 list/set 也行）
 """
+
 import pytest
 
 from app.core.retrieval_filter import RetrievalFilter

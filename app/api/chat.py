@@ -1,4 +1,5 @@
 """Chat API with optional auth."""
+
 import asyncio
 import logging
 
@@ -21,8 +22,8 @@ logger = logging.getLogger(__name__)
 # 注意：进程内注册表，多 uvicorn worker 下仅覆盖发起请求的 worker（既有架构边界）。
 _IN_FLIGHT: dict[str, asyncio.Task] = {}
 
-_SSE_QUEUE_MAX = 256          # SSE 事件队列上限：慢客户端背压；断开后清空解除
-_STREAM_END = object()        # 传输层结束哨兵（区别于任何 SSE 事件字符串）
+_SSE_QUEUE_MAX = 256  # SSE 事件队列上限：慢客户端背压；断开后清空解除
+_STREAM_END = object()  # 传输层结束哨兵（区别于任何 SSE 事件字符串）
 
 
 def _release_in_flight(conv_id: str, task: asyncio.Task) -> None:
@@ -63,6 +64,7 @@ async def stream_chat(
     current_user: dict = Depends(get_current_user),
 ):
     from fastapi.responses import StreamingResponse
+
     if "chat" not in current_user["permissions"]:
         raise HTTPException(status_code=403, detail="Permission denied")
     user_id = current_user["id"]
@@ -75,7 +77,8 @@ async def stream_chat(
     # req.conversation_id，否则 pipeline 内第二次调用会再建一个会话（双会话 bug）。
     conv_id = await asyncio.to_thread(
         conversation_memory.get_or_create_conversation,
-        req.conversation_id, user_id,
+        req.conversation_id,
+        user_id,
     )
     req.conversation_id = conv_id
 
@@ -89,8 +92,11 @@ async def stream_chat(
 
     async def producer():
         gen = rag_pipeline.execute(
-            req, user_id=user_id, user_role_ids=user_role_ids,
-            can_read_all=can_read_all, ctx=ctx,
+            req,
+            user_id=user_id,
+            user_role_ids=user_role_ids,
+            can_read_all=can_read_all,
+            ctx=ctx,
         )
         try:
             async for evt in gen:
@@ -171,11 +177,16 @@ def list_conversations(
 @router.delete("/conversations/{conversation_id}")
 def delete_conversation(conversation_id: str, current_user: dict = Depends(get_current_user)):
     from app.store.db import Message
+
     with get_db_ctx() as session:
-        conv = session.query(Conversation).filter(
-            Conversation.conversation_id == conversation_id,
-            Conversation.user_id == current_user["id"],
-        ).first()
+        conv = (
+            session.query(Conversation)
+            .filter(
+                Conversation.conversation_id == conversation_id,
+                Conversation.user_id == current_user["id"],
+            )
+            .first()
+        )
         if not conv:
             raise HTTPException(status_code=404, detail="Conversation not found")
         session.query(Message).filter(Message.conversation_id == conversation_id).delete()
@@ -188,10 +199,14 @@ def delete_conversation(conversation_id: str, current_user: dict = Depends(get_c
 def conversation_generating(conversation_id: str, current_user: dict = Depends(get_current_user)):
     """前端有边界轮询：后台生成任务是否仍在运行（归属鉴权与 get_messages 一致）。"""
     with get_db_ctx() as session:
-        conv = session.query(Conversation).filter(
-            Conversation.conversation_id == conversation_id,
-            Conversation.user_id == current_user["id"],
-        ).first()
+        conv = (
+            session.query(Conversation)
+            .filter(
+                Conversation.conversation_id == conversation_id,
+                Conversation.user_id == current_user["id"],
+            )
+            .first()
+        )
         if not conv:
             raise HTTPException(status_code=404, detail="Conversation not found")
     task = _IN_FLIGHT.get(conversation_id)
@@ -208,10 +223,14 @@ async def cancel_generation(conversation_id: str, current_user: dict = Depends(g
     LLM 流内 CancelledError 直穿不落），用户消息始终保留。
     """
     with get_db_ctx() as session:
-        conv = session.query(Conversation).filter(
-            Conversation.conversation_id == conversation_id,
-            Conversation.user_id == current_user["id"],
-        ).first()
+        conv = (
+            session.query(Conversation)
+            .filter(
+                Conversation.conversation_id == conversation_id,
+                Conversation.user_id == current_user["id"],
+            )
+            .first()
+        )
         if not conv:
             raise HTTPException(status_code=404, detail="Conversation not found")
     task = _IN_FLIGHT.get(conversation_id)
@@ -227,16 +246,20 @@ def get_messages(conversation_id: str, current_user: dict = Depends(get_current_
     from app.store.db import Message
 
     with get_db_ctx() as session:
-        conv = session.query(Conversation).filter(
-            Conversation.conversation_id == conversation_id,
-            Conversation.user_id == current_user["id"],
-        ).first()
+        conv = (
+            session.query(Conversation)
+            .filter(
+                Conversation.conversation_id == conversation_id,
+                Conversation.user_id == current_user["id"],
+            )
+            .first()
+        )
         if not conv:
             raise HTTPException(status_code=404, detail="Conversation not found")
         msgs = (
             session.query(Message)
             .filter(Message.conversation_id == conversation_id)
-            .order_by(Message.id.asc())   # 单调序，与 memory 模块约定一致
+            .order_by(Message.id.asc())  # 单调序，与 memory 模块约定一致
             .all()
         )
         return [

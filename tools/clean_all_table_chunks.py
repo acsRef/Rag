@@ -7,6 +7,7 @@
 对每个含 `|` 的 chunk 文本调用 _clean_table_text 清洗；文本变则重新嵌入并更新
 text/embedding/search_text。返回更新的 chunk 数。
 """
+
 import asyncio
 import logging
 
@@ -75,7 +76,7 @@ def clean_all_table_chunks(batch_size: int = 20) -> int:
 
     update_count = 0
     for i in range(0, len(rows), batch_size):
-        batch = rows[i:i + batch_size]
+        batch = rows[i : i + batch_size]
         clean_texts: list[str] = []
         chunk_ids: list[str] = []
 
@@ -103,8 +104,10 @@ def clean_all_table_chunks(batch_size: int = 20) -> int:
                     continue
                 new_search = tokenize(cleaned)
                 new_session.execute(
-                    text("UPDATE chunks SET text = :txt, embedding = :emb, search_text = :st "
-                         "WHERE chunk_id = :cid"),
+                    text(
+                        "UPDATE chunks SET text = :txt, embedding = :emb, search_text = :st "
+                        "WHERE chunk_id = :cid"
+                    ),
                     {"txt": cleaned, "emb": new_emb, "st": new_search, "cid": cid},
                 )
                 update_count += 1
@@ -125,6 +128,7 @@ if __name__ == "__main__":
     import sys
 
     from app.core.logging import setup_logging
+
     setup_logging()
     batch = int(sys.argv[1]) if len(sys.argv) > 1 else 20
     n = clean_all_table_chunks(batch)

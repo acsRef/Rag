@@ -11,6 +11,7 @@
 - settings 开关 `embedding_cache_enabled` / `retrieval_cache_enabled` 由调用方
   在使用前判读；cache 自身不带开关，方便单元测试
 """
+
 from __future__ import annotations
 
 import hashlib

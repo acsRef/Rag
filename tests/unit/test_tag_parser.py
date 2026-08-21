@@ -1,4 +1,5 @@
 """TagStreamParser 单测：标签识别、跨 token 边界、展示/持久化一致。"""
+
 from app.core.tag_parser import (
     ANSWER_CLOSE,
     ANSWER_OPEN,
@@ -52,20 +53,20 @@ def test_partial_tag_across_tokens_not_leaked():
     # THINK_OPEN 的前 5 字符（含未闭合标签片段）不得作为文本发出
     p = TagStreamParser()
     events = p.feed(THINK_OPEN[:5])
-    assert _text_of(events, "answer") == ""     # 旧实现会泄漏片段
+    assert _text_of(events, "answer") == ""  # 旧实现会泄漏片段
     events = p.feed(THINK_OPEN[5:] + "思考" + THINK_CLOSE)
     assert _text_of(events, "thinking") == "思考"
 
 
 def test_partial_close_tag_across_tokens_not_leaked():
     p = TagStreamParser()
-    assert p.feed(THINK_OPEN) == []               # 先进入 think 状态
+    assert p.feed(THINK_OPEN) == []  # 先进入 think 状态
     e1 = p.feed("内容" + THINK_CLOSE[:6])
-    assert _text_of(e1, "thinking") == "内容"     # 标记前的文本正常发出
+    assert _text_of(e1, "thinking") == "内容"  # 标记前的文本正常发出
     e2 = p.feed(THINK_CLOSE[6:] + "答案")
-    assert _text_of(e2, "thinking") == ""         # 标签片段不泄漏进思考
+    assert _text_of(e2, "thinking") == ""  # 标签片段不泄漏进思考
     e3 = p.flush()
-    ev = e1 + e2 + e3                             # 答案可能在 e2 已发出，按总量断言
+    ev = e1 + e2 + e3  # 答案可能在 e2 已发出，按总量断言
     assert _text_of(ev, "answer") == "答案"
     assert p.thinking_text == "内容"
     assert p.answer_text == "答案"
@@ -75,7 +76,7 @@ def test_display_matches_persisted():
     content = "一段很长的纯文本回答，没有任何标签，" * 5
     p, events = _run([content])
     assert _text_of(events, "answer") == content
-    assert _text_of(events, "answer") == p.answer_text    # 展示与持久化同源
+    assert _text_of(events, "answer") == p.answer_text  # 展示与持久化同源
 
 
 def test_flush_emits_pending_normal_buffer():
@@ -107,7 +108,7 @@ def test_partial_prefix_before_mark_in_same_buffer():
 def test_partial_prefix_then_mark_across_tokens():
     """开标签跨 token 拆分（契约：标签以 空格+换行 开头，裸 <think> 是普通文本）。"""
     p = TagStreamParser()
-    e1 = p.feed("abc" + THINK_OPEN[:3])       # 尾部保留标记前缀
+    e1 = p.feed("abc" + THINK_OPEN[:3])  # 尾部保留标记前缀
     e2 = p.feed(THINK_OPEN[3:] + "推理" + THINK_CLOSE + "答")
     e3 = p.flush()
     ev = e1 + e2 + e3
@@ -141,6 +142,7 @@ def test_text_before_think_is_answer():
 
 
 # ── 空白前缀容忍（模型漂移容错） ─────────────────────────
+
 
 def test_think_open_with_newline_only_prefix():
     """模型输出 '\n<think>'（无前导空格）也应识别为开标签——thinking 不泄漏进 answer。"""

@@ -1,4 +1,5 @@
 """Admin API: user & role management + PII review."""
+
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -50,17 +51,24 @@ def list_all_users(current_user: dict = Depends(get_current_user)):
     for u in users:
         role_ids = get_user_role_ids(u.id)
         roles = [all_roles[rid].name for rid in role_ids if rid in all_roles]
-        result.append(UserResponse(
-            id=u.id, username=u.username,
-            display_name=u.display_name, email=u.email,
-            is_active=u.is_active, role_ids=role_ids,
-            roles=roles,
-        ))
+        result.append(
+            UserResponse(
+                id=u.id,
+                username=u.username,
+                display_name=u.display_name,
+                email=u.email,
+                is_active=u.is_active,
+                role_ids=role_ids,
+                roles=roles,
+            )
+        )
     return result
 
 
 @router.put("/users/{user_id}/roles")
-def update_user_roles(user_id: str, body: UserRoleUpdateRequest, current_user: dict = Depends(get_current_user)):
+def update_user_roles(
+    user_id: str, body: UserRoleUpdateRequest, current_user: dict = Depends(get_current_user)
+):
     require_admin(current_user)
     session = get_session()
     try:
@@ -75,6 +83,7 @@ def update_user_roles(user_id: str, body: UserRoleUpdateRequest, current_user: d
         set_user_roles(user_id, body.role_ids)
         # 设计审查 P1-10：角色变更后失效该用户的鉴权缓存，避免下次请求读旧权限
         from app.middleware.auth import invalidate_admin_role, invalidate_user_cache
+
         invalidate_user_cache(user_id)
         invalidate_admin_role()
         return {"ok": True}
@@ -89,7 +98,9 @@ def list_all_roles(current_user: dict = Depends(get_current_user)):
     result = []
     for r in roles:
         perms = get_role_permissions(r.id)
-        result.append({"id": r.id, "name": r.name, "description": r.description, "permissions": perms})
+        result.append(
+            {"id": r.id, "name": r.name, "description": r.description, "permissions": perms}
+        )
     return result
 
 
@@ -101,8 +112,10 @@ def create_new_role(body: CreateRoleRequest, current_user: dict = Depends(get_cu
         set_role_permissions(role.id, body.permissions)
     # 设计审查 P3-18：角色表变更后失效 admin 角色 id 缓存
     from app.middleware.auth import invalidate_admin_role
+
     invalidate_admin_role()
     return {"id": role.id, "name": role.name}
+
 
 class PiiAlertItem(BaseModel):
     id: int
@@ -114,7 +127,9 @@ class PiiAlertItem(BaseModel):
     status: str
     created_at: datetime | None = None
 
+
 VALID_PII_STATUSES = {"pending", "confirmed", "false_positive"}
+
 
 @router.get("/pii-alerts", response_model=list[PiiAlertItem])
 def list_pii_alerts(status: str = "pending", current_user: dict = Depends(get_current_user)):
@@ -225,9 +240,14 @@ def chunk_info_rows(chunk_ids: list[str]) -> list[dict]:
     with get_db_ctx() as session:
         rows = (
             session.query(
-                Chunk.chunk_id, Chunk.document_id, Chunk.kb_id,
-                Chunk.title, Chunk.section_path, Chunk.text,
-                Chunk.content_hash, Chunk.visibility,
+                Chunk.chunk_id,
+                Chunk.document_id,
+                Chunk.kb_id,
+                Chunk.title,
+                Chunk.section_path,
+                Chunk.text,
+                Chunk.content_hash,
+                Chunk.visibility,
                 Document.filename,
             )
             .outerjoin(Document, Chunk.document_id == Document.document_id)
@@ -236,10 +256,15 @@ def chunk_info_rows(chunk_ids: list[str]) -> list[dict]:
         )
         return [
             {
-                "chunk_id": r.chunk_id, "document_id": r.document_id, "kb_id": r.kb_id,
-                "filename": r.filename or "", "title": r.title or "",
-                "section_path": r.section_path or "", "text": r.text[:500] if r.text else "",
-                "content_hash": r.content_hash or "", "visibility": r.visibility,
+                "chunk_id": r.chunk_id,
+                "document_id": r.document_id,
+                "kb_id": r.kb_id,
+                "filename": r.filename or "",
+                "title": r.title or "",
+                "section_path": r.section_path or "",
+                "text": r.text[:500] if r.text else "",
+                "content_hash": r.content_hash or "",
+                "visibility": r.visibility,
             }
             for r in rows
         ]

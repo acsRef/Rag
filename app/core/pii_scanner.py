@@ -71,6 +71,7 @@ def load_rules(force: bool = False) -> list[dict]:
     session = None
     try:
         from app.store.db import SensitiveRule, get_session
+
         session = get_session()
         rows = session.query(SensitiveRule).filter(SensitiveRule.is_active == True).all()
     except Exception:
@@ -89,19 +90,22 @@ def load_rules(force: bool = False) -> list[dict]:
         try:
             pat = re.compile(r.pattern)
         except re.error:
-            logger.warning("PII rules: invalid pattern for rule %r skipped: %s",
-                           r.rule_name, r.pattern[:80])
+            logger.warning(
+                "PII rules: invalid pattern for rule %r skipped: %s", r.rule_name, r.pattern[:80]
+            )
             continue
-        compiled.append({
-            "rule_name": r.rule_name,
-            "pattern": pat,
-            "validation_fn": r.validation_fn,
-            "strategy": r.strategy,
-            "mask_mode": r.mask_mode,
-            "exclusion_words": set(
-                w.strip() for w in (r.exclusion_words or "").split(";") if w.strip()
-            ),
-        })
+        compiled.append(
+            {
+                "rule_name": r.rule_name,
+                "pattern": pat,
+                "validation_fn": r.validation_fn,
+                "strategy": r.strategy,
+                "mask_mode": r.mask_mode,
+                "exclusion_words": set(
+                    w.strip() for w in (r.exclusion_words or "").split(";") if w.strip()
+                ),
+            }
+        )
     _rule_cache = compiled
     _cache_ts = now
     return _rule_cache
@@ -122,12 +126,12 @@ def _has_exclusion(text: str, match_start: int, match_end: int, exclusion_words:
     """
     if not exclusion_words:
         return False
-    window = text[max(0, match_start - 20): min(len(text), match_end + 20)]
+    window = text[max(0, match_start - 20) : min(len(text), match_end + 20)]
     for word in exclusion_words:
-        if re.search(r'[一-鿿]', word):
+        if re.search(r"[一-鿿]", word):
             if word in window:
                 return True
-        elif re.search(r'\b' + re.escape(word) + r'\b', window, re.IGNORECASE):
+        elif re.search(r"\b" + re.escape(word) + r"\b", window, re.IGNORECASE):
             return True
     return False
 
@@ -162,14 +166,16 @@ def scan(text: str) -> list[PiiMatch]:
             # Context exclusion
             if _has_exclusion(text, m.start(), m.end(), rule["exclusion_words"]):
                 continue
-            findings.append(PiiMatch(
-                rule_name=rule["rule_name"],
-                strategy=rule["strategy"],
-                mask_mode=rule["mask_mode"],
-                start=m.start(),
-                end=m.end(),
-                matched_text=matched,
-            ))
+            findings.append(
+                PiiMatch(
+                    rule_name=rule["rule_name"],
+                    strategy=rule["strategy"],
+                    mask_mode=rule["mask_mode"],
+                    start=m.start(),
+                    end=m.end(),
+                    matched_text=matched,
+                )
+            )
 
     findings.sort(key=lambda x: x.start)
     return findings
@@ -204,7 +210,7 @@ def mask_text(text: str, findings: list[PiiMatch] | None = None) -> str:
 
     result = list(text)
     offset = 0
-    masked_spans: list[tuple[int, int]] = []   # 已掩码的原始区间
+    masked_spans: list[tuple[int, int]] = []  # 已掩码的原始区间
     for finding in findings:
         if finding.strategy not in ("mask",):
             continue

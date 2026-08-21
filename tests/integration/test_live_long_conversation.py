@@ -3,6 +3,7 @@
 覆盖：窗口滑动、摘要异步触发与水位推进、无丢失不变式、标题生成、
 预算约束。仅当 RAGENT_LIVE_LLM=1 且 key 齐备时运行（约分钟级）。
 """
+
 import asyncio
 import json
 from pathlib import Path
@@ -46,8 +47,10 @@ def corpus(integration_db, live_env):
     ids = {}
     for name in ("sales_east_2024.md", "sales_south_2024.md"):
         res = document_indexer.index(
-            name, (TABLE_DIR / name).read_bytes(),
-            kb_id="test-kb", user_id="test-user",
+            name,
+            (TABLE_DIR / name).read_bytes(),
+            kb_id="test-kb",
+            user_id="test-user",
         )
         assert res["status"] == "indexed", "摄入 %s 失败: %s" % (name, res)
         ids[name] = res["document_id"]
@@ -90,10 +93,17 @@ async def test_long_conversation_memory_invariants(corpus):
 
     # 预建用户（conversations.user_id 有外键）
     from app.store.db import Conversation, Message, User, get_db_ctx
+
     with get_db_ctx() as session:
         if not session.query(User).filter(User.id == "long-conv-user").first():
-            session.add(User(id="long-conv-user", username="long-conv-user",
-                             hashed_password="unused", is_active=True))
+            session.add(
+                User(
+                    id="long-conv-user",
+                    username="long-conv-user",
+                    hashed_password="unused",
+                    is_active=True,
+                )
+            )
             session.commit()
 
     conv_id = None
@@ -102,11 +112,12 @@ async def test_long_conversation_memory_invariants(corpus):
         answer, kinds, conv_id = await _run_turn(conv_id, q)
         assert conv_id, "第 %d 轮未返回 conversation_id" % (i + 1)
         # 每轮要么有答案，要么有显式的错误/空检索信号——不允许静默无响应
-        assert ("token" in kinds) or ("error" in kinds) or ("no_context" in kinds), \
+        assert ("token" in kinds) or ("error" in kinds) or ("no_context" in kinds), (
             "第 %d 轮既无 token 也无 error/no_context 事件" % (i + 1)
+        )
         if "token" in kinds and answer.strip():
             answered += 1
-        await asyncio.sleep(0.5)   # 给后台摘要任务留运行窗口
+        await asyncio.sleep(0.5)  # 给后台摘要任务留运行窗口
 
     assert answered >= 12, "16 轮中仅 %d 轮产出答案，过多失败" % answered
 
@@ -115,20 +126,25 @@ async def test_long_conversation_memory_invariants(corpus):
     import time as _time
 
     from app.core.memory import conversation_memory as _cm
+
     deadline = _time.monotonic() + 180
     while _time.monotonic() < deadline:
         # 清退避态：对话期间的偶发 LLM 失败会计入退避（该行为由
         # test_summary_failure_backoff 专测）；此处只验证收敛性本身
         from app.core.memory import _summary_failures
+
         _summary_failures.pop(conv_id, None)
         await _cm._maybe_summarize(conv_id)
         with get_db_ctx() as session:
-            conv_chk = session.query(Conversation).filter_by(
-                conversation_id=conv_id).first()
+            conv_chk = session.query(Conversation).filter_by(conversation_id=conv_id).first()
             wm = conv_chk.last_summarized_msg_id or 0
-            rows_chk = [(m.id, m.content or "") for m in session.query(Message)
-                        .filter_by(conversation_id=conv_id)
-                        .order_by(Message.id.asc()).all()]
+            rows_chk = [
+                (m.id, m.content or "")
+                for m in session.query(Message)
+                .filter_by(conversation_id=conv_id)
+                .order_by(Message.id.asc())
+                .all()
+            ]
         rec = rows_chk[-_HISTORY_SCAN_LIMIT:]
         acc2, bnd = 0, rec[-1][0]
         for mid, content in reversed(rec):
@@ -137,8 +153,7 @@ async def test_long_conversation_memory_invariants(corpus):
                 break
             acc2 += t
             bnd = mid
-        gap = sum(_estimate_tokens(c) for mid, c in rows_chk
-                  if mid < bnd and mid > wm)
+        gap = sum(_estimate_tokens(c) for mid, c in rows_chk if mid < bnd and mid > wm)
         if gap <= settings.summary_trigger_tokens:
             break
         await asyncio.sleep(2)
@@ -146,9 +161,12 @@ async def test_long_conversation_memory_invariants(corpus):
     with get_db_ctx() as session:
         conv = session.query(Conversation).filter_by(conversation_id=conv_id).first()
         assert conv is not None
-        msgs = (session.query(Message)
-                .filter_by(conversation_id=conv_id)
-                .order_by(Message.id.asc()).all())
+        msgs = (
+            session.query(Message)
+            .filter_by(conversation_id=conv_id)
+            .order_by(Message.id.asc())
+            .all()
+        )
         msg_rows = [(m.id, m.role, m.content or "", m.status) for m in msgs]
         summary = conv.summary or ""
         watermark = conv.last_summarized_msg_id
@@ -170,7 +188,8 @@ async def test_long_conversation_memory_invariants(corpus):
     #    批量执行，因此任意时刻"既不在窗口、又未被摘要"的消息总 token 量
     #    不得超过触发阈值（超了说明摘要机制失效，会越拖越多）
     from app.config import settings as st
-    recent = [(mid, content) for mid, _, content, _ in msg_rows][- _HISTORY_SCAN_LIMIT:]
+
+    recent = [(mid, content) for mid, _, content, _ in msg_rows][-_HISTORY_SCAN_LIMIT:]
     acc, boundary = 0, recent[-1][0]
     for mid, content in reversed(recent):
         t = _estimate_tokens(content)
@@ -178,18 +197,23 @@ async def test_long_conversation_memory_invariants(corpus):
             break
         acc += t
         boundary = mid
-    gap = sum(_estimate_tokens(content)
-              for mid, _, content, _ in msg_rows
-              if mid < boundary and mid > (watermark or 0))
+    gap = sum(
+        _estimate_tokens(content)
+        for mid, _, content, _ in msg_rows
+        if mid < boundary and mid > (watermark or 0)
+    )
     assert gap <= st.summary_trigger_tokens, (
         "摘要滞后越界：未覆盖溢出 %d token > 触发阈值 %d（水位 %s，边界 %s）"
-        % (gap, st.summary_trigger_tokens, watermark, boundary))
+        % (gap, st.summary_trigger_tokens, watermark, boundary)
+    )
 
     # 5) 预算约束：get_history 返回内容不超 token 预算
     history = conversation_memory.get_history(conv_id)
     total = sum(_estimate_tokens(m["content"]) for m in history)
     assert total <= st.history_max_tokens, "历史窗口超预算：%d > %d" % (
-        total, st.history_max_tokens)
+        total,
+        st.history_max_tokens,
+    )
 
     # 6) 摘要质量抽查：应含早期轮次的实体（证明增量摘要未丢早期信息）
     assert ("华东" in summary) or ("销售" in summary), "摘要未覆盖对话核心实体"

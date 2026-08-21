@@ -1,4 +1,5 @@
 """Retrieve 端点请求/响应模型的契约测试。"""
+
 import pytest
 from pydantic import ValidationError
 
@@ -54,7 +55,8 @@ def test_retrieve_response_defaults():
 
 
 def test_retrieve_response_shape():
-    item = RetrievedItem(chunk_id="c1", document_id="d1", text="正文",
-                         title="t", section_path="s", score=0.5)
+    item = RetrievedItem(
+        chunk_id="c1", document_id="d1", text="正文", title="t", section_path="s", score=0.5
+    )
     resp = RetrieveResponse(items=[item], degraded=False)
     assert resp.items[0].score == 0.5

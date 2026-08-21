@@ -4,6 +4,7 @@ jieba 分词结果直接拼进 to_tsquery 时，`+ & | ! ( ) : ' " \\` 等运算
 会让 SQL 抛语法错误——异常被 _search_kb 吞掉后 BM25 通道静默消失
 （如查询 "C++"）。tokenize 输出必须只含安全词元。
 """
+
 from app.store.pgvector_store import tokenize
 
 
@@ -35,7 +36,8 @@ def test_operator_only_tokens_dropped():
 def test_hyphen_inside_token_preserved():
     # 消毒函数保留 token 内部连字符（jieba 如何切词不在消毒职责内）
     from app.store.pgvector_store import _sanitize_ts_token
+
     assert _sanitize_ts_token("state-of-the-art") == "state-of-the-art"
     assert _sanitize_ts_token("RAG-2026") == "RAG-2026"
-    assert _sanitize_ts_token("-") == ""        # 裸连字符丢弃
-    assert _sanitize_ts_token("+++") == ""      # 纯符号丢弃
+    assert _sanitize_ts_token("-") == ""  # 裸连字符丢弃
+    assert _sanitize_ts_token("+++") == ""  # 纯符号丢弃

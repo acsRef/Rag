@@ -1,4 +1,4 @@
-﻿"""Retrieval with vector search + permission filtering + rerank + MMR diversity.
+"""Retrieval with vector search + permission filtering + rerank + MMR diversity.
 
 两阶段检索流水线:
   1. 跨编码器重排: cross-encoder (BAAI/bge-reranker-v2-m3) 对粗排结果精排
@@ -6,6 +6,7 @@
 
 权限过滤:每个 chunk 在 SQL 层带 `visibility` / `allowed_roles`,按用户角色过滤。
 """
+
 import asyncio
 import logging
 import time
@@ -27,7 +28,9 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-async def embed_query_with_fallback(query: str, ctx: "DiagContext | None" = None) -> tuple[list[float] | None, bool]:
+async def embed_query_with_fallback(
+    query: str, ctx: "DiagContext | None" = None
+) -> tuple[list[float] | None, bool]:
     """查询 embedding；熔断/失败时降级为零向量（BM25-only）。
 
     返回 (embedding, degraded)。embedding 为 None 表示纯向量模式
@@ -41,11 +44,21 @@ async def embed_query_with_fallback(query: str, ctx: "DiagContext | None" = None
     try:
         return await sf_embedding.embed(query), False
     except CircuitOpenError:
-        logger.warning("embed_query.embedding.degraded — circuit open, using zero-vector (BM25-only fallback)")
+        logger.warning(
+            "embed_query.embedding.degraded — circuit open, using zero-vector (BM25-only fallback)"
+        )
         if ctx:
-            ctx.track_error("embedding", "CircuitOpenError", "embedding circuit breaker open, BM25-only", degraded=True)
+            ctx.track_error(
+                "embedding",
+                "CircuitOpenError",
+                "embedding circuit breaker open, BM25-only",
+                degraded=True,
+            )
     except Exception as exc:
-        logger.warning("embed_query.embedding.failed — embedding failed (%s), using zero-vector (BM25-only fallback)", exc)
+        logger.warning(
+            "embed_query.embedding.failed — embedding failed (%s), using zero-vector (BM25-only fallback)",
+            exc,
+        )
     if not settings.hybrid_search_enabled:
         return None, True
     return [0.0] * settings.embedding_dimension, True
@@ -72,8 +85,12 @@ def _search_kb(
         user_id=user_id,
     )
     if settings.hybrid_search_enabled:
-        kwargs.update(query=query, fetch_k=settings.hybrid_search_top_k, rrf_k=settings.hybrid_rrf_k,
-                       enable_question_channel=settings.question_channel_enabled)
+        kwargs.update(
+            query=query,
+            fetch_k=settings.hybrid_search_top_k,
+            rrf_k=settings.hybrid_rrf_k,
+            enable_question_channel=settings.question_channel_enabled,
+        )
     # 优先用 filters（新），回落到旧 document_ids 参数（向后兼容）
     if filters is not None and not filters.is_empty():
         kwargs["filters"] = filters
@@ -89,7 +106,9 @@ def _search_kb(
         return fn(**kwargs)
     except Exception:
         logger.exception("Search failed for kb_id=%s", kb_id)
-        provider_health.get("postgres").on_failure()   # DB-1：计入熔断，pipeline 末尾 degraded 事件自动暴露
+        provider_health.get(
+            "postgres"
+        ).on_failure()  # DB-1：计入熔断，pipeline 末尾 degraded 事件自动暴露
         return []
 
 
@@ -118,9 +137,21 @@ async def _collect_results(
     if not kb_ids:
         return
     per_kb = await asyncio.gather(
-        *(asyncio.to_thread(
-            _search_kb, kb_id, query_emb, query, user_role_ids, can_read_all, top_k,
-            user_id=user_id, document_ids=document_ids, filters=filters) for kb_id in kb_ids),
+        *(
+            asyncio.to_thread(
+                _search_kb,
+                kb_id,
+                query_emb,
+                query,
+                user_role_ids,
+                can_read_all,
+                top_k,
+                user_id=user_id,
+                document_ids=document_ids,
+                filters=filters,
+            )
+            for kb_id in kb_ids
+        ),
         return_exceptions=True,
     )
     for kb_id, chunks in zip(kb_ids, per_kb):
@@ -143,72 +174,146 @@ async def _collect_results(
 _SECTION_RULES = [
     {
         "query_keywords": {
-            "营收", "营业收入", "营业总收入", "利润", "净利润", "归母",
-            "资产", "总资产", "负债", "现金流", "每股", "分红", "股利",
-            "毛利率", "净利率", "净资产", "负债率", "权益", "公积金",
-            "基本每股收益", "稀释每股收益", "单位", "金额单位", "千元",
+            "营收",
+            "营业收入",
+            "营业总收入",
+            "利润",
+            "净利润",
+            "归母",
+            "资产",
+            "总资产",
+            "负债",
+            "现金流",
+            "每股",
+            "分红",
+            "股利",
+            "毛利率",
+            "净利率",
+            "净资产",
+            "负债率",
+            "权益",
+            "公积金",
+            "基本每股收益",
+            "稀释每股收益",
+            "单位",
+            "金额单位",
+            "千元",
         },
         "section_patterns": [
-            "主要会计数据", "主要财务指标",
+            "主要会计数据",
+            "主要财务指标",
         ],
         "boost": 5.0,  # 强力 boost：核心汇总数据表
     },
     {
         "query_keywords": {
-            "研发", "资本化", "费用化", "研发投入",
+            "研发",
+            "资本化",
+            "费用化",
+            "研发投入",
         },
         "section_patterns": [
-            "研发投入情况表", "研发投入",
+            "研发投入情况表",
+            "研发投入",
         ],
         "boost": 5.0,  # 研发表格
     },
     {
         "query_keywords": {
-            "营收", "营业收入", "利润", "资产", "负债", "现金流",
-            "每股", "分红", "股利",
+            "营收",
+            "营业收入",
+            "利润",
+            "资产",
+            "负债",
+            "现金流",
+            "每股",
+            "分红",
+            "股利",
         },
         "section_patterns": [
-            "合并利润表", "合并资产负债表", "合并现金流量表",
-            "利润表", "资产负债表", "现金流量表", "所有者权益变动表",
+            "合并利润表",
+            "合并资产负债表",
+            "合并现金流量表",
+            "利润表",
+            "资产负债表",
+            "现金流量表",
+            "所有者权益变动表",
         ],
         "boost": 3.0,  # 财务报表
     },
     {
         "query_keywords": {
-            "员工", "在职", "人数", "职工",
+            "员工",
+            "在职",
+            "人数",
+            "职工",
         },
         "section_patterns": [
-            "在职员工", "员工情况", "员工",
+            "在职员工",
+            "员工情况",
+            "员工",
         ],
         "boost": 3.0,
     },
     {
         "query_keywords": {
-            "持股", "控股", "子公司", "参股",
+            "持股",
+            "控股",
+            "子公司",
+            "参股",
         },
         "section_patterns": [
-            "主要控股", "子公司", "参股公司",
+            "主要控股",
+            "子公司",
+            "参股公司",
         ],
         "boost": 3.0,
     },
     {
         "query_keywords": {
-            "战略", "业务", "市场", "竞争", "行业", "产品", "客户",
-            "渠道", "海外", "国际", "国内", "创新", "趋势",
-            "经营", "讨论", "分析",
+            "战略",
+            "业务",
+            "市场",
+            "竞争",
+            "行业",
+            "产品",
+            "客户",
+            "渠道",
+            "海外",
+            "国际",
+            "国内",
+            "创新",
+            "趋势",
+            "经营",
+            "讨论",
+            "分析",
         },
         "section_patterns": [
-            "管理层讨论与分析", "经营情况讨论与分析",
+            "管理层讨论与分析",
+            "经营情况讨论与分析",
         ],
         "boost": 2.0,  # 业务分析
     },
     {
         "query_keywords": {
-            "董事", "监事", "高管", "薪酬", "股东", "股权", "治理",
-            "签字", "会计师", "审计", "委员会",
+            "董事",
+            "监事",
+            "高管",
+            "薪酬",
+            "股东",
+            "股权",
+            "治理",
+            "签字",
+            "会计师",
+            "审计",
+            "委员会",
         },
         "section_patterns": [
-            "公司治理", "董事", "监事", "高级管理人员", "股东信息",
+            "公司治理",
+            "董事",
+            "监事",
+            "高级管理人员",
+            "股东信息",
         ],
         "boost": 2.0,
     },
@@ -256,19 +361,28 @@ def _boost_by_section_type(results: list[dict], query: str) -> list[dict]:
 # 权威 section 列表 — 这些 section 的数据最重要，需要保证被检索到
 _AUTHORITATIVE_SECTIONS = [
     # 核心财务汇总表
-    "主要会计数据", "主要财务指标",
+    "主要会计数据",
+    "主要财务指标",
     # 研发相关
-    "研发投入情况表", "研发投入",
+    "研发投入情况表",
+    "研发投入",
     # 利润表相关
-    "利润表", "合并利润表", "母公司利润表",
+    "利润表",
+    "合并利润表",
+    "母公司利润表",
     # 资产负债相关
-    "资产负债表", "合并资产负债表", "母公司资产负债表",
+    "资产负债表",
+    "合并资产负债表",
+    "母公司资产负债表",
     # 现金流相关
-    "现金流量表", "合并现金流量表",
+    "现金流量表",
+    "合并现金流量表",
     # 员工相关
-    "在职员工", "员工情况",
+    "在职员工",
+    "员工情况",
     # 分红相关
-    "利润分配", "分红",
+    "利润分配",
+    "分红",
 ]
 
 
@@ -303,25 +417,53 @@ def _supplement_authoritative_sections(
     # 检查 query 是否涉及权威 section 的数据类型
     financial_keywords = {
         # 财务数据
-        "营收", "营业收入", "营业总收入", "利润", "净利润", "归母",
-        "资产", "总资产", "负债", "现金流", "每股", "分红", "股利",
-        "毛利率", "净利率", "净资产", "负债率", "权益", "公积金",
-        "基本每股收益", "稀释每股收益",
+        "营收",
+        "营业收入",
+        "营业总收入",
+        "利润",
+        "净利润",
+        "归母",
+        "资产",
+        "总资产",
+        "负债",
+        "现金流",
+        "每股",
+        "分红",
+        "股利",
+        "毛利率",
+        "净利率",
+        "净资产",
+        "负债率",
+        "权益",
+        "公积金",
+        "基本每股收益",
+        "稀释每股收益",
         # 研发
-        "研发", "资本化", "费用化",
+        "研发",
+        "资本化",
+        "费用化",
         # 表格/单位
-        "单位", "金额单位", "千元", "万元", "亿元",
+        "单位",
+        "金额单位",
+        "千元",
+        "万元",
+        "亿元",
         # 员工
-        "员工", "在职", "人数",
+        "员工",
+        "在职",
+        "人数",
         # 投资/持股
-        "持股", "控股", "子公司",
+        "持股",
+        "控股",
+        "子公司",
     }
     if not any(kw in query for kw in financial_keywords):
         return results
 
     existing_ids = {r.get("chunk_id") for r in results}
     import re as _re
-    query_years = set(_re.findall(r'(20\d{2})', query))
+
+    query_years = set(_re.findall(r"(20\d{2})", query))
 
     # Step 1: 对已有结果中的权威 chunks 加分（防止低分被 rerank/MMR 淘汰）
     boosted_existing = 0
@@ -332,7 +474,7 @@ def _supplement_authoritative_sections(
             continue
         # 年份匹配
         if query_years:
-            chunk_years = set(_re.findall(r'(20\d{2})', full_path))
+            chunk_years = set(_re.findall(r"(20\d{2})", full_path))
             if not (query_years & chunk_years):
                 continue
         # 权威 chunk 且年份匹配 → 加分
@@ -341,12 +483,12 @@ def _supplement_authoritative_sections(
 
     if boosted_existing > 0:
         results.sort(key=lambda x: x.get("score", 0), reverse=True)
-        logger.info("section_supplement boosted_existing=%d query=%s",
-                     boosted_existing, query[:40])
+        logger.info("section_supplement boosted_existing=%d query=%s", boosted_existing, query[:40])
 
     # Step 2: 定向补充检索（添加主检索中缺失的权威 chunks）
     try:
         from app.store.pgvector_store import bm25_search
+
         supplementary = bm25_search(
             kb_ids=kb_ids,
             query=query,
@@ -365,7 +507,7 @@ def _supplement_authoritative_sections(
             if not any(sec in leaf for sec in _AUTHORITATIVE_SECTIONS):
                 continue
             if query_years:
-                chunk_years = set(_re.findall(r'(20\d{2})', full_path))
+                chunk_years = set(_re.findall(r"(20\d{2})", full_path))
                 if not (query_years & chunk_years):
                     continue
             results.append(r)
@@ -392,6 +534,7 @@ _CROSS_YEAR_HINTS = ("近三年", "近两", "分别", "对比", "相比", "变�
 def _query_years(query: str) -> list[str]:
     """提取 query 中的年份 tokens（"2023年"），去重保序。"""
     import re as _re
+
     seen: set[str] = set()
     out: list[str] = []
     for m in _re.findall(r"(?:19|20)\d{2}", query):
@@ -457,10 +600,14 @@ def _supplement_missing_years(
     try:
         from app.ingestion.indexer import _extract_year_from_filename
         from app.store.db import Document, get_db_ctx
+
         year_docs: dict[str, list[str]] = {}
         with get_db_ctx() as session:
-            rows = session.query(Document.document_id, Document.filename).filter(
-                Document.kb_id.in_(kb_ids)).all()
+            rows = (
+                session.query(Document.document_id, Document.filename)
+                .filter(Document.kb_id.in_(kb_ids))
+                .all()
+            )
             for doc_id, filename in rows:
                 yr = _extract_year_from_filename(filename)
                 if yr:
@@ -477,6 +624,7 @@ def _supplement_missing_years(
             continue
         try:
             from app.store.pgvector_store import bm25_search
+
             rows = bm25_search(
                 kb_ids=kb_ids,
                 query=query,
@@ -504,8 +652,9 @@ def _supplement_missing_years(
         for r in added:
             r["score"] = max(r.get("score", 0), min_existing)
         results.extend(added)
-        logger.info("year_coverage added=%d missing_years=%s query=%s",
-                    len(added), missing, query[:40])
+        logger.info(
+            "year_coverage added=%d missing_years=%s query=%s", len(added), missing, query[:40]
+        )
 
     return results
 
@@ -536,8 +685,13 @@ async def _cross_doc_extra(
         # retrieve_sync 内部全同步 DB 调用，必须 to_thread，否则阻塞事件循环
         extra = await asyncio.to_thread(
             cross_doc_retriever.retrieve_sync,
-            query, query_emb, target_kb_ids,
-            results, user_role_ids, can_read_all, user_id,
+            query,
+            query_emb,
+            target_kb_ids,
+            results,
+            user_role_ids,
+            can_read_all,
+            user_id,
         )
         return extra or [], len(extra) if extra else 0
     except Exception:
@@ -571,7 +725,8 @@ class RetrievalEngine:
             target_kb_ids = await asyncio.to_thread(pgvector_store.list_kb_ids)
         logger.info(
             "retrieve.start query_len=%d kb_target_count=%d",
-            len(query), len(target_kb_ids),
+            len(query),
+            len(target_kb_ids),
         )
 
         if round_data is not None:
@@ -582,15 +737,22 @@ class RetrievalEngine:
         embed_elapsed = (time.monotonic() - t_embed) * 1000
         if query_emb is None:
             # 纯向量模式 + embedding 失败：零向量余弦排序未定义，宁可空结果触发上层兜底
-            logger.warning("retrieve.pure_vector_degraded — embedding failed with hybrid off, returning []")
+            logger.warning(
+                "retrieve.pure_vector_degraded — embedding failed with hybrid off, returning []"
+            )
             if ctx:
-                ctx.track_error("embedding", "ZeroVectorNoHybrid",
-                                "pure-vector mode with failed embedding returns []", degraded=True)
+                ctx.track_error(
+                    "embedding",
+                    "ZeroVectorNoHybrid",
+                    "pure-vector mode with failed embedding returns []",
+                    degraded=True,
+                )
             return []
         # Milestone 2: query 嵌入完成(DEBUG,因为正常路径会调无数次)
         logger.debug(
             "retrieve.embedded dim=%d elapsed_ms=%.1f",
-            len(query_emb), embed_elapsed,
+            len(query_emb),
+            embed_elapsed,
         )
 
         if round_data is not None:
@@ -610,14 +772,16 @@ class RetrievalEngine:
             try:
                 doc_filter = await asyncio.to_thread(
                     pgvector_store.pre_retrieve_documents,
-                    query_emb, target_kb_ids,
+                    query_emb,
+                    target_kb_ids,
                     5,  # top_k_docs
                     0.3,  # threshold
                 )
                 stage1_elapsed = (time.monotonic() - t_stage1) * 1000
                 logger.info(
                     "retrieve.two_stage stage1_docs=%d elapsed_ms=%.1f",
-                    len(doc_filter), stage1_elapsed,
+                    len(doc_filter),
+                    stage1_elapsed,
                 )
                 if round_data is not None:
                     round_data.setdefault("two_stage", {})["stage1"] = {
@@ -630,9 +794,17 @@ class RetrievalEngine:
                 doc_filter = None
 
         await _collect_results(
-            target_kb_ids, query_emb, query,
-            user_role_ids, can_read_all, top_k, seen_ids, results,
-            user_id, document_ids=doc_filter, filters=filters,
+            target_kb_ids,
+            query_emb,
+            query,
+            user_role_ids,
+            can_read_all,
+            top_k,
+            seen_ids,
+            results,
+            user_id,
+            document_ids=doc_filter,
+            filters=filters,
         )
 
         if intent and intent.matches:
@@ -642,17 +814,29 @@ class RetrievalEngine:
                 all_kb_ids = await asyncio.to_thread(pgvector_store.list_kb_ids)
                 fallback = [k for k in all_kb_ids if k not in target_kb_ids]
                 await _collect_results(
-                    fallback, query_emb, query,
-                    user_role_ids, can_read_all, top_k, seen_ids, results,
-                    user_id, document_ids=doc_filter, filters=filters,
+                    fallback,
+                    query_emb,
+                    query,
+                    user_role_ids,
+                    can_read_all,
+                    top_k,
+                    seen_ids,
+                    results,
+                    user_id,
+                    document_ids=doc_filter,
+                    filters=filters,
                 )
 
         # 补充检索：确保权威 section 的 chunks 在候选中
         # BM25 ts_rank 偏向叙述性文本，表格数据（如"主要会计数据"）关键词稀疏
         # 经常被挤出 top-K，导致 LLM 拿到错误 section 的数据
         results = _supplement_authoritative_sections(
-            results, query, target_kb_ids,
-            user_role_ids, can_read_all, user_id,
+            results,
+            query,
+            target_kb_ids,
+            user_role_ids,
+            can_read_all,
+            user_id,
         )
 
         results.sort(key=lambda x: x["score"], reverse=True)
@@ -661,12 +845,18 @@ class RetrievalEngine:
         # Milestone 3: 粗排+重排序前候选汇总
         logger.info(
             "retrieve.candidates count=%d elapsed_ms=%.1f",
-            len(results), (time.monotonic() - t_total) * 1000,
+            len(results),
+            (time.monotonic() - t_total) * 1000,
         )
 
         if round_data is not None:
             round_data["search_candidates"] = [
-                {"chunk_id": r["chunk_id"], "kb_id": r.get("kb_id", ""), "score": round(r["score"], 4), "title": r.get("title", "")}
+                {
+                    "chunk_id": r["chunk_id"],
+                    "kb_id": r.get("kb_id", ""),
+                    "score": round(r["score"], 4),
+                    "title": r.get("title", ""),
+                }
                 for r in results[:10]  # 只记录前10个避免文件过大
             ]
 
@@ -677,8 +867,13 @@ class RetrievalEngine:
         cross_doc_extra_count = 0
         # Strategy guard：关掉时 _cross_doc_extra 直接返回 ([], 0)
         extra, cross_doc_extra_count = await _cross_doc_extra(
-            query, query_emb, target_kb_ids, results,
-            user_role_ids, can_read_all, user_id,
+            query,
+            query_emb,
+            target_kb_ids,
+            results,
+            user_role_ids,
+            can_read_all,
+            user_id,
         )
         if extra:
             # 归一化映射：附加 chunk 落在最强直连分的 70%~100% 区间，
@@ -723,16 +918,23 @@ class RetrievalEngine:
                     max_score = max(rerank_scores)
                     min_score = min(rerank_scores)
                     if max_score - min_score > 0.001:
-                        reranked_ids = [r["index"] for r in reranked if 0 <= r["index"] < len(results)]
+                        reranked_ids = [
+                            r["index"] for r in reranked if 0 <= r["index"] < len(results)
+                        ]
                         reordered = [results[i] for i in reranked_ids]
                         # reranker 未返回的候选按原序追加——不静默丢弃
                         returned = set(reranked_ids)
                         reordered += [r for i, r in enumerate(results) if i not in returned]
                         results = reordered
                     else:
-                        logger.debug("retrieve.rerank.skip_degraded query_len=%d candidates=%d "
-                                     "score_range=[%.4f, %.4f]",
-                                     len(query), len(reranked), min_score, max_score)
+                        logger.debug(
+                            "retrieve.rerank.skip_degraded query_len=%d candidates=%d "
+                            "score_range=[%.4f, %.4f]",
+                            len(query),
+                            len(reranked),
+                            min_score,
+                            max_score,
+                        )
                         # Rerank 无区分度: 丢弃 cross-doc 额外 chunk,恢复原始搜索排序
                         results = [r for r in results if r["chunk_id"] in original_chunk_ids]
                         results.sort(key=lambda x: x["score"], reverse=True)
@@ -740,7 +942,9 @@ class RetrievalEngine:
                 # Milestone 4: 跨编码器重排(DEBUG,每次问答都打)
                 logger.debug(
                     "retrieve.reranked from=%d to=%d elapsed_ms=%.1f",
-                    rerank_before_count, len(results), rerank_elapsed,
+                    rerank_before_count,
+                    len(results),
+                    rerank_elapsed,
                 )
 
                 if round_data is not None:
@@ -760,7 +964,12 @@ class RetrievalEngine:
                 rerank_degraded = True
                 logger.warning("retrieve.rerank.degraded — circuit open, skipping rerank")
                 if ctx:
-                    ctx.track_error("rerank", "CircuitOpenError", "rerank circuit breaker open, skipped", degraded=True)
+                    ctx.track_error(
+                        "rerank",
+                        "CircuitOpenError",
+                        "rerank circuit breaker open, skipped",
+                        degraded=True,
+                    )
                 if round_data is not None:
                     round_data["rerank"] = {
                         "before_count": rerank_before_count,
@@ -788,13 +997,18 @@ class RetrievalEngine:
             # Milestone 5: MMR 多样性筛选完成(INFO,因为是关键阶段)
             logger.info(
                 "retrieve.final count=%d lambda=%.2f elapsed_ms=%.1f total_elapsed_ms=%.1f",
-                len(results), settings.mmr_lambda,
+                len(results),
+                settings.mmr_lambda,
                 mmr_elapsed,
                 (time.monotonic() - t_total) * 1000,
             )
 
             if round_data is not None:
-                rejected_ids = [c["chunk_id"] for c in before_mmr if c["chunk_id"] not in {r["chunk_id"] for r in results}]
+                rejected_ids = [
+                    c["chunk_id"]
+                    for c in before_mmr
+                    if c["chunk_id"] not in {r["chunk_id"] for r in results}
+                ]
                 round_data["mmr"] = {
                     "selected_count": len(results),
                     "rejected_count": len(rejected_ids),
@@ -805,10 +1019,11 @@ class RetrievalEngine:
                     "elapsed_ms": round(mmr_elapsed, 1),
                 }
         else:
-            results = results[:settings.rerank_top_k]
+            results = results[: settings.rerank_top_k]
             logger.info(
                 "retrieve.final count=%d (mmr skipped) total_elapsed_ms=%.1f",
-                len(results), (time.monotonic() - t_total) * 1000,
+                len(results),
+                (time.monotonic() - t_total) * 1000,
             )
 
         for r in results:
@@ -821,10 +1036,15 @@ class RetrievalEngine:
         if doc_ids:
             try:
                 from app.store.db import Document, get_db_ctx
+
                 with get_db_ctx() as session:
-                    rows = session.query(Document.document_id, Document.filename).filter(
-                        Document.document_id.in_(doc_ids)).all()
+                    rows = (
+                        session.query(Document.document_id, Document.filename)
+                        .filter(Document.document_id.in_(doc_ids))
+                        .all()
+                    )
                     from app.ingestion.indexer import _extract_year_from_filename
+
                     for doc_id, filename in rows:
                         year_map[doc_id] = _extract_year_from_filename(filename) or ""
             except Exception:
@@ -835,8 +1055,12 @@ class RetrievalEngine:
         # C类跨年覆盖补充：query 涉及多年度/跨年时，确保每年都有 chunk
         # （放在 rerank/MMR 之后、最终返回前，保证缺失年份数据不被挤出）
         results = _supplement_missing_years(
-            results, query, target_kb_ids,
-            user_role_ids, can_read_all, user_id,
+            results,
+            query,
+            target_kb_ids,
+            user_role_ids,
+            can_read_all,
+            user_id,
         )
 
         # Section-aware boost: 根据 query 关键词给特定 section 的 chunks 加分

@@ -175,24 +175,26 @@ class EvidenceTable:
 @dataclass
 class MetricValue:
     """从 chunk 中提取的一个指标数值。"""
-    metric: str          # 指标名称（如"营业收入"）
-    value: float         # 数值
-    unit: str            # 单位（如"亿元"）
-    raw_text: str        # 原始文本片段
-    chunk_id: str        # 来源 chunk
-    doc_id: str          # 来源文档
-    section_path: str    # 来源章节
-    year: str            # 年份（如果有）
+
+    metric: str  # 指标名称（如"营业收入"）
+    value: float  # 数值
+    unit: str  # 单位（如"亿元"）
+    raw_text: str  # 原始文本片段
+    chunk_id: str  # 来源 chunk
+    doc_id: str  # 来源文档
+    section_path: str  # 来源章节
+    year: str  # 年份（如果有）
 
 
 @dataclass
 class Conflict:
     """检测到的冲突：同一指标在不同来源中有不同数值。"""
-    metric: str                           # 指标名称
-    values: list[MetricValue]             # 不同来源的数值
-    conflict_type: str = "value_mismatch" # "value_mismatch" | "year_mismatch" | "section_mismatch"
-    severity: str = "medium"              # "high" | "medium" | "low"
-    resolution_hint: str = ""             # 消解建议
+
+    metric: str  # 指标名称
+    values: list[MetricValue]  # 不同来源的数值
+    conflict_type: str = "value_mismatch"  # "value_mismatch" | "year_mismatch" | "section_mismatch"
+    severity: str = "medium"  # "high" | "medium" | "low"
+    resolution_hint: str = ""  # 消解建议
 
 
 # ── Conflict Detector ──────────────────────────────────────────────────
@@ -200,13 +202,13 @@ class Conflict:
 # 数值提取正则：匹配 "数字+单位" 模式
 # 支持格式：732.22亿元、1,234万元、56.7%、-3.2%
 _VALUE_PATTERN = re.compile(
-    r'(-?[\d,]+(?:\.\d+)?)\s*'
-    r'(亿元|万元|百万元|亿元|千万|百万|十亿|万亿|%|个百分点|股|万股|亿股)',
+    r"(-?[\d,]+(?:\.\d+)?)\s*"
+    r"(亿元|万元|百万元|亿元|千万|百万|十亿|万亿|%|个百分点|股|万股|亿股)",
 )
 
 # 指标名前缀模式：数值前面的指标名
 _METRIC_PREFIX_PATTERN = re.compile(
-    r'([一-鿿]{2,15}(?:收入|利润|资产|负债|现金流|销量|产量|占比|增速|增长|下降|规模|总额|合计))',
+    r"([一-鿿]{2,15}(?:收入|利润|资产|负债|现金流|销量|产量|占比|增速|增长|下降|规模|总额|合计))",
 )
 
 
@@ -260,8 +262,11 @@ class ConflictDetector:
             conflicts.append(conflict)
 
         if conflicts:
-            logger.info("conflict.detected count=%d metrics=%s",
-                        len(conflicts), [c.metric for c in conflicts])
+            logger.info(
+                "conflict.detected count=%d metrics=%s",
+                len(conflicts),
+                [c.metric for c in conflicts],
+            )
 
         return conflicts
 
@@ -280,7 +285,7 @@ class ConflictDetector:
 
             # 往前找指标名
             prefix_start = max(0, match.start() - 20)
-            prefix_text = text[prefix_start:match.start()]
+            prefix_text = text[prefix_start : match.start()]
             metric_match = _METRIC_PREFIX_PATTERN.findall(prefix_text)
             metric = metric_match[-1] if metric_match else "未知指标"
 
@@ -289,23 +294,25 @@ class ConflictDetector:
             ctx_end = min(len(text), match.end() + 10)
             raw_text = text[ctx_start:ctx_end].strip()
 
-            results.append(MetricValue(
-                metric=metric,
-                value=value,
-                unit=unit,
-                raw_text=raw_text,
-                chunk_id=chunk.chunk_id,
-                doc_id=chunk.document_id,
-                section_path=chunk.section_path,
-                year=chunk.year,
-            ))
+            results.append(
+                MetricValue(
+                    metric=metric,
+                    value=value,
+                    unit=unit,
+                    raw_text=raw_text,
+                    chunk_id=chunk.chunk_id,
+                    doc_id=chunk.document_id,
+                    section_path=chunk.section_path,
+                    year=chunk.year,
+                )
+            )
 
         return results
 
     def _normalize_metric(self, metric: str) -> str:
         """归一化指标名（去除修饰词，保留核心语义）。"""
         # 去除年份、同比、环比等修饰
-        normalized = re.sub(r'(同比|环比|本期|上期|当年|历年)', '', metric)
+        normalized = re.sub(r"(同比|环比|本期|上期|当年|历年)", "", metric)
         return normalized.strip()
 
     def _classify_conflict(self, metric: str, values: list[MetricValue]) -> Conflict:
@@ -416,7 +423,10 @@ class EvidenceOrganizer:
 
         logger.info(
             "evidence.organize query=%s slots=%d coverage=%.2f docs=%d conflicts=%d",
-            query[:40], len(slots), table.overall_coverage, len(table.all_doc_ids),
+            query[:40],
+            len(slots),
+            table.overall_coverage,
+            len(table.all_doc_ids),
             len(table.conflicts),
         )
 
@@ -519,12 +529,13 @@ class EvidenceOrganizer:
         # 检查子问题是否有共同的关键词模式（同一指标、不同维度）
         # 简单启发式：子问题长度相近且共享大部分词汇
         import re
+
         # 提取每个子问题的关键词（去掉年份/数字差异）
         normalized = []
         for sq in sub_questions:
             # 去掉年份和数字
-            norm = re.sub(r'\d{4}', '', sq)
-            norm = re.sub(r'\d+', '', norm)
+            norm = re.sub(r"\d{4}", "", sq)
+            norm = re.sub(r"\d+", "", norm)
             norm = norm.strip()
             if norm:
                 normalized.append(norm)
@@ -592,7 +603,7 @@ class EvidenceOrganizer:
                 if len(chunk.text) > 300:
                     text_preview += "..."
 
-                parts.append(f"- {label}\n  \"{text_preview}\"")
+                parts.append(f'- {label}\n  "{text_preview}"')
 
         # 覆盖度汇总
         parts.append("\n### 覆盖度")
@@ -622,12 +633,16 @@ class EvidenceOrganizer:
                 if conflict.conflict_type == "year_mismatch":
                     # 低严重度：只是不同年份，不需要特别警告
                     continue
-                severity_icon = {"high": "🔴", "medium": "🟡", "low": "🟢"}.get(conflict.severity, "⚪")
+                severity_icon = {"high": "🔴", "medium": "🟡", "low": "🟢"}.get(
+                    conflict.severity, "⚪"
+                )
                 parts.append(f"\n{severity_icon} **{conflict.metric}** 存在数值差异：")
                 for mv in conflict.values[:4]:  # 最多展示 4 个
                     source_label = f"[Source {mv.chunk_id[:8]}]"
                     ctx = mv.raw_text[:50]
-                    parts.append(f"  - {source_label} {mv.doc_id[:8]}·{mv.section_path or '未知章节'}: \"{ctx}\"")
+                    parts.append(
+                        f'  - {source_label} {mv.doc_id[:8]}·{mv.section_path or "未知章节"}: "{ctx}"'
+                    )
                 if conflict.resolution_hint:
                     parts.append(f"  💡 {conflict.resolution_hint}")
 

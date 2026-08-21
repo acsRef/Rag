@@ -1,4 +1,5 @@
 """eval/metrics.py 纯函数测试：Recall@k / MRR / Hit Rate。"""
+
 import pytest
 
 from eval.metrics import compute_all, hit_at_k, mrr, recall_at_k

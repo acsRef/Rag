@@ -4,6 +4,7 @@
 asyncio.run 或测试）中调用会得到已绑死 loop 的 client、事件循环已关闭则报错。
 对齐 embedding/chat 的 loop-id 跟踪模式。
 """
+
 import asyncio
 
 from app.llm.rerank import SFRerank
@@ -26,7 +27,7 @@ async def test_client_rebuilt_after_loop_change():
     sf = _make_rerank()
     sf._client = None
     c1 = sf._get_client()
-    sf._client_loop_id = -1   # 模拟 loop 变化
+    sf._client_loop_id = -1  # 模拟 loop 变化
     c2 = sf._get_client()
     assert c1 is not c2, "loop 变化必须重建 client"
 
@@ -54,8 +55,11 @@ async def test_rerank_works_across_loop_change(monkeypatch):
         def json(self):
             return {"results": [{"index": 0, "relevance_score": 0.9}]}
 
-        async def __aenter__(self): return self
-        async def __aexit__(self, *a): return None
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return None
 
     async def fake_post(url, **kw):
         captured.append(url)

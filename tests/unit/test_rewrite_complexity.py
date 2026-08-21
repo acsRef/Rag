@@ -3,10 +3,12 @@
 背景：意图路由已回退 V3（第一层轻量分类），R1 改作「复杂查询规划」第二层。
 本测试锁定 _is_complex_query 的判据，并验证 rewrite 按复杂/简单选择 model。
 """
+
 from app.config import settings
 from app.core.rewrite import _is_complex_query
 
 # ── _is_complex_query 判据 ─────────────────────────────────
+
 
 def test_simple_single_fact_is_not_complex():
     assert _is_complex_query("2023年营业收入是多少？") is False
@@ -38,6 +40,7 @@ def test_empty_or_blank_not_complex():
 
 # ── rewrite 模型选择 ───────────────────────────────────────
 
+
 async def test_rewrite_uses_r1_for_complex(monkeypatch):
     from app.core.rewrite import query_rewrite_service
     from app.llm.chat import minimax_client
@@ -46,9 +49,11 @@ async def test_rewrite_uses_r1_for_complex(monkeypatch):
 
     async def fake_chat(messages, **kw):
         seen["kw"] = kw
-        return ('{"rewritten_query": "2023-2025年营收", '
-                '"sub_questions": ["2023年营收", "2024年营收", "2025年营收"], '
-                '"sub_dependencies": [[], [], []], "complexity": "complex"}')
+        return (
+            '{"rewritten_query": "2023-2025年营收", '
+            '"sub_questions": ["2023年营收", "2024年营收", "2025年营收"], '
+            '"sub_dependencies": [[], [], []], "complexity": "complex"}'
+        )
 
     monkeypatch.setattr(minimax_client, "chat", fake_chat)
     res = await query_rewrite_service.rewrite("2023-2025年营收分别是多少？", [], "")

@@ -27,6 +27,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     改 lifespan + asyncio.get_running_loop()（on_event 在 FastAPI 已废弃）。
     """
     from app.core.logging import setup_logging
+
     setup_logging()
     logger = logging.getLogger(__name__)
     logger.info("RAGent-py starting up")
@@ -36,6 +37,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         raise RuntimeError("请设置环境变量 PII_ENCRYPTION_KEY，不要使用默认值")
     # 保存主事件循环引用,供后台 ingestion 线程 emit SSE 事件
     from app.api.documents import set_main_loop
+
     set_main_loop(asyncio.get_running_loop())
     init_db()
     seed_defaults()
@@ -44,7 +46,9 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     session = None
     try:
         session = get_session()
-        stuck = session.query(Document).filter(Document.status.in_(["processing", "indexing"])).all()
+        stuck = (
+            session.query(Document).filter(Document.status.in_(["processing", "indexing"])).all()
+        )
         if stuck:
             logger.warning(
                 "Recovering %d documents stuck in processing/indexing state (previous restart)",
@@ -101,6 +105,7 @@ def health():
     db_ok = True
     try:
         from sqlalchemy import text
+
         with engine.connect() as conn:
             conn.execute(text("SELECT 1"))
     except Exception:
@@ -113,6 +118,7 @@ def health():
 
 if __name__ == "__main__":
     import sys
+
     uvicorn.run(
         "app.main:app",
         host=settings.host,
