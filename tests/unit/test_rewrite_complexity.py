@@ -52,7 +52,7 @@ async def test_rewrite_uses_r1_for_complex(monkeypatch):
         return (
             '{"rewritten_query": "2023-2025年营收", '
             '"sub_questions": ["2023年营收", "2024年营收", "2025年营收"], '
-            '"sub_dependencies": [[], [], []], "complexity": "complex"}'
+            '"sub_dependencies": [[], [], []]}'
         )
 
     monkeypatch.setattr(minimax_client, "chat", fake_chat)
@@ -70,7 +70,7 @@ async def test_rewrite_uses_default_v3_for_simple(monkeypatch):
 
     async def fake_chat(messages, **kw):
         seen["kw"] = kw
-        return '{"rewritten_query": "2023年营收", "sub_questions": ["2023年营收"], "sub_dependencies": [[]], "complexity": "simple"}'
+        return '{"rewritten_query": "2023年营收", "sub_questions": ["2023年营收"], "sub_dependencies": [[]]}'
 
     monkeypatch.setattr(minimax_client, "chat", fake_chat)
     res = await query_rewrite_service.rewrite("2023年营收是多少？", [], "")
