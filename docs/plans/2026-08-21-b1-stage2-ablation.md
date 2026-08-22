@@ -24,7 +24,7 @@
 | 变量 | 锁定值 |
 | --- | --- |
 | 测试集 | 65 题全集（`eval/eval_sany.py` 数据源） |
-| chat 模型 | `settings.chat_model`（当前 `deepseek-ai/DeepSeek-V3`） |
+| **chat 模型** | **`Qwen/Qwen3-8B`**（**2026-08-21 成本决策：DeepSeek-V3 费用过高，切换为 Qwen3-8B；两模型在中文 RAG 任务上效果相近**） |
 | prompt | `SYSTEM_PROMPT` 冻结当前快照（不修改；与 Stage 1 一致） |
 | retrieval 策略 | cross_doc / section_boost / section_supplement / year_supplement / query_decomposition 全 False（baseline ablation 已确认无 recall 贡献） |
 | question_channel_enabled | True（默认值） |
@@ -32,6 +32,10 @@
 | seed | 如 API 支持则固定；不支持则视为非确定性，单次结果作为近似 |
 
 **唯一变量**：`evidence_gate_enabled` + `evidence_min_coverage`。
+
+**baseline 参照系**：Stage 2 的 "off" 配置用的是 `Qwen/Qwen3-8B`，**所有 accuracy / false_refusal / latency 改善都相对 Qwen3-8B off 计算**，不与 DeepSeek-V3 历史 baseline（73.3%）直接对照。
+
+> 注：本次不修改 `app/config.py` 默认 `chat_model`。Stage 2 用 env override（`CHAT_MODEL=Qwen/Qwen3-8B`）跑。是否同步改默认值属于项目级配置变更，独立决策。
 
 ### 2.3 三轴接受门槛（实验前固化，不事后调整）
 
