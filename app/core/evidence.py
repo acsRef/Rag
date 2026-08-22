@@ -23,6 +23,8 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
+from app.core.conflict_key import UNKNOWN, ConflictKey
+from app.core.conflict_key_extractor import regex_conflict_key_extractor
 from app.models.schemas import RetrievedChunk
 
 logger = logging.getLogger(__name__)
@@ -96,11 +98,26 @@ def build_evidence_result(table: EvidenceTable) -> EvidenceResult:
 
     return EvidenceResult(
         coverage=coverage,
-        temporal_consistent=(len(table.conflicts) == 0),
+        # Phase 4-C: severity-aware — 仅 high severity 触发 temporal_consistent=False
+        # section_mismatch (medium) 不会让 gate 拒答，但会在 prompt 中 warn（format_for_prompt）
+        temporal_consistent=_is_temporally_consistent(table.conflicts),
         conflicts=list(table.conflicts),
         sources=sources,
         coverage_by_year=coverage_by_year,
     )
+
+
+def _is_temporally_consistent(conflicts: list) -> bool:
+    """Phase 4-C: severity-aware temporal consistency check.
+
+    仅 high severity conflicts 让 temporal_consistent=False:
+    - value_mismatch (high) → False（gate 拒答）
+    - section_mismatch (medium) → True（gate 放行，但在 prompt warn）
+
+    历史：Phase 2-3 阶段 temporal_consistent = (len(conflicts) == 0)，
+    导致任何 section_mismatch 也触发拒答（90% refusal）。现在改为 severity-aware。
+    """
+    return all(c.severity != "high" for c in conflicts)
 
 
 def evidence_gate_should_refuse(result: EvidenceResult, threshold: float) -> bool:
@@ -176,7 +193,7 @@ class EvidenceTable:
 class MetricValue:
     """从 chunk 中提取的一个指标数值。"""
 
-    metric: str  # 指标名称（如"营业收入"）
+    metric: str  # 指标名称（如"营业收入"）— 从 key.metric 派生（向后兼容）
     value: float  # 数值
     unit: str  # 单位（如"亿元"）
     raw_text: str  # 原始文本片段
@@ -184,6 +201,8 @@ class MetricValue:
     doc_id: str  # 来源文档
     section_path: str  # 来源章节
     year: str  # 年份（如果有）
+    # Phase 4-B：5 元组 comparison key（核心比较维度）
+    key: ConflictKey | None = None
 
 
 @dataclass
@@ -192,8 +211,10 @@ class Conflict:
 
     metric: str  # 指标名称
     values: list[MetricValue]  # 不同来源的数值
-    conflict_type: str = "value_mismatch"  # "value_mismatch" | "year_mismatch" | "section_mismatch"
-    severity: str = "medium"  # "high" | "medium" | "low"
+    conflict_type: str = "value_mismatch"  # "value_mismatch" | "section_mismatch"
+    # Phase 4-B: "year_mismatch" 已废弃（period 现在是 key 的一部分，
+    # 不同年份会在不同 key 组里，不会触发 conflict）
+    severity: str = "medium"  # "high" | "medium"
     resolution_hint: str = ""  # 消解建议
 
 
@@ -206,10 +227,10 @@ _VALUE_PATTERN = re.compile(
     r"(亿元|万元|百万元|亿元|千万|百万|十亿|万亿|%|个百分点|股|万股|亿股)",
 )
 
-# 指标名前缀模式：数值前面的指标名
-_METRIC_PREFIX_PATTERN = re.compile(
-    r"([一-鿿]{2,15}(?:收入|利润|资产|负债|现金流|销量|产量|占比|增速|增长|下降|规模|总额|合计))",
-)
+# Phase 4-B 注释：旧的 _METRIC_PREFIX_PATTERN 已废弃 — 由
+# app.core.conflict_key_extractor.RegexConflictKeyExtractor 替代。
+# ConflictKey 提取器基于 5 元组（entity, metric, period, unit, scope），
+# 解决了单维度归一化导致的产品线 / 年份 / scope 误合并问题。
 
 
 class ConflictDetector:
@@ -223,11 +244,18 @@ class ConflictDetector:
     """
 
     def detect(self, table: EvidenceTable) -> list[Conflict]:
-        """扫描证据表，检测数值冲突。"""
+        """扫描证据表，检测数值冲突（Phase 4-B：按 ConflictKey 分组）。
+
+        工作流程：
+        1. 从每个 chunk 提取 MetricValue（每个携带 5 元组 ConflictKey）
+        2. 过滤：跳过含 UNKNOWN 或空 period 的不可比 key
+        3. 按 ConflictKey 分组（matches_except_value）
+        4. 同 key 多值 → 分类为 conflict
+        """
         if not table.slots or not table.has_multiple_docs:
             return []
 
-        # Step 1: 从所有 chunks 提取指标值
+        # Step 1: 提取所有 metric values
         all_values: list[MetricValue] = []
         for slot in table.slots:
             for chunk in slot.chunks:
@@ -237,28 +265,47 @@ class ConflictDetector:
         if not all_values:
             return []
 
-        # Step 2: 按指标名分组
-        by_metric: dict[str, list[MetricValue]] = {}
-        for mv in all_values:
-            key = self._normalize_metric(mv.metric)
-            by_metric.setdefault(key, []).append(mv)
+        # Step 2: 过滤不可比 values
+        comparable: list[MetricValue] = []
+        for v in all_values:
+            if v.key is None:
+                continue
+            # spec §3.3: 含 UNKNOWN 或空 period 跳过
+            if (
+                v.key.entity == UNKNOWN
+                or v.key.metric == UNKNOWN
+                or v.key.unit == UNKNOWN
+                or not v.key.period
+            ):
+                continue
+            comparable.append(v)
 
-        # Step 3: 检测冲突（同一指标有多个不同数值）
+        if len(comparable) < 2:
+            return []
+
+        # Step 3: 按 ConflictKey 分组（O(n) 用 dict）
+        by_key: dict[ConflictKey, list[MetricValue]] = {}
+        for v in comparable:
+            # dict 查找相同 key
+            target_key = None
+            for existing_key in by_key:
+                if existing_key.matches_except_value(v.key):
+                    target_key = existing_key
+                    break
+            if target_key is None:
+                by_key[v.key] = [v]
+            else:
+                by_key[target_key].append(v)
+
+        # Step 4: 检测冲突（同 key 内多 unique 值）
         conflicts: list[Conflict] = []
-        for metric_key, values in by_metric.items():
+        for key, values in by_key.items():
             if len(values) < 2:
                 continue
-
-            # 按数值去重
-            unique_values = set()
-            for v in values:
-                unique_values.add((v.value, v.unit))
-
+            unique_values = {(v.value, v.unit) for v in values}
             if len(unique_values) <= 1:
-                continue  # 所有来源数值一致，无冲突
-
-            # 有冲突！分类并生成消解建议
-            conflict = self._classify_conflict(metric_key, values)
+                continue
+            conflict = self._classify_conflict(key, values)
             conflicts.append(conflict)
 
         if conflicts:
@@ -271,7 +318,11 @@ class ConflictDetector:
         return conflicts
 
     def _extract_metric_values(self, chunk: RetrievedChunk) -> list[MetricValue]:
-        """从 chunk 文本中提取指标数值。"""
+        """从 chunk 文本中提取指标数值（Phase 4-B：使用 ConflictKey 提取器）。
+
+        每个数值携带一个 5 元组 key（entity, metric, period, unit, scope），
+        ConflictDetector.detect() 按 key 分组比较。
+        """
         results: list[MetricValue] = []
         text = chunk.text
 
@@ -281,13 +332,18 @@ class ConflictDetector:
                 value = float(raw_num)
             except ValueError:
                 continue
-            unit = match.group(2)
+            unit_from_text = match.group(2)
 
-            # 往前找指标名
-            prefix_start = max(0, match.start() - 20)
-            prefix_text = text[prefix_start : match.start()]
-            metric_match = _METRIC_PREFIX_PATTERN.findall(prefix_text)
-            metric = metric_match[-1] if metric_match else "未知指标"
+            # Phase 4-B: 用 ConflictKeyExtractor 提取 5 元组
+            # 关键：value_span 只覆盖数字部分（group 1），extractor 才会从数字之后找单位
+            # （否则 match.end() 已包含单位，extractor 在单位之后找单位，永远找不到）
+            number_start = match.start(1)
+            number_end = match.end(1)
+            key = regex_conflict_key_extractor.extract(
+                chunk, (number_start, number_end)
+            )
+            # backward-compat: metric 字段从 key 派生
+            metric_str = key.metric if key.metric != UNKNOWN else "未知指标"
 
             # 提取上下文片段
             ctx_start = max(0, match.start() - 30)
@@ -296,77 +352,70 @@ class ConflictDetector:
 
             results.append(
                 MetricValue(
-                    metric=metric,
+                    metric=metric_str,
                     value=value,
-                    unit=unit,
+                    unit=unit_from_text,
                     raw_text=raw_text,
                     chunk_id=chunk.chunk_id,
                     doc_id=chunk.document_id,
                     section_path=chunk.section_path,
                     year=chunk.year,
+                    key=key,
                 )
             )
 
         return results
 
-    def _normalize_metric(self, metric: str) -> str:
-        """归一化指标名（去除修饰词，保留核心语义）。"""
-        # 去除年份、同比、环比等修饰
-        normalized = re.sub(r"(同比|环比|本期|上期|当年|历年)", "", metric)
-        return normalized.strip()
+    def _classify_conflict(self, key: ConflictKey, values: list[MetricValue]) -> Conflict:
+        """分类冲突类型并生成消解建议（Phase 4-B：基于 ConflictKey）。
 
-    def _classify_conflict(self, metric: str, values: list[MetricValue]) -> Conflict:
-        """分类冲突类型并生成消解建议。"""
-        # 检查是否因年份不同导致的"冲突"
-        years = {v.year for v in values if v.year}
-        docs = {v.doc_id for v in values}
+        规则：
+        - 不同文档 + 同 key → value_mismatch (high) — 跨文档冲突
+        - 同文档 + 不同 section → section_mismatch (medium) — 章节权威性冲突
+        - 同文档 + 同 section → value_mismatch (high) — 数据错误
 
-        if len(years) > 1 and len(years) == len(values):
-            # 每个值来自不同年份 → 不是真冲突，是时间差异
-            return Conflict(
-                metric=metric,
-                values=values,
-                conflict_type="year_mismatch",
-                severity="low",
-                resolution_hint="各数值来自不同年份，非真实冲突。回答时按年份分别列出即可。",
-            )
+        注：year_mismatch 已废弃（period 现在是 key 的一部分，不同年份不会同组）。
+        """
+        docs = {v.doc_id for v in values if v.doc_id}
+        sections = {v.section_path for v in values if v.section_path}
+
+        values_summary = "、".join(f"{v.value}{v.unit}" for v in values[:3])
 
         if len(docs) > 1:
-            # 不同文档的同一指标数值不同
-            # 检查是否因章节权威性不同
-            sections = {v.section_path for v in values if v.section_path}
-            if len(sections) > 1:
-                return Conflict(
-                    metric=metric,
-                    values=values,
-                    conflict_type="section_mismatch",
-                    severity="medium",
-                    resolution_hint=(
-                        f"指标「{metric}」在不同章节有不同数值。"
-                        "建议优先采用「主要会计数据」「财务报告」等权威章节的数据。"
-                    ),
-                )
-
             return Conflict(
-                metric=metric,
+                metric=key.metric,
                 values=values,
                 conflict_type="value_mismatch",
                 severity="high",
                 resolution_hint=(
-                    f"指标「{metric}」在不同文档中数值不一致（"
-                    + "、".join(f"{v.value}{v.unit}" for v in values[:3])
-                    + "）。请检查是否为数据重述/调整，并标注来源。"
+                    f"指标「{key.metric}」（{key.entity}, {key.period}, {key.unit}, {key.scope}）"
+                    f"在不同文档中数值不一致（{values_summary}）。"
+                    "请检查是否为数据重述/调整，并标注来源。"
                 ),
             )
 
         # 同一文档内的冲突
+        if len(sections) > 1:
+            return Conflict(
+                metric=key.metric,
+                values=values,
+                conflict_type="section_mismatch",
+                severity="medium",
+                resolution_hint=(
+                    f"指标「{key.metric}」（{key.entity}, {key.period}）在同一文档不同章节有"
+                    f"不同数值（{values_summary}）。建议优先采用「主要会计数据」「财务报告」"
+                    "等权威章节的数据。"
+                ),
+            )
+
         return Conflict(
-            metric=metric,
+            metric=key.metric,
             values=values,
             conflict_type="value_mismatch",
             severity="high",
             resolution_hint=(
-                f"指标「{metric}」在同一文档中有多个不同数值，请检查上下文确认哪个是当前有效值。"
+                f"指标「{key.metric}」（{key.entity}, {key.period}, {key.scope}）在同一文档同一章节"
+                f"有多个不同数值（{values_summary}）。请检查上下文确认哪个是当前有效值。"
             ),
         )
 

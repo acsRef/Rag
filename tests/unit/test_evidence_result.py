@@ -133,13 +133,33 @@ def test_build_evidence_result_passes_through_conflicts():
 
 
 def test_build_evidence_result_temporal_consistent_false_on_conflicts():
-    """有冲突 → temporal_consistent=False（plan §五.1）"""
+    """Phase 4-C: high severity 冲突 → temporal_consistent=False.
+
+    severity-aware contract (per docs/plans/2026-08-23-phase4-evidence-contract-repair.md §4-C):
+    - high severity (value_mismatch) → False → gate refuse
+    - medium severity (section_mismatch) → True → gate pass
+    - low severity (year_mismatch, 向后兼容) → True → gate pass
+    """
     from app.core.evidence import Conflict
 
-    c = Conflict(metric="x", values=[], conflict_type="year_mismatch")
+    c = Conflict(
+        metric="x", values=[], conflict_type="value_mismatch", severity="high"
+    )
     table = EvidenceTable(query="q", slots=[_slot("s", {"d1", "d2"})], conflicts=[c])
     r = build_evidence_result(table)
     assert r.temporal_consistent is False
+
+
+def test_build_evidence_result_low_severity_conflict_still_consistent():
+    """Phase 4-C: low severity (year_mismatch) 不让 temporal_consistent=False."""
+    from app.core.evidence import Conflict
+
+    c = Conflict(
+        metric="x", values=[], conflict_type="year_mismatch", severity="low"
+    )
+    table = EvidenceTable(query="q", slots=[_slot("s", {"d1", "d2"})], conflicts=[c])
+    r = build_evidence_result(table)
+    assert r.temporal_consistent is True
 
 
 def test_build_evidence_result_coverage_clipped():

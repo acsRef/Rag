@@ -113,6 +113,7 @@ def _make_chunk(
         score=score,
         title="Test Doc",
         section_path="第一节",
+        year="2023年",  # Phase 4-B: ConflictDetector 要求 period 非空才参与冲突检测
     )
 
 
