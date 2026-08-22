@@ -35,7 +35,7 @@ Edit `.env` in the project root (`.env` is gitignored — never commit it):
 
 | Variable | Required | Notes |
 | ------- | -------- | ----- |
-| `SILICONFLOW_API_KEY` | **Yes** | Chat (DeepSeek-V3) + Intent (DeepSeek-V3) + Complex-Query Rewrite (DeepSeek-R1-0528-Qwen3-8B) + Vision (Qwen3-VL-8B-Instruct) + Embedding + Rerank |
+| `SILICONFLOW_API_KEY` | **Yes** | Chat (Qwen3-8B) + Vision (Qwen3-VL-8B) + Intent (Qwen3-8B) + Complex-Query Rewrite (DeepSeek-R1-0528-Qwen3-8B) + Embedding + Rerank |
 | `MINIMAX_API_KEY` | No | Optional fallback provider |
 | `JWT_SECRET` | **Hard requirement** | Startup crashes if default |
 | `PII_ENCRYPTION_KEY` | **Hard requirement** | Startup crashes if default |
@@ -122,7 +122,7 @@ cd frontend && npm run build   # runs vue-tsc -b && vite build
 
 **Stack**: FastAPI (Python 3.11) + Vue 3/Vite/TypeScript + PostgreSQL 15 + pgvector 0.8
 
-**LLM providers**: SiliconFlow (chat: DeepSeek-V3, intent: DeepSeek-V3, complex-query rewrite: DeepSeek-R1-0528-Qwen3-8B, vision: Qwen/Qwen3-VL-8B-Instruct, embedding: Qwen3-VL-Embedding-8B 4096d, rerank: BAAI/bge-reranker-v2-m3). MiniMax M3 available as fallback provider via `chat_provider="minimax"`.
+**LLM providers**: SiliconFlow (chat: Qwen/Qwen3-8B, intent: Qwen/Qwen3-8B, complex-query rewrite: DeepSeek-R1-0528-Qwen3-8B, vision: Qwen/Qwen3-VL-8B-Instruct, embedding: Qwen3-VL-Embedding-8B 4096d, rerank: BAAI/bge-reranker-v2-m3). MiniMax M3 available as fallback provider via `chat_provider="minimax"`.
 
 **RAG pipeline** (see [app/core/pipeline.py:118](app/core/pipeline.py#L118) `RAGPipeline.execute`):
 ```

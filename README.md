@@ -10,9 +10,9 @@
 | 前端 | Vue 3 + Vite + TypeScript |
 | 数据库 | PostgreSQL 15 + pgvector 0.8 |
 | 认证 | JWT + bcrypt（RBAC，8 项权限） |
-| 对话 | SiliconFlow (DeepSeek-V3) |
-| 视觉理解 | SiliconFlow (Qwen3-VL-8B-Instruct) |
-| 意图路由 | SiliconFlow (DeepSeek-V3)；复杂查询拆解 DeepSeek-R1-0528-Qwen3-8B |
+| 对话 | SiliconFlow (Qwen3-8B) |
+| 视觉理解 | SiliconFlow (Qwen3-VL-8B) |
+| 意图路由 | SiliconFlow (Qwen3-8B)；复杂查询拆解 DeepSeek-R1-0528-Qwen3-8B |
 | 向量 | Qwen3-VL-Embedding-8B（4096d）|
 | 重排 | BAAI/bge-reranker-v2-m3 |
 
@@ -186,7 +186,7 @@ D:/miniConda/envs/rag/python.exe eval/eval_detail.py --category A --limit 10
 
 参见 `app/config.py`，包含：
 
-- **LLM 供应商**：SiliconFlow（DeepSeek-V3 对话 + 意图路由 + 视觉；R1-0528-Qwen3-8B 复杂查询拆解）
+- **LLM 供应商**：SiliconFlow（Qwen3-8B 对话 + 意图路由 + 视觉；R1-0528-Qwen3-8B 复杂查询拆解）
 - **PII**：开关、缓存 TTL、加密密钥
 - **混合检索**：开关、单路候选数、RRF 常数
 - **多路召回**：开关、question 通道权重、每路候选数

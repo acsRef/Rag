@@ -8,8 +8,10 @@ class Settings(BaseSettings):
     # SiliconFlow (Chat + Vision + Embedding + Rerank)
     siliconflow_api_key: str = ""
     siliconflow_base_url: str = "https://api.siliconflow.cn/v1"
-    chat_model: str = "deepseek-ai/DeepSeek-V3"
-    intent_model: str = "deepseek-ai/DeepSeek-V3"  # 意图路由（轻量路由分类，用非推理 V3；R1 改为复杂查询规划用，见 rewrite_model）
+    # chat 模型：V3 费用过高（2026-08-21 成本决策），改用 Qwen3-8B
+    chat_model: str = "Qwen/Qwen3-8B"
+    # intent 模型：路由分类任务较轻，Qwen3-8B 足够；统一模型栈降低切换成本
+    intent_model: str = "Qwen/Qwen3-8B"
     rewrite_model: str = "deepseek-ai/DeepSeek-R1-0528-Qwen3-8B"  # 复杂查询的子问题拆解/依赖规划（推理模型，仅复杂时动用）
     vision_model: str = "Qwen/Qwen3-VL-8B-Instruct"  # 图片理解（多模态 Qwen-VL 8B，遵守[类型]分类约定；原 Qwen2.5-VL-7B 已在硅基流动下架）
     embedding_model: str = "Qwen/Qwen3-VL-Embedding-8B"
