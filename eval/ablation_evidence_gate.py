@@ -94,6 +94,19 @@ def reset_gate_capture() -> None:
     _gate_capture.clear()
 
 
+# ── conversation_memory mock（避免 ablation 在 DB 里写假 user_id 的会话） ─
+# 与 B1 Stage 1 smoke test 同模式；ablation 不需要真实的对话持久化。
+async def _noop(*args, **kwargs):
+    return None
+
+pipeline_mod.conversation_memory.get_or_create_conversation = (
+    lambda conv_id, user_id: f"ablation-{conv_id or 'new'}"
+)
+pipeline_mod.conversation_memory.get_history = lambda cid: []
+pipeline_mod.conversation_memory.get_summary = lambda cid: ""
+pipeline_mod.conversation_memory.add_message = _noop
+
+
 # ── SSE 解析 ──────────────────────────────────────────
 _STATUS_RE = re.compile(r"event: status\ndata: (\{.*?\})\n\n", re.DOTALL)
 _DEGRADED_RE = re.compile(r"event: degraded\ndata: (\{.*?\})\n\n", re.DOTALL)
@@ -143,26 +156,33 @@ async def judge_one(record: dict) -> bool | None:
     from app.llm.chat import minimax_client  # 实际 provider 按 settings.chat_provider
 
     judge_prompt = (
-        "判断下面模型对问题的回答是否正确。仅回答 'correct' 或 'incorrect'，"
-        "不要解释，不要其他文字。\n\n"
+        "判断下面模型对问题的回答是否与参考答案一致。\n"
+        "严格要求只输出一个英文单词 'correct' 或 'incorrect'，"
+        "不要中文、不要标点、不要解释、不要换行。\n\n"
         f"问题：{record['question_id']} {record['category']}\n"
         f"参考答案：{record['gold_answer']}\n"
         f"模型回答：{record['generation_answer'][:800]}\n\n"
+        "answer:"
     )
     try:
         resp = await minimax_client.chat(
             [{"role": "user", "content": judge_prompt}],
-            tag="ablation_judge",
             max_tokens=8,
             timeout=20,
         )
         if not resp:
             return None
         text = resp.strip().lower()
-        if "correct" in text and "incorrect" not in text:
-            return True
+        # 英文标志
         if "incorrect" in text:
             return False
+        if "correct" in text:
+            return True
+        # 中文标志（Qwen3-8B 可能用中文回答）
+        if "错误" in resp or "不正确" in resp or "不对" in resp:
+            return False
+        if "正确" in resp:
+            return True
         return None
     except Exception:
         return None
