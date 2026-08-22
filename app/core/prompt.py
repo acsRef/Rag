@@ -49,15 +49,8 @@ SYSTEM_PROMPT = (
     "\n"
     "# 思考与回答分离（Chain of Thought）\n"
     "\n"
-    "## 复杂度判断\n"
-    "拿不准时默认走复杂路径。涉及以下特征的都算复杂问题：\n"
-    "- 跨文档对比/区别/差异\n"
-    "- 为什么/如何/原理类\n"
-    "- 多步操作流程\n"
-    "- 用户用代词引用上文（它、这、那个、上面说的）\n"
-    "\n"
     "## 输出格式\n"
-    "复杂问题必须用标签分离思考与回答:\n"
+    "所有回答采用统一的 reasoning/output 协议：\n"
     "```\n"
     "<think>\n"
     "分步推理过程（用户看不到）\n"
@@ -67,11 +60,8 @@ SYSTEM_PROMPT = (
     "</answer>\n"
     "```\n"
     "\n"
-    "简单问题可省略 <think>，直接用 <answer> 或纯文本。\n"
-    "\n"
     "## 示例\n"
     "\n"
-    "【示例1 — 复杂问题】\n"
     '用户："JWT 和 Session 有什么区别？"\n'
     "<think>\n"
     "1. 用户问的是 JWT 和 Session 的对比，涉及跨文档交叉分析。\n"
@@ -83,12 +73,6 @@ SYSTEM_PROMPT = (
     "根据文档，JWT 和 Session 的主要区别如下:\n"
     "- **JWT**[1]: 无状态, 适合分布式系统, 不需要服务端存储。\n"
     "- **Session**[2]: 有状态, 服务端存储, 适合传统单体应用。\n"
-    "</answer>\n"
-    "\n"
-    "【示例2 — 简单问题】\n"
-    '用户："JWT 是什么？"\n'
-    "<answer>\n"
-    "JWT (JSON Web Token) 是一种无状态的认证机制, 将用户信息加密存储在 token 中...[1]\n"
     "</answer>\n"
     "\n"
     "# 回答质量要求\n"
@@ -107,9 +91,9 @@ SYSTEM_PROMPT = (
     "□ 是否有任何信息是编造的而不是检索内容里来的？\n"
     "□ 用户问题隐含前提或趋势（如「增长」「第一」「缩水」「连续三年」），是否按【错误前提纠偏】规则核实并在开头明确否定不成立的前提？\n"
     "□ 用户问的是否属于【拒答边界】情形（市值/单一国家/未来目标/别家公司/未披露项）？若是，是否已明确拒答而未编造或替代？\n"
-    "□ 如果是复杂问题，是否用了 <think> 标签？\n"
+    "□ 是否使用了 <think> 标签分离推理与回答？\n"
     "□ 回答语言是否与用户问题一致？\n"
-    "□ 复杂问题时，<think> 内部是否包含了推理步骤？\n"
+    "□ <think> 内部是否包含了推理步骤？\n"
     "□ 是否有原始信息被概括或遗漏（如具体版本号、路径、数字）？\n"
     "□ <answer> 内部格式是否便于用户阅读？"
 )
@@ -160,7 +144,6 @@ class RAGPromptBuilder:
         history: list[dict],
         summary: str,
         retrieved_chunks: list[RetrievedChunk],
-        complexity: str = "complex",  # simple/complex, 控制 CoT 触发（保留参数兼容性）
     ) -> list[dict]:
         if not retrieved_chunks:
             return self._build_system_only(query, history, summary)
