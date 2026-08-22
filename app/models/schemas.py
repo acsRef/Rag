@@ -125,11 +125,6 @@ class RewriteResult(BaseModel):
     # 每个子问题的依赖关系（0-based 索引），如 [[], [0], [0,1]] 表示第2个子问题依赖第1个，第3个依赖前两个
     # 空列表表示无依赖。LLM 在 rewrite 时输出，但失败时安全降级
     sub_dependencies: list[list[int]] = Field(default_factory=list)
-    # 难度分类（控制 CoT 触发）：
-    # - "simple": 直接事实查询，无需复杂推理
-    # - "complex": 需要跨文档/多步骤推理/前提验证
-    # LLM 在 rewrite 时输出，失败时默认 "complex"（保守触发 CoT 防止误判）
-    complexity: str = "complex"
 
 
 class IntentMatch(BaseModel):
