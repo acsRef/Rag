@@ -1,7 +1,9 @@
 # Phase 4-D Gate Pilot Report (2026-08-23)
 
-> **目标**：验证修复后的 detector + severity-aware gate 是否产生有价值的 Gate 信号
-> **结论**：❌ Gate 在 4 个 config 下都仍 net-negative，FP detector 是剩余瓶颈
+> **结论**：❌ **Evidence Gate KEEP DISABLED / DEFER**（不是 DELETE）— 实测净效果负值（0 recovery + 3 false refusal），但保留代码作为未来可复用基础设施
+>
+> 目标：验证修复后的 detector + severity-aware gate 是否产生有价值的 Gate 信号
+> 数据：[`eval/ablation/20260822T164335/`](../ablation/20260822T164335)（gitignored）
 
 ---
 
@@ -104,32 +106,51 @@ detector 在中文报告里常见的「**多 base metric 共享一个 action wor
 - Severity-aware gate 是 **正确的方向**（避免 medium severity 误拒答）
 - 当前 Gate 实现不能上线，需要更可靠的 detector（LLM-based）
 
-## 8. 决策建议
+## 8. 决策
 
-**选项 A**：保持 Gate off 状态（= Baseline-1），保留 detector 修复作为未来基础
-- 优点：稳定 40-60% accuracy；Phase 4-B 改进可被后续 Gate 实验复用
-- 缺点：Gate 价值仍未验证
+### Evidence Gate 状态：**KEEP DISABLED / DEFER**（不是 DELETE）
 
-**选项 B**：继续完善 detector（LLM-based extraction）
-- 优点：可能解锁 Gate 价值
-- 缺点：成本高（V3 judge ≈ $0.001/query；LLM extraction ≈ $0.005/query × 每 chunk 多次）
+**不是 DELETE 的理由**：
+- 当前证明的是「**当前 Evidence Gate + ConflictDetector 架构没有价值**」
+- **没有**证明「所有 evidence sufficiency gate 都没有价值」
+- Phase 4 代码可复用：ConflictKey 数据契约 + ConflictKeyExtractor + severity-aware 决策模式 + structured evidence findings
+- 这些可能成为未来其他机制的基础
+- `query_type` 是 dead implementation（DELETE 合理）；Evidence Gate 有完整实现 + 真实 ablation + 当前 ROI negative → DEFER 更合适
 
-**选项 C**：暂停 Gate 实验，转向其他 Issue #1 phases
-- 优点：1-B / 1-C / 1-D 等可能直接提升 accuracy
-- 缺点：Gate 投入沉没
+**代码可保留 + runtime 默认关闭**（即 evidence_gate_enabled = False）；不维护成活跃策略，但保留基础设施。
 
-**推荐 A**：保持 Gate off，把 Phase 4-B 的 detector 改进作为成果固化，转向 Issue #1-B。
+### LLM-based ConflictDetector：**Future/Research candidate**（不在当前 roadmap）
 
-## 9. Baseline 状态（Phase 4 完成后）
+剩余 4/10 FP → 引入 LLM → 增加 latency/cost/failure mode → 再做新 contract → 再 eval，**ROI 很差**。当前阶段不做。
+
+### Engineering conclusion
+
+> **Evidence Gate was evaluated after repairing its upstream conflict-detection contract. The repaired detector reduced false positives from 90% to 40%, but the gate still produced zero recovery and multiple false refusals in the pilot; therefore the gate is retained as disabled infrastructure and deferred rather than enabled in production.**
+
+## 9. 决策建议
+
+**选项 A**（推荐）：保持 Gate off，把 Phase 4 的 detector 改进 + structured findings 沉淀，转向 Judge calibration + Issue #1-B
+- 优点：稳定 40-60% accuracy（LLM noise 区间）；detector 修复可被未来 LLM-based extraction 复用
+- 缺点：Gate 价值仍未验证（DEFER 而非 ENABLE）
+
+**选项 B**：继续完善 detector（LLM-based extraction）— **暂不做**
+- ROI 很差（详见 §8）
+
+**选项 C**：完全跳过 Gate，专注 Issue #1 系列
+- 与 A 重叠，A 更系统化
+
+**采纳 A**：保持 Gate off + DEFER，下一阶段 Judge calibration + Issue #1-B。
+
+## 10. Baseline 状态（Phase 4 完成后）
 
 | 项 | 值 |
 |---|---|
 | 测试基线 | `468 passed / 6 failed / 13 skipped`（unit 454/2）|
 | ConflictDetector FP rate | 4/10（从 9/10 改善，剩余 4 个 regex 难解）|
-| Evidence Gate 状态 | **KEEP DISABLED**（net-negative，详见 §7）|
-| Baseline-1 (V3 + Issue #1-A + Gate off) | 40-60%（单次 60%，LLM non-determinism）|
+| Evidence Gate 状态 | **KEEP DISABLED / DEFER**（详见 §8）|
+| Baseline-1 (V3 + Issue #1-A + Gate off) | 40-60%（单次 60%，LLM non-determinism + judge noise）|
 
-## 10. 关联
+## 11. 关联
 
 - Phase 4 plan: [docs/plans/2026-08-23-phase4-evidence-contract-repair.md](2026-08-23-phase4-evidence-contract-repair.md) §4-D
 - P0 audit: [docs/plans/2026-08-23-p0-audit-report.md](2026-08-23-p0-audit-report.md)
