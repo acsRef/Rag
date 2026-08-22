@@ -316,7 +316,6 @@ class RAGPipeline:
             # Fast path: no LLM rewrite/intent, search all KBs directly
             sub_queries = [req.query]
             rewritten_query = req.query
-            query_complexity = "complex"  # fast path 默认复杂
         else:
             rewrite_result = await query_rewrite_service.rewrite(
                 req.query, history, summary, ctx=ctx
@@ -328,12 +327,9 @@ class RAGPipeline:
                     rewritten=rewrite_result.rewritten_query,
                     sub_questions=rewrite_result.sub_questions,
                     sub_dependencies=rewrite_result.sub_dependencies,
-                    complexity=rewrite_result.complexity,
                 )
             sub_queries = rewrite_result.sub_questions
             rewritten_query = rewrite_result.rewritten_query or req.query
-            # 复杂度分类（控制 CoT 触发）：默认 complex（保守触发 CoT）
-            query_complexity = rewrite_result.complexity
 
         # --- Retrieve ---
         yield 'event: status\ndata: {"phase":"retrieving","message":"正在检索知识库..."}\n\n'
@@ -570,7 +566,6 @@ class RAGPipeline:
             history=history,
             summary=summary,
             retrieved_chunks=unique_chunks,
-            complexity=query_complexity,
         )
 
         if ctx:
