@@ -44,9 +44,145 @@
 | ✅ Existing RAG evaluation baseline is not degraded | 当前 baseline `459 passed / 6 failed / 13 skipped`（Phase 1） | 守住基线即满足 |
 | ✅ Added tests cover major answer policy behaviors | — | **缺**（这是 audit 的主要交付物之一） |
 
-## 4. Identified gaps（audit 后填）
+## 4. Identified gaps（audit 填入：基于 prompt.py 115 行 SYSTEM_PROMPT 全文阅读 + tests/unit/test_prompt.py）
 
-_执行 audit 后写入。初步预计 4-8 项。_
+## 4. Identified gaps（audit 填入：基于 prompt.py 115 行 SYSTEM_PROMPT 全文阅读 + tests/unit/test_prompt.py）
+
+### 4.1 Grounding 模块
+
+**当前实现**（[app/core/prompt.py:21](app/core/prompt.py#L21) + line 43-48）：
+- L21: 【CRITICAL】回答必须基于检索内容
+- L45: "检索内容部分相关 → 用文档信息 + **补充通用知识**，但明确区分「文档中的信息」和「我的补充」"
+- L46: "检索内容不相关或无检索 → 说「没有找到相关信息」，不要强行关联"
+
+**冲突检测**：
+- **L45 与 Issue #1 Refusal 目标冲突**——Issue #1 要求 "Do not estimate, infer, or replace missing information"；prompt.py 允许"补充通用知识"，两规则对模型行为指令相反
+- **L45 与 L46 内部冲突**——"部分相关可补充"与"不相关不可补充"的边界"部分相关"由模型自判，主观
+- L45 "明确区分"无机制保证——模型可宣称"我补充的"但实际编造
+
+**修复方向**：
+- 删除或收紧 L45 "补充通用知识"路径（与 Issue #1 Refusal 对齐）
+- 或显式声明 L45 仅适用于"conversational follow-up / 礼貌确认"场景，不适用于"factual answer"
+
+### 4.2 Premise correction 模块
+
+**当前实现**（line 25-31）：
+- L27: "【不许顺着用户的前提作答】"
+- L28: "【在回答开头第一句就明确否定前提】"
+- L29: "若检索内容不足以下定论，如实说「检索内容无法证实这个前提」"
+- L31: 反例
+
+**冲突检测**：
+- **"不许顺着用户的前提" 措辞过强**——对"假设性问题"（如"如果 X 增长 50%，会怎样？"）模型可能误触发纠偏
+- **"回答开头第一句" 无机制保证位置**——模型可能将纠偏放在第二、三句；测试无法验证
+- L28 示例 "这个说法不成立，实际是……" 与 "并非连续三年加大"——两个示例给了两种措辞，模型行为不可预测
+
+**修复方向**：
+- "开头"改为强制模板："先纠正（1 句），再基于证据回答"，结构化而非"自然语言"
+- "不许顺着用户前提"降级为"应核实前提"，避免假设性问题误触发
+
+### 4.3 Refusal 模块
+
+**当前实现**（line 33-41）：
+- 5 类硬编码场景（市值/单一国家/未来/别家公司/未披露）
+- L41 "直接说明「年报未披露此数据」"
+
+**冲突检测**：
+- **与 Evidence Gate 语义重叠**——Evidence Gate 在 evidence 不足时也拒答，prompt 端 L46 "检索内容不相关或无检索" 也是拒答。三层拒答逻辑（Prompt + Gate + System_Only Template）边界模糊
+- **"年报未披露"措辞特化**——L41 用"年报未披露"是 Sany 年报场景，Issue #1 适用于通用 enterprise QA（合同/手册/其他）
+- **5 类硬编码扩展性差**——新场景需改 prompt.py 文件，Issue #1 body 要求"extension interface"
+
+**修复方向**：
+- 接口化：定义 `RefusalRule` 类，支持动态注册新规则
+- 措辞通用化："年报未披露" → "知识库未披露"或"原始材料未提及"
+- 文档化与 Evidence Gate 的分工：prompt 端处理"业务定义拒答场景"，Gate 处理"evidence 不足拒答"
+
+### 4.4 Citation 模块
+
+**当前实现**（L22 + L106）：
+- L22: 【CRITICAL】引用来源时用 `[1][2]` 格式对应 Source 编号
+- L106: 检查项"引用是否都对应到具体的 Source 编号？"
+
+**冲突检测**：
+- **无机制保证**——prompt 要求模型"对应"但无验证；模型可编造 `[5]` 即使检索只给了 1-4 个 chunk
+- **检查项依赖模型自省**——L106 是 self-check，模型可撒谎
+
+**修复方向**：
+- 后处理：解析 generation 中的 `[N]` 引用号，验证 `N ∈ 检索 chunk indices`
+- 若引用超界 → 自动校正或标记"未验证引用"
+- 这是 Issue #1 acceptance criteria "Citations consistently map to retrieved sources" 的真正实现路径
+
+### 4.5 Output format 模块
+
+**当前实现**（L96-101, L106-114）：
+- 6 条回答质量规则 + 8 条检查清单 = 14 条
+- 含表格使用、空行、列表、原文保留等
+
+**冲突检测**：
+- **L96 vs L100 冲突**——"表格优先用自然语言概括，不要直接复述原始表格" vs "涉及多个条目对比（3 项以上）时可以用表格"。决策维度模糊（"优先"？ "3 项以上"？）
+- **L98 "避免多余空行"不可执行**——模型对 whitespace 控制力有限
+- **规则过载**——14 条规则 + 其他章节 → 模型遵守度下降（指令稀释效应）
+
+**修复方向**：
+- 合并/精简到 6-8 条核心规则
+- 表格决策明确："1 条 → 自然语言；2 条 → 自然语言；≥3 条且对比场景 → 表格"
+- 删除不可执行规则（空行等）
+
+### 4.6 Reasoning protocol（`<think>`）模块 — **CONTRACT RISK**
+
+**当前实现**（L50-71）：
+- L52-57: "复杂度判断"——4 类复杂问题特征
+- L59-70: "复杂问题必须用 `<think>` 标签分离思考"
+- L110-112: 检查项引用"复杂问题"和"<think>"
+- L163: `RAGPromptBuilder.build_messages(complexity="complex")` 死参数
+
+**冲突检测（高严重）**：
+- **`complexity` 字段已 Phase 2 A 类决策 DELETE**（[phase2-contract-decisions.md](2026-08-22-phase2-contract-decisions.md)），但 SYSTEM_PROMPT L52-57 仍以"复杂问题"作 `<think>` 触发条件 → **split-state**
+- L53 "拿不准时默认走复杂路径"——模型自评 complexity，主观
+- L163 dead param 注释 "保留参数兼容性"——A 类决策后已无兼容需求，应清理
+- `<think>` 协议跨 5 层：Prompt / TagStreamParser / SSE / frontend / DB `thinking_content`——是 Phase 2 B 类 C 范畴
+- L74-86 例子直接给 `<think>` 块格式——若 B 类决定改协议，这里要同步改
+
+**修复方向**（不在本 plan 范围，与 B 类 `<think>` 协议解耦协调）：
+- 本 plan 不改 `<think>` 协议本身
+- **最小修订**：把 L52-70 改为无条件规则（"所有回答统一 `<think>` 协议"），消除 complexity 触发条件
+- 这与 [phase2-b-recon.md §4](2026-08-22-phase2-b-recon.md) §4 normal 化方向一致
+- `complexity` 相关字眼从 prompt 中清掉
+
+### 4.7 Prompt modularization 模块
+
+**当前实现**：
+- 整个 SYSTEM_PROMPT 是单字符串（L13-115）
+- prompt.py 同文件混含：SYSTEM_PROMPT / KB_ANSWER_TEMPLATE / SYSTEM_ANSWER_TEMPLATE / RAGPromptBuilder class
+- 测试覆盖：`_est`、`_trim_history`、`_trim_chunks`——**未覆盖任何 policy 文本**
+
+**冲突检测**：
+- 单字符串无法单元测试——policy 文本改动无回归保护
+- 改动风险：调整一处 policy 需重新跑全套 eval
+- Issue #1 body 明确要求"Separate answer policy from general system instructions"
+
+**修复方向**：
+- 拆 `app/core/prompts/{base, grounding, premise, refusal, citation, output, reasoning}.py`
+- 每模块导出 `get_section() -> str`
+- `RAGPromptBuilder` 调用各模块 `get_section()` 拼接（用 `"\n\n".join()` 而非手写拼接）
+- 每模块独立单测
+
+### 4.8 Gap 汇总
+
+| Gap ID | 模块 | 描述 | 优先级 |
+| --- | --- | --- | --- |
+| GAP-01 | Grounding | L45 "补充通用知识" 与 Refusal 冲突；需收紧或删除 | P0 |
+| GAP-02 | Premise | "不许顺着用户前提" 过强；"开头第一句" 无位置保证 | P1 |
+| GAP-03 | Refusal | 与 Evidence Gate 语义重叠；5 类硬编码；措辞"年报"特化 | P0 |
+| GAP-04 | Citation | 无机制保证 `[N]` ∈ 检索 chunk indices；模型可编造 | P0（Issue #1 acceptance 明确要求） |
+| GAP-05 | Output | 规则过载（14 条）；L96 vs L100 冲突；空行规则不可执行 | P2 |
+| GAP-06 | Reasoning | complexity split-state（字段已删，prompt 仍引用）；L163 死参数 | P0（与 B 类 `<think>` 解耦协调；最小修订） |
+| GAP-07 | Modularization | 全部塞在单字符串；policy 无单测 | P0（Issue #1 body 明确要求） |
+| GAP-08 | Refusal + Gate | 与 Gate 分工未文档化 | P1 |
+| GAP-09 | Test coverage | tests/unit/test_prompt.py 只覆盖 `_est` / trim 逻辑，无 policy 测试 | P0 |
+| GAP-10 | Complexity dead param | `RAGPromptBuilder.build_messages(complexity=...)` L163 死参数未清 | P2（与 GAP-06 一起处理） |
+
+> ⚠️ GAP-06 与 Phase 2 B 类 `<think>` 协议解耦决策有交叉。Issue #1 范围内**只做最小修订**（无条件化规则 + 清死参数），不重设计 `<think>` 协议本身。
 
 ## 5. Prompt module design（仅设计，audit 阶段不动代码）
 
@@ -68,17 +204,34 @@ app/core/prompts/
 
 ## 6. Test plan（audit 阶段只列清单）
 
-| 测试 | 覆盖模块 | 类型 | 数量预估 |
-| --- | --- | --- | --- |
-| premise_correction 各 5 类测试 | Premise | 单元 | 5 |
-| refusal 5 类场景测试 | Refusal | 单元 | 5 |
-| citation 对齐测试 | Citation | 单元 | 3 |
-| grounding 通用补充边界测试 | Grounding | 单元 | 3 |
-| output format 规则测试 | Output | 单元 | 3 |
-| prompt 模块加载/组合测试 | Modularization | 单元 | 2 |
-| 集成：pipeline.execute() 在新 prompt 下守住基线 | All | 集成 | 1 |
+> §6 内容基于 §4 gap 汇总。修复实施阶段（本 plan 范围外）才动代码并写测试。
 
-**总计预估：22 个新测试**。
+| Gap | 测试 | 覆盖模块 | 类型 |
+| --- | --- | --- | --- |
+| GAP-01 | grounding_no_external_knowledge_supplement | Grounding | 单元 |
+| GAP-01 | grounding_partial_coverage_handling | Grounding | 单元 |
+| GAP-02 | premise_correction_at_first_sentence | Premise | 单元 |
+| GAP-02 | premise_hypothetical_question_not_overcorrected | Premise | 单元 |
+| GAP-02 | premise_insufficient_evidence_no_guess | Premise | 单元 |
+| GAP-03 | refusal_market_cap_refused | Refusal | 单元 |
+| GAP-03 | refusal_country_revenue_refused | Refusal | 单元 |
+| GAP-03 | refusal_future_target_refused | Refusal | 单元 |
+| GAP-03 | refusal_other_company_refused | Refusal | 单元 |
+| GAP-03 | refusal_undisclosed_field_refused | Refusal | 单元 |
+| GAP-03 | refusal_extension_interface_register | Refusal | 单元 |
+| GAP-04 | citation_numbers_match_retrieval_indices | Citation | 单元 |
+| GAP-04 | citation_no_fabricated_references | Citation | 单元 |
+| GAP-04 | citation_invalid_ref_auto_correct_or_mark | Citation | 单元 |
+| GAP-05 | output_table_decision_three_items | Output | 单元 |
+| GAP-05 | output_no_redundant_blank_lines | Output | 单元 |
+| GAP-06 | reasoning_no_complexity_field_referenced | Reasoning | 单元 |
+| GAP-06 | reasoning_always_emitted_unconditional | Reasoning | 单元 |
+| GAP-07 | prompt_modules_load_independently | Modularization | 单元 |
+| GAP-07 | prompt_compose_full_assembly_no_duplication | Modularization | 单元 |
+| GAP-09 | test_critical_policies_have_explicit_test | All | 元测试 |
+| — | 集成：pipeline.execute() 在新 prompt 下守住基线（459/6/13） | All | 集成 |
+
+**总计预估：22 个新测试**（与 §5 设计时的预估一致）。
 
 ## 7. Baseline / validation protocol
 
