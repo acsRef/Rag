@@ -138,7 +138,7 @@ REWRITE_PROMPT = """你是一个查询改写助手。你的任务是将用户问
 用户问题：{question}
 
 # 输出格式
-{{"rewritten_query": "改写后的主查询", "sub_questions": ["子问题1", "子问题2", ...], "sub_dependencies": [[], [0], [0,1]], "complexity": "complex"}}
+{{"rewritten_query": "改写后的主查询", "sub_questions": ["子问题1", "子问题2", ...], "sub_dependencies": [[], [0], [0,1]]}}
 
 `sub_dependencies` 标注依赖关系（0-based 索引）：
 - `[]` 无依赖，独立检索
@@ -163,21 +163,7 @@ REWRITE_PROMPT = """你是一个查询改写助手。你的任务是将用户问
 
 【示例 D · 综合判断】先检索证据再综合判断
 问题："判断盈利改善是否靠国内市场爆发"
-输出：{{"rewritten_query": "盈利改善驱动因素分析", "sub_questions": ["近三年营收增速", "国际国内占比变化", "国际毛利率趋势"], "sub_dependencies": [[], [0], [0,1]], "complexity": "complex"}}
-
-## 难度分类（控制 CoT 触发）
-
-`complexity` 控制下游是否触发 Chain-of-Thought：
-- `"simple"`: 直接事实查询，单点信息——不要触发 CoT，直接给答案
-  - 例：「2023 年营收是多少？」「公司有哪些子公司？」「专利申请多少件」
-- `"complex"`: 需要跨文档/多步骤推理/前提验证/趋势判断——触发 CoT
-  - 例：「判断盈利改善是否靠国内爆发」「为什么研发投入连续三年加大」「近三年海外收入趋势」
-
-判断要点：
-- 只问单个数字/单点信息 → simple
-- 涉及「为什么」「判断」「是否成立」「趋势」「差异」「变化」→ complex
-- 需要跨年/跨文档综合对比 → complex
-- 包含「请解释」「如何」「原因」 → complex
+输出：{{"rewritten_query": "盈利改善驱动因素分析", "sub_questions": ["近三年营收增速", "国际国内占比变化", "国际毛利率趋势"], "sub_dependencies": [[], [0], [0,1]]}}
 
 # 输出前确认
 □ 所有代词都已消除？
@@ -259,17 +245,10 @@ class QueryRewriteService:
         else:
             deps = [[] for _ in subs]
 
-        # 解析 complexity（控制 CoT 触发）
-        # 失败时默认 "complex"——保守触发 CoT 防止误判
-        complexity = data.get("complexity", "complex")
-        if complexity not in ("simple", "complex"):
-            complexity = "complex"
-
         return RewriteResult(
             rewritten_query=rewritten,
             sub_questions=subs,
             sub_dependencies=deps,
-            complexity=complexity,
         )
 
 
