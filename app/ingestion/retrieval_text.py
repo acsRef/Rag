@@ -28,14 +28,14 @@ class TableBlock:
     """单个 markdown 表格块的解析结果。"""
 
     headers: list[str]
-    rows: list[list[str]]
+    rows: list[list[str]]  # 已剥管道的单元格
 
 
 @dataclass
 class RetrievalTextResult:
-    text: str
-    chunk_type: str | None
-    tables: list[dict] = field(default_factory=list)
+    text: str  # 归一化后的完整检索表示
+    chunk_type: str | None  # 含表格块时为 "table"，否则 None
+    tables: list[dict] = field(default_factory=list)  # [{"headers": [...], "data_rows": n}]
 
 
 def _split_md_row(line: str) -> list[str]:
@@ -43,6 +43,7 @@ def _split_md_row(line: str) -> list[str]:
 
 
 def _find_table_block(lines: list[str], start: int) -> tuple[int, TableBlock] | None:
+    """lines[start] 起是否是一个 markdown 表格块；是则返回 (end_idx_exclusive, block)。"""
     if "|" not in lines[start]:
         return None
     if start + 1 >= len(lines) or not _SEP_ROW_RE.match(lines[start + 1]):
@@ -65,6 +66,7 @@ def _find_table_block(lines: list[str], start: int) -> tuple[int, TableBlock] | 
 
 
 def _render_table(block: TableBlock) -> tuple[str, dict]:
+    """表格 → 「表头行 + 每行自包含句」。返回 (text, meta)。"""
     out = ["| " + " | ".join(block.headers) + " |"]
     for row in block.rows:
         entity = row[0] if row else ""
@@ -82,6 +84,7 @@ def _render_table(block: TableBlock) -> tuple[str, dict]:
 
 
 def build_retrieval_text(chunk_text: str) -> RetrievalTextResult:
+    """扫描 chunk 文本中的 markdown 表格块并归一化；其余文本原样保留。"""
     if not chunk_text or "|" not in chunk_text:
         return RetrievalTextResult(text=chunk_text or "", chunk_type=None, tables=[])
 

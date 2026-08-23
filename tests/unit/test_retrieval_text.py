@@ -26,8 +26,10 @@ def test_big_table_expanded_to_selfcontained_rows():
     assert len(res.tables) == 1
     assert res.tables[0]["headers"] == ["项目", "2023年", "2024年"]
     assert res.tables[0]["data_rows"] == 6
+    # 每行必须带行首实体（第一列），脱离表头仍可独立匹配
     assert "营业收入：2023年为100亿元，2024年为150亿元。" in res.text
     assert "净利润：2023年为10亿元，2024年为15亿元。" in res.text
+    # 原始管道行不得残留在检索表示里
     assert "| 营业收入 |" not in res.text
     assert "---" not in res.text
 
@@ -35,7 +37,7 @@ def test_big_table_expanded_to_selfcontained_rows():
 def test_header_line_kept_for_context():
     res = build_retrieval_text(BIG_TABLE)
     first_line = res.text.split("\n")[0]
-    assert "项目" in first_line and "2023年" in first_line
+    assert "项目" in first_line and "2023年" in first_line  # 表头行保留
 
 
 def test_mixed_paragraph_and_table():
@@ -48,6 +50,7 @@ def test_mixed_paragraph_and_table():
 
 
 def test_small_nl_style_table_not_double_processed():
+    """已被 chunker._clean_table_text 转成自然语言的小表不应再被当 markdown 处理。"""
     nl = "指示灯 绿色 正常\n指示灯 红色 故障"
     res = build_retrieval_text(nl)
     assert res.chunk_type is None
@@ -64,7 +67,7 @@ def test_ragged_row_falls_back_to_space_join():
 | 研发投入 | 5亿元 | 6亿元 |"""
     res = build_retrieval_text(ragged)
     assert res.chunk_type == "table"
-    assert "100亿元" in res.text
+    assert "100亿元" in res.text  # 缺列行不丢数据
 
 
 def test_section_header_prefix_preserved():
