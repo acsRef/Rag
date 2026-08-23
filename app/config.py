@@ -76,6 +76,9 @@ class Settings(BaseSettings):
     embedding_max_retries: int = 3
     embedding_backoff_base: float = 1.0
     embedding_rate_limit_rps: int = 5
+    embedding_send_dimensions: bool = True  # env: EMBEDDING_SEND_DIMENSIONS
+    # Qwen3-Embedding 系列接受 dimensions 参数；bge-m3 等固定维度模型不支持，
+    # 切换此类模型时置 false（其原生维度写入 embedding_dimension）。
 
     # Circuit breaker
     circuit_breaker_enabled: bool = True  # env: CIRCUIT_BREAKER_ENABLED

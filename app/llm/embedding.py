@@ -23,6 +23,15 @@ from app.llm.base import (
 logger = logging.getLogger(__name__)
 
 
+def _embed_kwargs(text: str | list[str]) -> dict:
+    """构造 embeddings.create 的参数。dimensions 显式传参是配置契约：
+    config → API → DB schema 三处维度必须一致（spec §4.2b）。"""
+    kwargs: dict = {"model": settings.embedding_model, "input": text}
+    if settings.embedding_send_dimensions:
+        kwargs["dimensions"] = settings.embedding_dimension
+    return kwargs
+
+
 class RateLimiter:
     """Token-bucket rate limiter — threading.Lock safe across event loops."""
 
@@ -122,7 +131,7 @@ class SFEmbedding:
             self._check_breaker()
             await self.limiter.acquire()
             try:
-                resp = await self.client.embeddings.create(model=self.model, input=text)
+                resp = await self.client.embeddings.create(**_embed_kwargs(text))
                 self._on_success()
                 vec = resp.data[0].embedding
                 if settings.embedding_cache_enabled:
@@ -154,7 +163,7 @@ class SFEmbedding:
         self._check_breaker()
         await self.limiter.acquire()
         try:
-            resp = await self.client.embeddings.create(model=self.model, input=text)
+            resp = await self.client.embeddings.create(**_embed_kwargs(text))
             self._on_success()
             vec = resp.data[0].embedding
             if settings.embedding_cache_enabled:
@@ -252,7 +261,7 @@ async def _try_batch_with_retry(
     sf._check_breaker()
     await sf.limiter.acquire()
     try:
-        resp = await sf.client.embeddings.create(model=sf.model, input=texts)
+        resp = await sf.client.embeddings.create(**_embed_kwargs(texts))
         sf._on_success()
         return [d.embedding for d in resp.data]
     except CircuitOpenError:

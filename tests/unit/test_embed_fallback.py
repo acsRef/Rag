@@ -1,5 +1,7 @@
 """embed_query_with_fallback：熔断/异常降级为零向量（BM25-only），纯向量模式返回 None。"""
 
+import pytest
+
 from app.config import settings
 from app.llm.base import CircuitOpenError
 
@@ -101,3 +103,75 @@ async def test_circuit_open_records_diag_error_generic_does_not(monkeypatch):
     ctx2 = _FakeCtx()
     await retrieval.embed_query_with_fallback("q", ctx2)
     assert ctx2.errors == []
+
+
+# ── dimensions 显式传参契约（RAG v2 Task 2）──────────────────
+
+
+def _fake_client_factory(captured: dict):
+    class _RespData:
+        embedding = [0.1] * settings.embedding_dimension
+
+    class _Resp:
+        data = [_RespData()]
+
+    async def fake_create(**kwargs):
+        captured.update(kwargs)
+        return _Resp()
+
+    class _FakeEmbeddings:
+        create = staticmethod(fake_create)
+
+    class _FakeClient:
+        embeddings = _FakeEmbeddings()
+
+    return _FakeClient()
+
+
+@pytest.mark.asyncio
+async def test_embed_passes_explicit_dimensions(monkeypatch):
+    """API 调用必须显式携带 dimensions=settings.embedding_dimension。"""
+    captured: dict = {}
+    from app.llm import embedding as emb_mod
+
+    monkeypatch.setattr(emb_mod.sf_embedding, "_client", _fake_client_factory(captured))
+    # client property 在 loop id 不匹配时会重建真客户端——必须对齐当前 loop
+    import asyncio
+
+    monkeypatch.setattr(emb_mod.sf_embedding, "_client_loop_id", id(asyncio.get_event_loop()))
+    monkeypatch.setattr(settings, "embedding_send_dimensions", True)
+
+    await emb_mod.sf_embedding.embed("维度契约测试")
+    assert captured.get("dimensions") == settings.embedding_dimension
+
+
+@pytest.mark.asyncio
+async def test_embed_omits_dimensions_when_disabled(monkeypatch):
+    """EMBEDDING_SEND_DIMENSIONS=false 时不得传 dimensions（固定维度模型兼容）。"""
+    captured: dict = {}
+    from app.llm import embedding as emb_mod
+
+    class _RespDataSmall:
+        embedding = [0.1] * 4
+
+    class _RespSmall:
+        data = [_RespDataSmall()]
+
+    async def fake_create_small(**kwargs):
+        captured.update(kwargs)
+        return _RespSmall()
+
+    class _FakeEmbeddingsSmall:
+        create = staticmethod(fake_create_small)
+
+    class _FakeClientSmall:
+        embeddings = _FakeEmbeddingsSmall()
+
+    monkeypatch.setattr(emb_mod.sf_embedding, "_client", _FakeClientSmall())
+    import asyncio
+
+    monkeypatch.setattr(emb_mod.sf_embedding, "_client_loop_id", id(asyncio.get_event_loop()))
+    monkeypatch.setattr(settings, "embedding_send_dimensions", False)
+
+    await emb_mod.sf_embedding.embed("关闭开关测试")
+    assert "dimensions" not in captured
