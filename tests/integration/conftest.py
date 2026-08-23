@@ -154,7 +154,7 @@ def fake_llm_stack(monkeypatch):
 
 
 @pytest.fixture
-def ingest_docs(integration_db, fake_llm_stack):
+def ingest_docs(integration_db, fake_llm_stack, monkeypatch):
     """摄入三份 fixture 文档，返回 {filename: document_id}。
 
     先预建 Document 行再 index——与 api/documents.py 的上传契约一致：
@@ -164,6 +164,9 @@ def ingest_docs(integration_db, fake_llm_stack):
     每次调用先清空语料相关表：函数级 fixture 会多代累积同文本文档，
     旧代副本与当代词法/向量不可区分，会污染跨文档测试的确定性。
     """
+    # 这些测试断言 chunk_questions 有数据——question channel 必须开
+    # （dev .env 在 RAG v2 Step 1 期间设为 false，fixture 不随环境漂移）
+    monkeypatch.setattr(settings, "question_channel_enabled", True)
     from app.ingestion.indexer import document_indexer
     from app.store.db import Document, get_db_ctx, new_id, utc_now
 

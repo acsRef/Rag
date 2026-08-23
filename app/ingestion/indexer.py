@@ -352,7 +352,10 @@ class DocumentIndexer:
                     # "实际用于 embedding 的输入"的 audit。ablation 验证 build_embedding_text()
                     # 加 prefix 反而恶化指标，所以 production 走 c.text。
                     "embedding_text": c.text,
-                    "embedding_version": 1,
+                    # 新摄入的 chunk 标记为当前 corpus 代际——hybrid_search 按
+                    # settings.current_embedding_version 过滤，写死 1 会让新 chunk
+                    # 在代际推进后对所有检索不可见（Task 11 迁移时踩中）
+                    "embedding_version": settings.current_embedding_version,
                     # 复用 chunk 优先保留旧 LLM 元数据（chunker 的 section 标题不得覆盖之）
                     "title": (is_reused and old.get("title")) or c.title or "",
                     "summary": (is_reused and old.get("summary")) or c.summary or "",
