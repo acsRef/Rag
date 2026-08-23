@@ -1,5 +1,6 @@
 """app/core/cache.py 测试：EmbeddingCache + RetrievalCache（Day 1 上午）。"""
 
+from app.config import settings
 from app.core.cache import EmbeddingCache, RetrievalCache
 
 # ── EmbeddingCache ──────────────────────────────────────────
@@ -106,6 +107,18 @@ def test_embedding_cache_same_config_hits():
     cache_a.set("hello", [1.0, 2.0])
     assert cache_a.get("hello") == [1.0, 2.0]  # 前缀不破坏正常读写
     assert cache_a._key("hello") == cache_b._key("hello")  # 同配置 → 同 key（实例可互替）
+
+
+def test_global_singleton_binds_settings_config():
+    """生产单例必须以 settings 配置参与 key——退回裸构造时此测试报警。"""
+    from app.core import cache as cache_mod
+
+    expected_prefix = (
+        f"{settings.embedding_model}\x00{settings.embedding_dimension}"
+        f"\x00{cache_mod.EMBEDDING_INPUT_VERSION}\x00"
+    )
+    assert cache_mod.embedding_cache._prefix == expected_prefix
+    assert cache_mod.embedding_cache._key("x") != EmbeddingCache()._key("x")
 
 
 # ── RetrievalCache ──────────────────────────────────────────

@@ -27,7 +27,7 @@ EMBEDDING_INPUT_VERSION = 1
 
 
 class EmbeddingCache:
-    """text → vec 的 LRU 缓存；满后淘汰最久未访问。
+    r"""text → vec 的 LRU 缓存；满后淘汰最久未访问。
 
     key = sha256(model \0 dimension \0 input_version \0 text)。
     换 embedding 配置（模型/维度）或输入表示升级时，同文本的旧缓存向量
