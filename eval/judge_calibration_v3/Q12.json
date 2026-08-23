@@ -1,0 +1,17 @@
+{
+  "question_id": "Q12",
+  "category": "B-表格理解与单位换算",
+  "category_prefix": "B",
+  "question": "截至2025年末，三一重工总资产是多少亿元人民币？",
+  "gold_answer": "约1,733.0亿元（173,299,138千元），较2024年末增长13.90%。",
+  "generation_answer": "我没有找到2025年末三一重工总资产的相关信息。年报的财务报告部分和管理层讨论与分析部分均未披露该数据。如需了解该信息，建议查阅三一重工2025年年度报告的完整财务报告部分或资产负债表。",
+  "answer_length_chars": 93,
+  "judge_score": 0,
+  "judge_reason": "未提供数据且未与参考答案匹配",
+  "judge_raw_response": "```json\n{\"score\": 0, \"reason\": \"未提供数据且未与参考答案匹配\"}\n```",
+  "citation_count": 0,
+  "unique_citation_ids": [],
+  "error": null,
+  "sse_event_count": 189,
+  "timestamp": "2026-08-22T17:01:59.173939+00:00"
+}

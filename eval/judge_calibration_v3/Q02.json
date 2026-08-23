@@ -1,0 +1,19 @@
+{
+  "question_id": "Q02",
+  "category": "A-单文档事实抽取",
+  "category_prefix": "A",
+  "question": "三一重工2024年归属于上市公司股东的净利润是多少？同比变化多少？",
+  "gold_answer": "59.75亿元（5,975,451千元），同比增长31.98%。",
+  "generation_answer": "根据2024年年度报告：-**2024年归属于上市公司股东的净利润**：59.75亿元（5,975,451千元）-**同比2023年变化**：增长31.98%（2023年调整后净利润为45.27亿元）[1]",
+  "answer_length_chars": 103,
+  "judge_score": 3,
+  "judge_reason": "完全正确，核心信息全部覆盖，数字/单位正确",
+  "judge_raw_response": "```json\n{\"score\": 3, \"reason\": \"完全正确，核心信息全部覆盖，数字/单位正确\"}\n```",
+  "citation_count": 1,
+  "unique_citation_ids": [
+    1
+  ],
+  "error": null,
+  "sse_event_count": 148,
+  "timestamp": "2026-08-22T17:01:19.035280+00:00"
+}

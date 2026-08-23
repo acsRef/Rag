@@ -1,0 +1,62 @@
+{
+  "n_questions": 15,
+  "by_category": {
+    "A": 3,
+    "B": 2,
+    "C": 2,
+    "D": 2,
+    "E": 2,
+    "H": 2,
+    "I": 2
+  },
+  "score_distribution": {
+    "0": 3,
+    "1": 2,
+    "2": 5,
+    "3": 5,
+    "null": 0
+  },
+  "score_distribution_pct": {
+    "0": "20%",
+    "1": "13%",
+    "2": "33%",
+    "3": "33%",
+    "null": "0%"
+  },
+  "n_errors": 0,
+  "n_suspected_disagreement": 4,
+  "suspected_disagreement": [
+    {
+      "question_id": "Q12",
+      "reasons": [
+        "judge_0_with_answer"
+      ],
+      "judge_score": 0,
+      "judge_reason": "未提供数据且未与参考答案匹配"
+    },
+    {
+      "question_id": "Q26",
+      "reasons": [
+        "judge_0_with_answer"
+      ],
+      "judge_score": 0,
+      "judge_reason": "年度分红数据错误，与参考答案不符"
+    },
+    {
+      "question_id": "Q55",
+      "reasons": [
+        "judge_0_with_answer"
+      ],
+      "judge_score": 0,
+      "judge_reason": "编造数据，与参考答案矛盾"
+    },
+    {
+      "question_id": "Q56",
+      "reasons": [
+        "judge_3_no_citation"
+      ],
+      "judge_score": 3,
+      "judge_reason": "回答完全正确，准确反映了年报未披露2026年量化目标的情况"
+    }
+  ]
+}

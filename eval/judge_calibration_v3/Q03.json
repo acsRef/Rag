@@ -1,0 +1,19 @@
+{
+  "question_id": "Q03",
+  "category": "A-单文档事实抽取",
+  "category_prefix": "A",
+  "question": "三一重工2025年经营活动产生的现金流量净额是多少？",
+  "gold_answer": "199.75亿元（19,975,261千元），同比增长34.84%。",
+  "generation_answer": "根据2025年年度报告披露的数据，三一重工2025年经营活动产生的现金流量净额为19,975,261千元人民币[2]。",
+  "answer_length_chars": 59,
+  "judge_score": 3,
+  "judge_reason": "核心信息完全正确，数字和单位与参考答案一致",
+  "judge_raw_response": "```json\n{\"score\": 3, \"reason\": \"核心信息完全正确，数字和单位与参考答案一致\"}\n```",
+  "citation_count": 1,
+  "unique_citation_ids": [
+    2
+  ],
+  "error": null,
+  "sse_event_count": 250,
+  "timestamp": "2026-08-22T17:01:34.385075+00:00"
+}

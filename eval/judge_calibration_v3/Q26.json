@@ -1,0 +1,19 @@
+{
+  "question_id": "Q26",
+  "category": "D-计算与多跳推理",
+  "category_prefix": "D",
+  "question": "2025年三一重工每股合计分红多少（含已实施的中期分红与年度预案）？",
+  "gold_answer": "2025年半年度每10股派3.1元（已实施）+ 2025年度预案每10股派1.8元（尚需股东会审议）= 全年合计每10股4.9元，即每股0.49元（含税）。",
+  "generation_answer": "2025年三一重工每股合计分红金额（含已实施的中期分红与年度预案）为0.80元（含税），其中：-中期分红：每股0.31元（2025年10月15日实施）[1]-年度分红：每股0.49元（预案，每10股派4.9元）[1]",
+  "answer_length_chars": 108,
+  "judge_score": 0,
+  "judge_reason": "年度分红数据错误，与参考答案不符",
+  "judge_raw_response": "```json\n{\"score\": 0, \"reason\": \"年度分红数据错误，与参考答案不符\"}\n```",
+  "citation_count": 2,
+  "unique_citation_ids": [
+    1
+  ],
+  "error": null,
+  "sse_event_count": 188,
+  "timestamp": "2026-08-22T17:03:14.195323+00:00"
+}

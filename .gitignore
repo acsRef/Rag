@@ -44,3 +44,7 @@ mineru_temp/
 
 # MCP server (experimental)
 mcp_server/
+
+# Eval data (regenerable, not source code)
+eval/ablation/
+*.pymupdf4llm.md

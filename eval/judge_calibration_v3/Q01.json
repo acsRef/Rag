@@ -1,0 +1,19 @@
+{
+  "question_id": "Q01",
+  "category": "A-单文档事实抽取",
+  "category_prefix": "A",
+  "question": "三一重工2023年的营业收入是多少？",
+  "gold_answer": "732.22亿元（年报原文为73,221,725千元，同比下降8.51%）。",
+  "generation_answer": "根据2023年年度报告，三一重工2023年营业总收入为740.19亿元[1]。",
+  "answer_length_chars": 39,
+  "judge_score": 2,
+  "judge_reason": "数字接近参考答案，但存在轻微偏差",
+  "judge_raw_response": "```json\n{\"score\": 2, \"reason\": \"数字接近参考答案，但存在轻微偏差\"}\n```",
+  "citation_count": 1,
+  "unique_citation_ids": [
+    1
+  ],
+  "error": null,
+  "sse_event_count": 113,
+  "timestamp": "2026-08-22T17:01:08.779337+00:00"
+}

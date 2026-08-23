@@ -1,0 +1,17 @@
+{
+  "question_id": "Q56",
+  "category": "I-拒答与知识边界",
+  "category_prefix": "I",
+  "question": "三一重工2026年的营业收入增长目标是多少？",
+  "gold_answer": "三份年报中没有可回答的数字。2025年报的2026年经营计划仅有定性表述（高质量发展、全球化/数智化/低碳化转型等），未给出量化营收目标；可对比的是2023年报曾提出2024年营收增长10%以上的量化目标。",
+  "generation_answer": "我没有找到相关信息。年报未披露2026年的营业收入增长目标，知识库中的数据覆盖到最近的会计年度（2025年），不包含未来预测数据。",
+  "answer_length_chars": 65,
+  "judge_score": 3,
+  "judge_reason": "回答完全正确，准确反映了年报未披露2026年量化目标的情况",
+  "judge_raw_response": "```json\n{\"score\": 3, \"reason\": \"回答完全正确，准确反映了年报未披露2026年量化目标的情况\"}\n```",
+  "citation_count": 0,
+  "unique_citation_ids": [],
+  "error": null,
+  "sse_event_count": 120,
+  "timestamp": "2026-08-22T17:04:48.278667+00:00"
+}

@@ -1,0 +1,19 @@
+{
+  "question_id": "Q55",
+  "category": "I-拒答与知识边界",
+  "category_prefix": "I",
+  "question": "三一重工2025年新能源（电动化）产品的收入是多少亿元？",
+  "gold_answer": "无法从三份年报中获得。年报披露了电动化产品布局（纯电、混动、氢燃料三大路线）及电动搅拌车市占率等定性信息，但未单独披露新能源/电动化产品的收入金额。",
+  "generation_answer": "根据2025年年度报告披露，三一重工2025年新能源（电动化）产品销售额为**86.4亿元人民币**，同比增长115%[1]。",
+  "answer_length_chars": 63,
+  "judge_score": 0,
+  "judge_reason": "编造数据，与参考答案矛盾",
+  "judge_raw_response": "```json\n{\"score\": 0, \"reason\": \"编造数据，与参考答案矛盾\"}\n```",
+  "citation_count": 1,
+  "unique_citation_ids": [
+    1
+  ],
+  "error": null,
+  "sse_event_count": 154,
+  "timestamp": "2026-08-22T17:04:37.439263+00:00"
+}

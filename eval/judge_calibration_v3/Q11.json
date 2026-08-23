@@ -1,0 +1,21 @@
+{
+  "question_id": "Q11",
+  "category": "B-表格理解与单位换算",
+  "category_prefix": "B",
+  "question": "三一重工年报“主要会计数据”表的金额单位是什么？",
+  "gold_answer": "千元，币种为人民币。三份年报该表单位均为“千元”。",
+  "generation_answer": "我没有找到“主要会计数据”表的具体金额单位。但根据年报中其他财务表格的披露惯例（如衍生品投资、租赁收入等），金额单位通常为人民币，并以“千元”或“万元”为单位[1][2][3]。建议查阅年报正文或附注中的“财务报表编制基础”部分以获取确切信息。",
+  "answer_length_chars": 122,
+  "judge_score": 2,
+  "judge_reason": "回答部分正确，但未明确指出具体金额单位为千元，存在小遗漏",
+  "judge_raw_response": "```json\n{\"score\": 2, \"reason\": \"回答部分正确，但未明确指出具体金额单位为千元，存在小遗漏\"}\n```",
+  "citation_count": 3,
+  "unique_citation_ids": [
+    1,
+    2,
+    3
+  ],
+  "error": null,
+  "sse_event_count": 183,
+  "timestamp": "2026-08-22T17:01:46.858992+00:00"
+}
