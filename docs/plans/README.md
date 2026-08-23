@@ -10,6 +10,14 @@
 
 ## 已完成
 
+- [2026-08-23-baseline-2-locked](2026-08-23-baseline-2-locked.md) — RAG v2 Step 1：embedding 配置迁移（Qwen3-VL-Embedding-8B@4096 → Qwen3-Embedding-8B@1024），清库+迁维+重摄 1381 chunks @1024 代际 v2，15 题 verified acc(≥2)=66.7%（+16.7pp vs Baseline-1R），mean 73.3%；过程含 2 个计划外 bug 修复（indexer 写死 embedding_version=1 让新 chunk 对检索不可见 / integration conftest 不锁 question_channel_enabled）；完整性断言穷举通过
+
+- [2026-08-23-baseline-1r-replay](2026-08-23-baseline-1r-replay.md) — RAG v2 Phase B：Baseline-1R replay（15 verified × locked evaluator v1 × 旧配置），overall acc(≥2)=50.0%（14/15 评分覆盖，Q26 上游流式挂起非能力缺陷），单一唯一同口径参照点
+
+- [2026-08-23-rag-v2-implementation-plan](2026-08-23-rag-v2-implementation-plan.md) — RAG v2 实施计划（20 任务，Phase A-F 代码准备 → Baseline-1R → embedding 迁移 → 表格感知摄入 → question channel 激活 → 65 题 benchmark；每任务 TDD + spec/code 双审查 + 回滚预案）
+
+- [2026-08-23-embedding-migration-table-aware-design](2026-08-23-embedding-migration-table-aware-design.md) — RAG v2 设计文档：embedding configuration migration + 表格感知摄入第一期；4×P0 + 6×P1 用户二轮审查吸收；spec v2 修订版
+
 - [2026-08-12-sse-disconnect-continue](2026-08-12-sse-disconnect-continue.md) — 前端断开后台保活（完成，commits `396b055`..`a64d037`）：客户端断开后后端后台跑完当前回答落 `completed`；`/generating` 状态端点 + 有边界轮询 + 同会话禁发；`/cancel` 停止按钮（真正取消，可立即重发）；409 安全网；lifespan 关停清理；`get_history` 排除 interrupted。8 新测试 + 运行时实测通过
 
 - [2026-08-06-design-review-fixes](2026-08-06-design-review-fixes.md) — 设计审查遗留修复（19 项，全量 284 passed + npm build 通过，分支 fix/design-review-fixes）：P0 diagnostics 开关生效、前端错误双气泡、删除清入边（DB cascade 已生效 + 修 `delete_kb` `DocRoleAccess` 未导入真正 500 bug）、thinking_content 回传、索引器孤儿 future (`_collect_future_pair`)、content_hash 后置 PII；P1 检索并行 (`asyncio.gather`)、跨文档 DF SQL 聚合 + candidate 收敛、neighbor 瘦查询（已达标）、auth TTL 缓存、documents to_thread；P2 lifespan、停用词合并、clean 工具外移 tools/、改写正则 `其它` 误报、engine connect_timeout；P3 tsconfig noEmit、admin_role 缓存失效 + 限流注释；P4 AGENTS.md 修正
