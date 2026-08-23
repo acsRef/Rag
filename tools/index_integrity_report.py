@@ -24,29 +24,30 @@ from app.config import settings  # noqa: E402
 from app.store.db import engine  # noqa: E402
 
 
-def vec_dim_of_sample(conn, sql: str) -> int | None:
-    """取一行向量的维度；pgvector text 形如 '[0.1,0.2,...]'，逗号数+1 即维度。"""
-    row = conn.execute(text(sql)).first()
-    if not row or row[0] is None:
-        return None
-    return row[0].count(",") + 1
-
-
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--expect-documents", type=int, default=3)
+    parser.add_argument("--expect-documents", type=int, required=True)
     parser.add_argument("--expect-questions", choices=["zero", "positive"], required=True)
     args = parser.parse_args()
 
     failures: list[str] = []
 
-    with engine.connect() as conn:
+    # READ_ONLY：把"本工具绝不写库"从事务层面强制住（写操作会直接报错）。
+    # psycopg2 方言不认 isolation_level="READ_ONLY"，须用方言专属选项 postgresql_readonly
+    with engine.connect().execution_options(postgresql_readonly=True) as conn:
 
         def check(label: str, actual, ok: bool):
             mark = "PASS" if ok else "FAIL"
             print(f"[{mark}] {label}: {actual}")
             if not ok:
                 failures.append(label)
+
+        # 核心表存在性探测（to_regclass，同 reset_rag_corpus.py）：目标库不对/init_db 未跑时干净报错
+        for t in ("documents", "chunks", "chunk_questions"):
+            present = conn.execute(text("SELECT to_regclass(:r) IS NOT NULL"), {"r": t}).scalar()
+            if not present:
+                print(f"ERROR: 核心表 {t} 不存在——目标库不对或 init_db 未跑")
+                return 1
 
         n_docs = conn.execute(text("SELECT count(*) FROM documents")).scalar_one()
         check(f"documents == {args.expect_documents}", n_docs, n_docs == args.expect_documents)
@@ -59,13 +60,18 @@ def main() -> int:
         ).scalar_one()
         check("chunks.embedding NULL == 0", n_null_emb, n_null_emb == 0)
 
-        dim = vec_dim_of_sample(
-            conn, "SELECT embedding::text FROM chunks WHERE embedding IS NOT NULL LIMIT 1"
-        )
+        # 穷举维度核查（vector_dims），不是 LIMIT 1 抽样——混合维度的库不能假 PASS
+        n_wrong_dim = conn.execute(
+            text(
+                "SELECT count(*) FROM chunks "
+                "WHERE embedding IS NOT NULL AND vector_dims(embedding) <> :dim"
+            ),
+            {"dim": settings.embedding_dimension},
+        ).scalar_one()
         check(
-            f"chunk 向量维度 == {settings.embedding_dimension}",
-            dim,
-            dim == settings.embedding_dimension,
+            f"chunk 向量维度全部 == {settings.embedding_dimension}（穷举）",
+            f"{n_wrong_dim} 行不符",
+            n_wrong_dim == 0,
         )
 
         # embedding_text：null 率 / 平均长度（表格归一化后应非空）
@@ -104,14 +110,21 @@ def main() -> int:
             check("chunk_questions == 0（硬断言）", n_q, n_q == 0)
         else:
             check("chunk_questions > 0（硬断言）", n_q, n_q > 0)
-            qdim = vec_dim_of_sample(
-                conn,
-                "SELECT embedding::text FROM chunk_questions WHERE embedding IS NOT NULL LIMIT 1",
-            )
+            n_q_null = conn.execute(
+                text("SELECT count(*) FROM chunk_questions WHERE embedding IS NULL")
+            ).scalar_one()
+            check("chunk_questions.embedding NULL == 0", n_q_null, n_q_null == 0)
+            n_q_wrong_dim = conn.execute(
+                text(
+                    "SELECT count(*) FROM chunk_questions "
+                    "WHERE embedding IS NOT NULL AND vector_dims(embedding) <> :dim"
+                ),
+                {"dim": settings.embedding_dimension},
+            ).scalar_one()
             check(
-                f"问题向量维度 == {settings.embedding_dimension}",
-                qdim,
-                qdim == settings.embedding_dimension,
+                f"问题向量维度全部 == {settings.embedding_dimension}（穷举）",
+                f"{n_q_wrong_dim} 行不符",
+                n_q_wrong_dim == 0,
             )
 
     if failures:
