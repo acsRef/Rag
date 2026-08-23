@@ -19,18 +19,36 @@ import json
 from collections import OrderedDict
 from typing import Any
 
+from app.config import settings
+
+# embedding 输入表示版本：1 = 原始 chunk.text；表格归一化检索表示上线时 bump 到 2。
+# 参与 EmbeddingCache key——同 model/dim 下输入表示变更必须使旧缓存失效。
+EMBEDDING_INPUT_VERSION = 1
+
 
 class EmbeddingCache:
-    """text → vec 的 LRU 缓存；满后淘汰最久未访问。"""
+    """text → vec 的 LRU 缓存；满后淘汰最久未访问。
 
-    def __init__(self, max_size: int = 4096):
+    key = sha256(model \0 dimension \0 input_version \0 text)。
+    换 embedding 配置（模型/维度）或输入表示升级时，同文本的旧缓存向量
+    维度/语义都可能错——key 必须把这三者编进去（correctness，非优化）。
+    """
+
+    def __init__(
+        self,
+        max_size: int = 4096,
+        *,
+        model: str = "",
+        dimension: int = 0,
+        input_version: int = EMBEDDING_INPUT_VERSION,
+    ):
         self.max_size = max_size
         self._store: OrderedDict[str, list[float]] = OrderedDict()
+        self._prefix = f"{model}\x00{dimension}\x00{input_version}\x00"
 
-    @staticmethod
-    def _key(text: str) -> str:
+    def _key(self, text: str) -> str:
         # sha256 抗碰撞；utf-8 编码保证跨平台一致
-        return hashlib.sha256(text.encode("utf-8")).hexdigest()
+        return hashlib.sha256((self._prefix + text).encode("utf-8")).hexdigest()
 
     def get(self, text: str) -> list[float] | None:
         """命中返回 vec；未命中返回 None。命中即把该 key 移到队尾（MRU）。"""
@@ -95,5 +113,8 @@ class RetrievalCache:
 
 
 # 模块级 singleton；settings.*_cache_enabled 控制是否实际使用
-embedding_cache = EmbeddingCache()
+embedding_cache = EmbeddingCache(
+    model=settings.embedding_model,
+    dimension=settings.embedding_dimension,
+)
 retrieval_cache = RetrievalCache()

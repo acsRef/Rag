@@ -71,6 +71,43 @@ def test_embedding_cache_len_reflects_size():
     assert len(cache) == 2
 
 
+# ── EmbeddingCache key 隔离（model/dim/input_version）────────
+
+
+def test_embedding_cache_isolates_by_model():
+    cache_a = EmbeddingCache(model="m-a", dimension=1024)
+    cache_b = EmbeddingCache(model="m-b", dimension=1024)
+    cache_a.set("hello", [1.0])
+    assert cache_b.get("hello") is None  # 不同模型不互 hit
+    # 每个实例有独立 store，上面的断言对任何实现都成立；key 层面必须真的不同才算隔离
+    assert cache_a._key("hello") != cache_b._key("hello")
+
+
+def test_embedding_cache_isolates_by_dimension():
+    cache_a = EmbeddingCache(model="m", dimension=4096)
+    cache_b = EmbeddingCache(model="m", dimension=1024)
+    cache_a.set("hello", [0.0] * 4096)
+    assert cache_b.get("hello") is None  # 同文本不同维度绝不能互 hit（correctness）
+    assert cache_a._key("hello") != cache_b._key("hello")
+
+
+def test_embedding_cache_isolates_by_input_version():
+    cache_v1 = EmbeddingCache(model="m", dimension=1024, input_version=1)
+    cache_v2 = EmbeddingCache(model="m", dimension=1024, input_version=2)
+    cache_v1.set("hello", [1.0])
+    assert cache_v2.get("hello") is None
+    assert cache_v1._key("hello") != cache_v2._key("hello")
+
+
+def test_embedding_cache_same_config_hits():
+    """同配置实例派生相同 key——store 是每实例独立的，跨实例兼容靠 key 一致保证。"""
+    cache_a = EmbeddingCache(model="m", dimension=1024, input_version=1)
+    cache_b = EmbeddingCache(model="m", dimension=1024, input_version=1)
+    cache_a.set("hello", [1.0, 2.0])
+    assert cache_a.get("hello") == [1.0, 2.0]  # 前缀不破坏正常读写
+    assert cache_a._key("hello") == cache_b._key("hello")  # 同配置 → 同 key（实例可互替）
+
+
 # ── RetrievalCache ──────────────────────────────────────────
 
 
