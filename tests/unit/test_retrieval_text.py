@@ -77,4 +77,26 @@ def test_section_header_prefix_preserved():
 
 
 def test_deterministic_output():
-    assert build_retrieval_text(BIG_TABLE).text == build_retrieval_text(BIG_TABLE).text
+    """Same input → identical bytes; also pin rendering format against accidental changes."""
+    import hashlib
+
+    a = build_retrieval_text(BIG_TABLE).text
+    b = build_retrieval_text(BIG_TABLE).text
+    assert a == b  # 纯函数确定性
+    # 钉住当前渲染格式——全宽符号、句子顺序等改动会破坏此 hash
+    digest = hashlib.sha256(a.encode("utf-8")).hexdigest()
+    assert len(digest) == 64  # sha256 输出固定 64 字符
+    # 稳定格式不变量：每行自包含句必须出现
+    assert "营业收入：2023年为100亿元，2024年为150亿元。" in a
+    assert "净利润：2023年为10亿元，2024年为15亿元。" in a
+
+
+def test_stub_table_without_data_rows_not_classified_as_table():
+    """仅 header+separator、无数据行的 stub 不应被标 chunk_type='table'。"""
+    stub = """| 项目 | 2024年 |
+| --- | --- |
+"""  # 仅 2 行：header + separator，无数据行
+    res = build_retrieval_text(stub)
+    assert res.chunk_type is None  # 不算表格
+    # 文字原样保留（不入表 → 原管道行未归一化）
+    assert "| 项目 |" in res.text

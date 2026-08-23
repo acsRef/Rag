@@ -105,6 +105,7 @@ def build_retrieval_text(chunk_text: str) -> RetrievalTextResult:
         i = end
     return RetrievalTextResult(
         text="\n".join(out_lines),
-        chunk_type="table" if tables else None,
+        # 表格块判定：要求至少一行数据（避免 2 行 stub 假阳性 —— 仅 header+separator 的 chunk 不算表格）
+        chunk_type="table" if any(t["data_rows"] > 0 for t in tables) else None,
         tables=tables,
     )
