@@ -17,6 +17,7 @@ from sqlalchemy import (
     create_engine,
     text,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import declarative_base, sessionmaker
 
 from app.config import settings
@@ -331,7 +332,7 @@ class Chunk(Base):
     # Issue #2 第一期：表格 chunk 元数据（text=paragraph | table）；本期只入库
     chunk_type = Column(String(16), nullable=True)
     table_headers = Column(ARRAY(Text), nullable=True)
-    table_meta = Column(JSON, nullable=True)
+    table_meta = Column(JSONB, nullable=True)
 
 
 # ── Conversation ────────────────────────────────────────
