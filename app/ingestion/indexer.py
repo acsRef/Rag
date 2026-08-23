@@ -458,41 +458,45 @@ class DocumentIndexer:
             # Embed and store chunk questions for multi-channel retrieval.
             # 用构造点绑定的 question_source——旧 zip(chunks, chunks_data)
             # 在 embedding 失败跳块后错位，会把问题挂到错误的 chunk
-            question_data = []
-            for cd_id, qs in question_source:
-                for pos, q in enumerate(qs):
-                    if q.strip():
-                        question_data.append(
-                            {
-                                "chunk_id": cd_id,
-                                "question": q,
-                                "position": pos,
-                            }
+            # 摄入侧与检索侧共用 QUESTION_CHANNEL_ENABLED：flag off 时既不生成
+            # 问题向量也不落库——否则 chunk_questions==0 的完整性硬断言永远
+            # 无法成立（spec §1.4 隐藏变量二）。
+            if settings.question_channel_enabled:
+                question_data = []
+                for cd_id, qs in question_source:
+                    for pos, q in enumerate(qs):
+                        if q.strip():
+                            question_data.append(
+                                {
+                                    "chunk_id": cd_id,
+                                    "question": q,
+                                    "position": pos,
+                                }
+                            )
+                if question_data:
+                    q_texts = [q["question"] for q in question_data]
+                    q_emb_results = asyncio.run(sf_embedding.embed_with_fallback(q_texts))
+                    valid_q = []
+                    for qd, (emb, err) in zip(question_data, q_emb_results):
+                        if emb is not None:
+                            qd["embedding"] = emb
+                            valid_q.append(qd)
+                    fail_count = len(question_data) - len(valid_q)
+                    if fail_count:
+                        logger.warning(
+                            "ingest.questions_partial total=%d ok=%d fail=%d",
+                            len(question_data),
+                            len(valid_q),
+                            fail_count,
                         )
-            if question_data:
-                q_texts = [q["question"] for q in question_data]
-                q_emb_results = asyncio.run(sf_embedding.embed_with_fallback(q_texts))
-                valid_q = []
-                for qd, (emb, err) in zip(question_data, q_emb_results):
-                    if emb is not None:
-                        qd["embedding"] = emb
-                        valid_q.append(qd)
-                fail_count = len(question_data) - len(valid_q)
-                if fail_count:
-                    logger.warning(
-                        "ingest.questions_partial total=%d ok=%d fail=%d",
-                        len(question_data),
-                        len(valid_q),
-                        fail_count,
-                    )
-                if valid_q:
-                    pgvector_store.upsert_chunk_questions(valid_q)
-                    logger.info(
-                        "ingest.questions_stored chunk=%d questions=%d ok=%d",
-                        len(chunks),
-                        len(question_data),
-                        len(valid_q),
-                    )
+                    if valid_q:
+                        pgvector_store.upsert_chunk_questions(valid_q)
+                        logger.info(
+                            "ingest.questions_stored chunk=%d questions=%d ok=%d",
+                            len(chunks),
+                            len(question_data),
+                            len(valid_q),
+                        )
 
             # 清理孤儿问题行：chunk 删除/历史 id 遗留后兜底
             pgvector_store.delete_orphan_chunk_questions(
