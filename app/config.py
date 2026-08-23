@@ -14,8 +14,8 @@ class Settings(BaseSettings):
     intent_model: str = "Qwen/Qwen3-8B"
     rewrite_model: str = "deepseek-ai/DeepSeek-R1-0528-Qwen3-8B"  # 复杂查询的子问题拆解/依赖规划（推理模型，仅复杂时动用）
     vision_model: str = "Qwen/Qwen3-VL-8B-Instruct"  # 图片理解（多模态 Qwen-VL 8B，遵守[类型]分类约定；原 Qwen2.5-VL-7B 已在硅基流动下架）
-    embedding_model: str = "Qwen/Qwen3-VL-Embedding-8B"
-    embedding_dimension: int = 4096
+    embedding_model: str = "Qwen/Qwen3-Embedding-8B"
+    embedding_dimension: int = 1024
     rerank_model: str = "BAAI/bge-reranker-v2-m3"
 
     # MiniMax (备选，chat_provider="minimax" 时启用)
@@ -89,13 +89,13 @@ class Settings(BaseSettings):
     embedding_cache_enabled: bool = True  # env: EMBEDDING_CACHE_ENABLED
 
     # Active embedding schema version used by retrieval SQL filters.
-    # 1 = baseline (c.text embedded directly); 2 = build_embedding_text() output
-    # (document/section prefix). hybrid_search adds AND embedding_version = :v
-    # so old chunks stay queryable across schema switches. Baseline ablation
-    # showed v2 introduces prefix noise that measurably hurts MRR — default v1.
-    # Re-running the v2 ablation: set CURRENT_EMBEDDING_VERSION=2 + run
-    # tools/reembed_v2.py --use-build-embedding-text --target-version 2.
-    current_embedding_version: int = 1  # env: CURRENT_EMBEDDING_VERSION
+    # 1 = 第一代 corpus（Qwen3-VL-Embedding-8B@4096，裸 text 输入，历史）；
+    # 2 = 第二代 corpus（Qwen3-Embedding-8B@1024，裸 text 输入，Baseline-2，
+    #     RAG v2 迁移后全量重插）；
+    # 3 = 第三代 corpus（表格归一化 retrieval_text 输入，Baseline-3+，见
+    #     docs/plans/2026-08-23-rag-v2-implementation-plan.md Task 15）。
+    # hybrid_search 加 AND embedding_version = :v 隔离不同代际。
+    current_embedding_version: int = 2  # env: CURRENT_EMBEDDING_VERSION
 
     # Retrieval cache (see app/core/cache.py::RetrievalCache)
     retrieval_cache_enabled: bool = True  # env: RETRIEVAL_CACHE_ENABLED
