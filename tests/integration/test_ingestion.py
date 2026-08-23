@@ -2,6 +2,8 @@
 
 from pathlib import Path
 
+from app.config import settings
+
 FIXTURE_DIR = Path(__file__).parent.parent / "fixtures" / "docs"
 
 
@@ -15,7 +17,7 @@ def test_ingest_creates_chunks_questions_and_relations(ingest_docs, integration_
     for c in chunks:
         assert c["embedding"] is not None  # fake 向量已落库
         assert c["search_text"]  # BM25 分词已生成
-        assert len(c["embedding"]) == 4096
+        assert len(c["embedding"]) == settings.embedding_dimension
 
     with get_db_ctx() as session:
         q_count = (

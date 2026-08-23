@@ -1,5 +1,7 @@
 """搜索层错误可见性：原始异常上抛、微秒边界写入。"""
 
+from app.config import settings
+
 
 def test_search_propagates_original_error(monkeypatch):
     """DB 出错时上抛原始异常，而不是 finally 里的 UnboundLocalError。"""
@@ -14,7 +16,7 @@ def test_search_propagates_original_error(monkeypatch):
 
     monkeypatch.setattr(pgvector_store, "get_session", lambda: BrokenSession())
     try:
-        pgvector_store.search(["test-kb"], [0.1] * 4096, can_read_all=True)
+        pgvector_store.search(["test-kb"], [0.1] * settings.embedding_dimension, can_read_all=True)
         raise AssertionError("应当抛异常")
     except RuntimeError as e:
         assert "db down" in str(e)
@@ -63,7 +65,7 @@ def test_add_chunks_microsecond_overflow(integration_db):
                     "document_id": "ovf-doc",
                     "kb_id": "test-kb",
                     "text": "溢出测试 %d" % i,
-                    "embedding": [0.1] * 4096,
+                    "embedding": [0.1] * settings.embedding_dimension,
                 }
                 for i in range(4)
             ]

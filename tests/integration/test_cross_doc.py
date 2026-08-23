@@ -1,5 +1,6 @@
 """跨文档关系测试：关系矩阵构建 + 三通道跳转。"""
 
+from app.config import settings
 from app.core.doc_relation import cross_doc_retriever
 from app.store import pgvector_store
 
@@ -133,7 +134,7 @@ async def test_channel3_discovers_semantically_related_doc(ingest_docs, monkeypa
     # 查询词与文档 3 无词法交集 → channel 1/2 不会发现它，只有 channel 3 能
     extras = await cross_doc_retriever.retrieve(
         "缩放点积公式推导",
-        [0.1] * 4096,
+        [0.1] * settings.embedding_dimension,
         ["test-kb"],
         initial,
         can_read_all=True,

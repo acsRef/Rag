@@ -107,6 +107,10 @@ def init_db():
             )
             conn.execute(text("ALTER TABLE chunks ADD COLUMN IF NOT EXISTS table_title TEXT"))
             conn.execute(text("ALTER TABLE chunks ADD COLUMN IF NOT EXISTS figure_title TEXT"))
+            # ── 表格感知摄入列（Issue #2 第一期；本期只入库，检索层二期消费）──
+            conn.execute(text("ALTER TABLE chunks ADD COLUMN IF NOT EXISTS chunk_type VARCHAR(16)"))
+            conn.execute(text("ALTER TABLE chunks ADD COLUMN IF NOT EXISTS table_headers TEXT[]"))
+            conn.execute(text("ALTER TABLE chunks ADD COLUMN IF NOT EXISTS table_meta JSONB"))
             # 索引：year + embedding_version 检索时 WHERE 过滤用
             conn.execute(text("CREATE INDEX IF NOT EXISTS idx_chunks_year ON chunks (year)"))
             conn.execute(
@@ -140,7 +144,7 @@ def init_db():
                     "id SERIAL PRIMARY KEY, "
                     "chunk_id VARCHAR(64) REFERENCES chunks(chunk_id) ON DELETE CASCADE, "
                     "question TEXT NOT NULL, "
-                    "embedding VECTOR(4096), "
+                    f"embedding VECTOR({settings.embedding_dimension}), "
                     "position INT DEFAULT 0)"
                 )
             )
@@ -286,7 +290,7 @@ class ChunkQuestion(Base):
         String(64), ForeignKey("chunks.chunk_id", ondelete="CASCADE"), nullable=False, index=True
     )
     question = Column(Text, nullable=False)
-    embedding = Column(Vector(4096))
+    embedding = Column(Vector(settings.embedding_dimension))
     position = Column(Integer, default=0)
 
 
@@ -303,7 +307,7 @@ class Chunk(Base):
     kb_id = Column(String(64), ForeignKey("knowledge_bases.id"), nullable=False, index=True)
     text = Column(Text, nullable=False)
     embedding_text = Column(Text, nullable=True)  # 增强文本：build_embedding_text() 输出
-    embedding = Column(Vector(4096))
+    embedding = Column(Vector(settings.embedding_dimension))
     title = Column(String(256), default="")
     summary = Column(Text, default="")
     questions = Column(Text, default="")
@@ -324,6 +328,10 @@ class Chunk(Base):
     embedding_version = Column(Integer, default=1, nullable=False, index=True)
     table_title = Column(Text, nullable=True)
     figure_title = Column(Text, nullable=True)
+    # Issue #2 第一期：表格 chunk 元数据（text=paragraph | table）；本期只入库
+    chunk_type = Column(String(16), nullable=True)
+    table_headers = Column(ARRAY(Text), nullable=True)
+    table_meta = Column(JSON, nullable=True)
 
 
 # ── Conversation ────────────────────────────────────────
@@ -429,7 +437,7 @@ class DocEmbedding(Base):
         nullable=False,
         index=True,
     )
-    embedding = Column(Vector(4096), nullable=True)
+    embedding = Column(Vector(settings.embedding_dimension), nullable=True)
     chunk_count = Column(Integer, default=0)
     updated_at = Column(DateTime, default=utc_now, onupdate=utc_now)
 

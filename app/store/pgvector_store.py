@@ -34,7 +34,9 @@ def add_chunks(chunks_data: list[dict]):
 
     chunks_data: [{chunk_id, document_id, kb_id, text, embedding, title,
                    summary, questions, section_path, search_text,
-                   content_hash, visibility, allowed_roles}]
+                   content_hash, visibility, allowed_roles,
+                   embedding_text, embedding_version, chunk_type,
+                   table_headers, table_meta}]
     """
     session = get_session()
     try:
@@ -52,6 +54,11 @@ def add_chunks(chunks_data: list[dict]):
                     questions=c.get("questions", ""),
                     section_path=c.get("section_path", ""),
                     search_text=c.get("search_text", ""),
+                    embedding_text=c.get("embedding_text"),
+                    embedding_version=c.get("embedding_version", 1),
+                    chunk_type=c.get("chunk_type"),
+                    table_headers=c.get("table_headers"),
+                    table_meta=c.get("table_meta"),
                     content_hash=c.get("content_hash", ""),
                     visibility=c.get("visibility", "public"),
                     allowed_roles=c.get("allowed_roles", []),
@@ -610,6 +617,9 @@ def replace_chunks(document_id: str, chunks_data: list[dict]):
                 page_end=c.get("page_end"),
                 table_title=c.get("table_title"),
                 figure_title=c.get("figure_title"),
+                chunk_type=c.get("chunk_type"),
+                table_headers=c.get("table_headers"),
+                table_meta=c.get("table_meta"),
             )
             if c["chunk_id"] in existing_ids:
                 session.query(Chunk).filter(Chunk.chunk_id == c["chunk_id"]).update(
