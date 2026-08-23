@@ -1,0 +1,54 @@
+{
+  "n": 15,
+  "n_scored": 14,
+  "mean_score_pct": 50.0,
+  "acc_ge2_pct": 50.0,
+  "by_category": {
+    "A": {
+      "n": 3,
+      "n_scored": 3,
+      "mean": 1.0,
+      "acc_ge2": 0.333
+    },
+    "B": {
+      "n": 2,
+      "n_scored": 2,
+      "mean": 0.0,
+      "acc_ge2": 0.0
+    },
+    "C": {
+      "n": 2,
+      "n_scored": 2,
+      "mean": 0.5,
+      "acc_ge2": 0.0
+    },
+    "D": {
+      "n": 2,
+      "n_scored": 1,
+      "mean": 3.0,
+      "acc_ge2": 1.0
+    },
+    "E": {
+      "n": 2,
+      "n_scored": 2,
+      "mean": 1.5,
+      "acc_ge2": 0.5
+    },
+    "H": {
+      "n": 2,
+      "n_scored": 2,
+      "mean": 2.5,
+      "acc_ge2": 1.0
+    },
+    "I": {
+      "n": 2,
+      "n_scored": 2,
+      "mean": 3.0,
+      "acc_ge2": 1.0
+    }
+  },
+  "errors": [
+    "Q26"
+  ],
+  "timestamp": "2026-08-23T13:03:00.840073+00:00"
+}

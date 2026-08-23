@@ -1,0 +1,9 @@
+{
+  "question_id": "Q01",
+  "category_prefix": "A",
+  "judge_score": 2,
+  "judge_reason": "数字和单位基本正确，但营业收入和同比下降率与参考答案有小幅偏差",
+  "rag_answer": "根据2023年年度报告，三一重工2023年实现营业总收入740.19亿元，同比下降8.44%[1]。",
+  "sources_count": 3,
+  "error": null
+}

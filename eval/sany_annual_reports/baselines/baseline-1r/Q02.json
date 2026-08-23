@@ -1,0 +1,9 @@
+{
+  "question_id": "Q02",
+  "category_prefix": "A",
+  "judge_score": 1,
+  "judge_reason": "数字单位换算错误（597.55亿元应为59.75亿元）",
+  "rag_answer": "根据检索内容，三一重工2024年归属于上市公司股东的净利润为5,975,451千元（即597.55亿元），同比变化率为31.98%[1]。",
+  "sources_count": 3,
+  "error": null
+}

@@ -1,0 +1,8 @@
+{
+  "question_id": "Q26",
+  "category_prefix": "D",
+  "judge_score": null,
+  "judge_reason": "RAG failed: ConnectionError: HTTPConnectionPool(host='localhost', port=8000): Read timed out.",
+  "rag_answer": "",
+  "error": "ConnectionError: HTTPConnectionPool(host='localhost', port=8000): Read timed out."
+}
