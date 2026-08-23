@@ -60,34 +60,43 @@ def main() -> int:
     args = parser.parse_args()
 
     target = args.target if args.target is not None else settings.embedding_dimension
+    # pgvector typmod 上限 16000；越界会在 ALTER 时才报错，提前拦截
+    if not 1 <= target <= 16000:
+        print(f"ERROR: --target {target} 越界（合法范围 1..16000）")
+        return 1
     fatal = False
 
-    with engine.begin() as conn:
-        for table in TABLES:
-            cur_type = get_column_type(conn, table)
-            cur_dim = parse_vector_type(cur_type)
-            rows = get_row_count(conn, table)
-            status = "SKIP(已是目标维度)" if cur_dim == target else "ALTER"
-            print(f"{table}: type={cur_type} rows={rows} -> {status}")
+    try:
+        with engine.begin() as conn:
+            conn.execute(text("SET LOCAL lock_timeout = '10s'"))
+            for table in TABLES:
+                cur_type = get_column_type(conn, table)
+                cur_dim = parse_vector_type(cur_type)
+                rows = get_row_count(conn, table)
+                status = "SKIP(已是目标维度)" if cur_dim == target else "ALTER"
+                print(f"{table}: type={cur_type} rows={rows} -> {status}")
 
-            if cur_dim is None:
-                print(f"  ABORT: {table}.embedding 不是 vector 类型（{cur_type}）")
-                fatal = True
-                continue
-            if cur_dim == target:
-                continue
-            if rows > 0:
-                print(f"  ABORT: {table} 有 {rows} 行——先跑 tools/reset_rag_corpus.py 清库")
-                fatal = True
-                continue
-            if args.apply:
-                conn.execute(
-                    text(f'ALTER TABLE "{table}" ALTER COLUMN embedding TYPE vector({target})')
-                )
-                print(f"  ALTERED -> vector({target})")
-
-    if fatal:
-        print("\n存在 ABORT 项，未完成全部迁移")
+                if cur_dim is None:
+                    print(f"  ABORT: {table}.embedding 不是 vector 类型（{cur_type}）")
+                    fatal = True
+                    continue
+                if cur_dim == target:
+                    continue
+                if rows > 0:
+                    print(f"  ABORT: {table} 有 {rows} 行——先跑 tools/reset_rag_corpus.py 清库")
+                    fatal = True
+                    continue
+                if args.apply:
+                    conn.execute(
+                        text(f'ALTER TABLE "{table}" ALTER COLUMN embedding TYPE vector({target})')
+                    )
+                    print(f"  ALTERED -> vector({target})")
+            if fatal:
+                # begin() 块正常退出会提交——必须抛异常让整个事务回滚，
+                # 避免"部分表已 ALTER、部分 ABORT"的混合维度状态被持久化
+                raise RuntimeError("存在 ABORT 项——事务回滚，未执行任何 ALTER")
+    except RuntimeError as e:
+        print(f"\n{e}")
         return 1
     if not args.apply:
         print("\n(dry-run 完成；加 --apply 执行)")
