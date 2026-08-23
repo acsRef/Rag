@@ -90,12 +90,11 @@ class Settings(BaseSettings):
 
     # Active embedding schema version used by retrieval SQL filters.
     # 1 = 第一代 corpus（Qwen3-VL-Embedding-8B@4096，裸 text 输入，历史）；
-    # 2 = 第二代 corpus（Qwen3-Embedding-8B@1024，裸 text 输入，Baseline-2，
-    #     RAG v2 迁移后全量重插）；
-    # 3 = 第三代 corpus（表格归一化 retrieval_text 输入，Baseline-3+，见
-    #     docs/plans/2026-08-23-rag-v2-implementation-plan.md Task 15）。
+    # 2 = 第二代 corpus（Qwen3-Embedding-8B@1024，裸 text 输入，Baseline-2）；
+    # 3 = 第三代 corpus（Qwen3-Embedding-8B@1024，表格归一化 retrieval_text 输入，
+    #     Baseline-3+，见 docs/plans/2026-08-23-rag-v2-implementation-plan.md Task 15）。
     # hybrid_search 加 AND embedding_version = :v 隔离不同代际。
-    current_embedding_version: int = 2  # env: CURRENT_EMBEDDING_VERSION
+    current_embedding_version: int = 3  # env: CURRENT_EMBEDDING_VERSION
 
     # Retrieval cache (see app/core/cache.py::RetrievalCache)
     retrieval_cache_enabled: bool = True  # env: RETRIEVAL_CACHE_ENABLED

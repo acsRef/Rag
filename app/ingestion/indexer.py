@@ -19,6 +19,7 @@ from app.ingestion.chunker import Chunk, text_chunker
 from app.ingestion.cleaner import document_cleaner
 from app.ingestion.embedding_text import build_embedding_text  # noqa: F401  # 保留供 ablation
 from app.ingestion.metadata import chunk_metadata_generator
+from app.ingestion.retrieval_text import build_retrieval_text
 from app.ingestion.structurer import document_structurer
 from app.llm.embedding import sf_embedding
 from app.store import pgvector_store
@@ -295,7 +296,9 @@ class DocumentIndexer:
             # 让 recall@10 1.000 → 0.984 / MRR 0.876 → 0.824
             # （docs/plans/2026-08-23-day2-morning-done.md），回滚 chunk-only embedding。
             # build_embedding_text + EMBEDDING_TEXT_VERSION 保留供未来 prefix 重新设计后启用。
-            _embed_inputs = [c.text for c in new_chunks]
+            # 检索通道输入：表格 chunk 用归一化文本，其余原文（spec §5.1 双表示）
+            _rt_map = {id(c): build_retrieval_text(c.text) for c in new_chunks}
+            _embed_inputs = [_rt_map[id(c)].text for c in new_chunks]
             _embed_fut = _INDEX_POOL.submit(
                 lambda: asyncio.run(sf_embedding.embed_with_fallback(_embed_inputs))
             )
@@ -318,6 +321,9 @@ class DocumentIndexer:
             seen_chunk_ids[base_id] = n + 1
             chunk_id = base_id if n == 0 else f"{base_id}_{n}"
 
+            # 复用 chunk 没有 rt（新 chunk 才有）；is_reused 走原 text 兜底
+            rt = _rt_map.get(id(c)) if not is_reused else None
+
             if is_reused:
                 old = old_chunks_map[ch]
                 embedding = old["embedding"]
@@ -333,7 +339,9 @@ class DocumentIndexer:
                     embedded_count += 1
                 elif err:
                     error_messages.append(err)
-                search_text = tokenize(c.text, stopwords=True)
+                # BM25 词源同源于 retrieval 通道（spec §5.1 双表示）：
+                # 表格 chunk 用归一化文本，纯文本 chunk 用原文
+                search_text = tokenize(rt.text if rt else c.text, stopwords=True)
 
             # Skip chunks whose embedding permanently failed — they would be invisible
             # to vector search and storing NULL would cause pgvector issues.
@@ -348,13 +356,13 @@ class DocumentIndexer:
                     "kb_id": kb_id,
                     "text": c.text,
                     "embedding": embedding,
-                    # embedding_text 字段保留（schema 已加列）——当前存 c.text 作为
-                    # "实际用于 embedding 的输入"的 audit。ablation 验证 build_embedding_text()
-                    # 加 prefix 反而恶化指标，所以 production 走 c.text。
-                    "embedding_text": c.text,
+                    # 实际用于 embedding 的输入——表格 chunk 用归一化文本，
+                    # 其余原文。embedding 与 BM25 共用同一 retrieval 通道
+                    # （spec §5.1 双表示）。
+                    "embedding_text": rt.text if rt else c.text,
                     # 新摄入的 chunk 标记为当前 corpus 代际——hybrid_search 按
-                    # settings.current_embedding_version 过滤，写死 1 会让新 chunk
-                    # 在代际推进后对所有检索不可见（Task 11 迁移时踩中）
+                    # settings.current_embedding_version 过滤，写死字面常量会让新 chunk
+                    # 在代际推进后对所有检索不可见（Phase C 不变量）。
                     "embedding_version": settings.current_embedding_version,
                     # 复用 chunk 优先保留旧 LLM 元数据（chunker 的 section 标题不得覆盖之）
                     "title": (is_reused and old.get("title")) or c.title or "",
@@ -367,6 +375,10 @@ class DocumentIndexer:
                     "content_hash": ch,
                     "visibility": visibility,
                     "allowed_roles": allowed_roles or [],
+                    # Issue #2 第一期：表格 chunk 元数据列（spec §5.1）
+                    "chunk_type": rt.chunk_type if rt else None,
+                    "table_headers": rt.tables[0]["headers"] if rt and rt.tables else None,
+                    "table_meta": rt.tables if rt and rt.tables else None,
                 }
             )
             # questions 与 chunk_id 在构造点绑定——后续不再依赖 zip(chunks, chunks_data)

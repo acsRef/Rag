@@ -90,6 +90,12 @@ def get_chunks_by_document(document_id: str) -> list[dict]:
                 "content_hash": r.content_hash,
                 "visibility": r.visibility,
                 "allowed_roles": r.allowed_roles,
+                # Issue #2 第一期：表格元数据透出（spec §5.1）
+                "embedding_text": r.embedding_text,
+                "embedding_version": r.embedding_version,
+                "chunk_type": r.chunk_type,
+                "table_headers": r.table_headers,
+                "table_meta": r.table_meta,
             }
             for r in rows
         ]

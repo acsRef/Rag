@@ -21,9 +21,10 @@ from typing import Any
 
 from app.config import settings
 
-# embedding 输入表示版本：1 = 原始 chunk.text；表格归一化检索表示上线时 bump 到 2。
+# embedding 输入表示版本：
+# 1 = 原始 chunk.text；2 = 表格归一化 retrieval_text 表示（Issue #2 第一期，Baseline-3+）。
 # 参与 EmbeddingCache key——同 model/dim 下输入表示变更必须使旧缓存失效。
-EMBEDDING_INPUT_VERSION = 1
+EMBEDDING_INPUT_VERSION = 2
 
 
 class EmbeddingCache:
