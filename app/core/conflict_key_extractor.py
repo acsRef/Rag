@@ -28,11 +28,8 @@ import re
 from app.core.conflict_key import DEFAULT_SCOPE, UNKNOWN, ConflictKey
 from app.models.schemas import RetrievedChunk
 
-
 # 单位模式（值之后的字符串）
-_UNIT_PATTERN = re.compile(
-    r"^(亿元|万元|百万元|千万|百万|十亿|万亿|元|%|个百分点|股|万股|亿股)"
-)
+_UNIT_PATTERN = re.compile(r"^(亿元|万元|百万元|千万|百万|十亿|万亿|元|%|个百分点|股|万股|亿股)")
 
 
 # Metric 模式集合 — 每个模式捕获 1 个 group

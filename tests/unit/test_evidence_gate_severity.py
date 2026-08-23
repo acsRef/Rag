@@ -20,7 +20,6 @@ from app.core.evidence import (
     evidence_gate_should_refuse,
 )
 
-
 # ── Fixtures ────────────────────────────────────────────────────────────
 
 
@@ -59,6 +58,7 @@ def _make_value_mv() -> MetricValue:
 def _make_result(conflicts: list, coverage: float = 1.0):
     """构造 EvidenceResult 供 evidence_gate_should_refuse 测试."""
     from app.core.evidence import EvidenceResult
+
     return EvidenceResult(
         coverage=coverage,
         temporal_consistent=_is_temporally_consistent(conflicts),
@@ -133,6 +133,7 @@ def test_low_severity_does_not_trigger_refuse():
 def test_low_coverage_still_triggers_refuse():
     """Coverage 检查仍然工作：coverage < threshold → refuse."""
     from app.core.evidence import EvidenceResult
+
     result = EvidenceResult(
         coverage=0.2,
         temporal_consistent=True,  # 无 conflict
