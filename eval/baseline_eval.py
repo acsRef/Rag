@@ -44,14 +44,18 @@ def login() -> str:
 
 
 def call_rag(query: str, token: str, kb_id: str) -> dict:
-    """与 eval_sany.call_rag 相同的 SSE 解析（独立实现避免拉入其全局状态）。"""
+    """与 eval_sany.call_rag 相同的 SSE 解析（独立实现避免拉入其全局状态）。
+
+    timeout=300：复杂题（三年度对比）会触发 rewrite 慢路径 + 长生成，
+    180s 实测会在 Baseline-1R 掐断 Q17/Q33——测量工具时限必须宽于被测系统。
+    """
     body = {"query": query, "knowledge_base_ids": [kb_id]}
     resp = requests.post(
         f"{BASE_URL}/api/v1/chat/stream",
         headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
         json=body,
         stream=True,
-        timeout=180,
+        timeout=300,
     )
     resp.raise_for_status()
     answer_parts: list[str] = []
