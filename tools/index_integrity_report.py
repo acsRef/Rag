@@ -105,6 +105,25 @@ def main() -> int:
         else:
             print("[INFO] table chunks: SKIP（chunks.chunk_type 列不存在——旧库未跑 init_db）")
 
+        # question 覆盖率（仅观测，不硬断言）：metadata 批处理降级后，
+        # 失败批的问题为空但 chunk 保留——用覆盖率暴露降级的真实规模。
+        n_qc = conn.execute(
+            text("SELECT count(DISTINCT chunk_id) FROM chunk_questions")
+        ).scalar_one()
+        qc_pct = 100 * n_qc / n_chunks if n_chunks else 0.0
+        print(f"[INFO] question 覆盖: {n_qc}/{n_chunks} chunks ({qc_pct:.1f}%)")
+        doc_rows = conn.execute(
+            text(
+                "SELECT c.document_id, count(DISTINCT q.chunk_id) AS covered, "
+                "count(c.chunk_id) AS total, max(d.filename) AS filename "
+                "FROM chunks c LEFT JOIN chunk_questions q ON q.chunk_id = c.chunk_id "
+                "GROUP BY c.document_id ORDER BY c.document_id"
+            )
+        ).fetchall()
+        for r in doc_rows:
+            pct = 100 * r.covered / r.total if r.total else 0.0
+            print(f"[INFO]   doc={r.document_id[:8]} {r.filename}: {r.covered}/{r.total} ({pct:.1f}%)")
+
         n_q = conn.execute(text("SELECT count(*) FROM chunk_questions")).scalar_one()
         if args.expect_questions == "zero":
             check("chunk_questions == 0（硬断言）", n_q, n_q == 0)
