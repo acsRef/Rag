@@ -23,6 +23,20 @@ from sqlalchemy import text  # noqa: E402
 from app.config import settings  # noqa: E402
 from app.store.db import engine  # noqa: E402
 
+# 每文档 question 覆盖率（观测用）。抽成模块常量供离线单测在内存 sqlite 里
+# 真实执行——历史上曾漏写 JOIN documents 却 SELECT max(d.filename)，直到
+# re-index 后跑 gate 才炸出 psycopg2 UndefinedTable（spec review on eeff54f）。
+# total 同样必须 DISTINCT：LEFT JOIN chunk_questions 会按问题数复制 chunk 行，
+# 裸 count() 会把 total 抬高（回归测试用多问题 chunk 锁定这一点）。
+# 只用标准 SQL（LEFT JOIN / COUNT DISTINCT / MAX / GROUP BY），sqlite 可复现。
+DOC_COVERAGE_SQL = (
+    "SELECT c.document_id, count(DISTINCT q.chunk_id) AS covered, "
+    "count(DISTINCT c.chunk_id) AS total, max(d.filename) AS filename "
+    "FROM chunks c LEFT JOIN chunk_questions q ON q.chunk_id = c.chunk_id "
+    "LEFT JOIN documents d ON d.document_id = c.document_id "
+    "GROUP BY c.document_id ORDER BY c.document_id"
+)
+
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
@@ -112,14 +126,7 @@ def main() -> int:
         ).scalar_one()
         qc_pct = 100 * n_qc / n_chunks if n_chunks else 0.0
         print(f"[INFO] question 覆盖: {n_qc}/{n_chunks} chunks ({qc_pct:.1f}%)")
-        doc_rows = conn.execute(
-            text(
-                "SELECT c.document_id, count(DISTINCT q.chunk_id) AS covered, "
-                "count(c.chunk_id) AS total, max(d.filename) AS filename "
-                "FROM chunks c LEFT JOIN chunk_questions q ON q.chunk_id = c.chunk_id "
-                "GROUP BY c.document_id ORDER BY c.document_id"
-            )
-        ).fetchall()
+        doc_rows = conn.execute(text(DOC_COVERAGE_SQL)).fetchall()
         for r in doc_rows:
             pct = 100 * r.covered / r.total if r.total else 0.0
             print(f"[INFO]   doc={r.document_id[:8]} {r.filename}: {r.covered}/{r.total} ({pct:.1f}%)")

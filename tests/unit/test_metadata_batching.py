@@ -206,3 +206,24 @@ def test_malformed_json_retried_then_degraded(monkeypatch, caplog):
     assert result is chunks and len(result) == 5
     assert all(c.questions == [] for c in chunks)
     assert "ingest.metadata_batch_failed" in caplog.text
+
+
+def test_apply_response_crash_still_degrades(monkeypatch):
+    """_apply_response 内部炸（病态深嵌套 JSON 触发 RecursionError）也不得击穿
+    generate() 的「绝不上抛」保证：重试满后全批空元数据、块一个不少。
+
+    回归背景（spec review on eeff54f）：_apply_response 曾在 try/except 的
+    else 分支里，解析异常逃过 except 直接上抛。注入点用真实 robust_json_parse
+    对深嵌套输入必现 RecursionError，不 mock 解析函数本身。
+    """
+    deep_nesting = "[" * 5000 + "]" * 5000  # robust_json_parse 必现 RecursionError
+    chunks = _mk_chunks(5)
+    fake, sleeps = _install(monkeypatch, [deep_nesting] * 3)
+
+    result = GEN.generate(chunks)  # 修复前此处直接 RecursionError 上抛
+
+    assert len(fake.prompts) == 3, "解析崩溃按可重试故障处理：满 3 次尝试"
+    assert sleeps == [0, 1]
+    assert result is chunks and len(result) == 5, "块一个不少"
+    for c in chunks:
+        assert c.title == "" and c.summary == "" and c.questions == []

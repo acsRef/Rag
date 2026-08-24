@@ -88,6 +88,10 @@ class ChunkMetadataGenerator:
         for attempt in range(_BATCH_MAX_RETRIES + 1):
             try:
                 resp = self._call_llm_once(batch)
+                # 解析+回填也在保护区：robust_json_parse 遇病态深嵌套可抛
+                # RecursionError，旧结构里它在 else 分支逃过了 except——
+                # 会击穿 generate() 的「绝不上抛」保证。
+                hit = self._apply_response(resp, batch)
             except PermanentError as e:
                 # 4xx/鉴权类故障重试无意义——不烧完尝试次数，立即降级本批
                 last_err = f"permanent: {e}"
@@ -95,7 +99,6 @@ class ChunkMetadataGenerator:
             except Exception as e:  # TemporaryError / CircuitOpen / 未知名——均可重试
                 last_err = f"{type(e).__name__}: {e}"
             else:
-                hit = self._apply_response(resp, batch)
                 if hit:
                     logger.info(
                         "ingest.metadata_batch_ok batch=%d chunks=%d hit=%d",
