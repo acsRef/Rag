@@ -10,6 +10,8 @@
 
 ## 已完成
 
+- [2026-08-24-baseline-3-locked](2026-08-24-baseline-3-locked.md) — RAG v2 Step 2A 锁定：表格感知摄入（表格双表示 + chunk_type/table_headers/table_meta 元数据列，1340 chunks @v3，channel OFF）；15-Q gate 两轮 ±50pp 单题翻转证明无统计力，升级 65 题正式 benchmark——overall acc(≥2) **73.8%**（mean 2.23/3，覆盖 65/65），六条 lock 准则全 PASS；A 类 80%（n=10）坐实增益，B 类 66.7% 证伪 run2 塌方，C 类 50% 留作后续改进
+
 - [2026-08-23-baseline-2-locked](2026-08-23-baseline-2-locked.md) — RAG v2 Step 1：embedding 配置迁移（Qwen3-VL-Embedding-8B@4096 → Qwen3-Embedding-8B@1024），清库+迁维+重摄 1381 chunks @1024 代际 v2，15 题 verified acc(≥2)=66.7%（+16.7pp vs Baseline-1R），mean 73.3%；过程含 2 个计划外 bug 修复（indexer 写死 embedding_version=1 让新 chunk 对检索不可见 / integration conftest 不锁 question_channel_enabled）；完整性断言穷举通过
 
 - [2026-08-23-baseline-1r-replay](2026-08-23-baseline-1r-replay.md) — RAG v2 Phase B：Baseline-1R replay（15 verified × locked evaluator v1 × 旧配置），overall acc(≥2)=50.0%（14/15 评分覆盖，Q26 上游流式挂起非能力缺陷），单一唯一同口径参照点
