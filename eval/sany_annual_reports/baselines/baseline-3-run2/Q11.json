@@ -1,0 +1,9 @@
+{
+  "question_id": "Q11",
+  "category_prefix": "B",
+  "judge_score": 1,
+  "judge_reason": "单位错误，应为千元而非元",
+  "rag_answer": "```根据检索内容，三一重工年报中“主要会计数据”表的金额单位为人民币元。",
+  "sources_count": 3,
+  "error": null
+}

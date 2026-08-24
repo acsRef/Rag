@@ -1,0 +1,9 @@
+{
+  "question_id": "Q12",
+  "category_prefix": "B",
+  "judge_score": 3,
+  "judge_reason": "回答包含核心信息，关键数字和单位正确，四舍五入合理",
+  "rag_answer": "根据Source4中的主要会计数据，截至2025年末，三一重工总资产为173,299,138千元人民币，即1,732.99亿元人民币。",
+  "sources_count": 5,
+  "error": null
+}

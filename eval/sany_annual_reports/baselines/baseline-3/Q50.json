@@ -1,0 +1,9 @@
+{
+  "question_id": "Q50",
+  "category_prefix": "H",
+  "judge_score": 3,
+  "judge_reason": "回答正确指出了收入下降的事实，数字精确且符合参考答案",
+  "rag_answer": "根据检索内容，2024年三一重工混凝土机械收入同比增长率为-6.18%[1]。",
+  "sources_count": 2,
+  "error": null
+}

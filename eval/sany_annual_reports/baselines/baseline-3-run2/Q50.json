@@ -1,0 +1,9 @@
+{
+  "question_id": "Q50",
+  "category_prefix": "H",
+  "judge_score": 3,
+  "judge_reason": "回答正确指出了收入下降6.18%，与参考答案一致",
+  "rag_answer": "```根据文档，2024年三一重工混凝土机械收入同比下降了6.18%。文档显示，混凝土机械营业收入为14,368,034亿元，同比增长率为-6.18%[1]。",
+  "sources_count": 2,
+  "error": null
+}
