@@ -1,0 +1,9 @@
+{
+  "question_id": "Q50",
+  "category_prefix": "H",
+  "judge_score": 3,
+  "judge_reason": "回答正确指出了收入下降，关键数字和单位正确",
+  "rag_answer": "根据Source3中的数据，2024年三一重工混凝土机械的营业收入同比增长了**-6.18%**[3]。",
+  "sources_count": 5,
+  "error": null
+}
