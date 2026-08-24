@@ -22,7 +22,7 @@ def _install_stubs(monkeypatch, rec: _Recorder):
     from app.ingestion import indexer as idx_mod
     from app.llm.embedding import sf_embedding
 
-    def fake_generate(chunks):
+    def fake_generate(chunks, **kwargs):  # generate 现接受 doc_label kwarg
         for c in chunks:
             c.title = "标题"
             c.summary = "摘要"

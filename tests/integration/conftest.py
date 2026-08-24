@@ -138,7 +138,7 @@ def fake_llm_stack(monkeypatch):
         # 恒等排序的伪分数：极差 > 0.001，让 retrieval 的"无区分度跳过"分支不触发
         return [{"index": i, "relevance_score": 1.0 - i * 0.01} for i in range(len(texts))]
 
-    def fake_generate(chunks):
+    def fake_generate(chunks, **kwargs):  # generate 现接受 doc_label kwarg
         for i, c in enumerate(chunks):
             head = c.text[:20].replace("\n", " ")
             c.title = "标题-%d-%s" % (i, head)

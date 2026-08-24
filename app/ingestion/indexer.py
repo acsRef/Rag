@@ -290,7 +290,14 @@ class DocumentIndexer:
 
         if new_chunks:
             # Parallelize: metadata generation and chunk embedding are independent
-            _meta_fut = _INDEX_POOL.submit(chunk_metadata_generator.generate, new_chunks)
+            # doc_label：metadata 批级日志的文档归属（线程池并发摄入时日志交错，
+            # 无归属字段则无法定位哪份文档丢了问题）。沿用 ingest.* 的 doc= 约定
+            # （u_tag），补文件名便于人工对账。
+            _meta_fut = _INDEX_POOL.submit(
+                chunk_metadata_generator.generate,
+                new_chunks,
+                doc_label=f"{u_tag}:{filename}",
+            )
             # 生产路径：embed(c.text)——保留 build_embedding_text 工具但当前不启用。
             # baseline-ablation 实证 build_embedding_text(c, doc) 加 document/section 前缀
             # 让 recall@10 1.000 → 0.984 / MRR 0.876 → 0.824

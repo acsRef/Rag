@@ -23,7 +23,7 @@ import re
 
 from app.ingestion import metadata as md_mod
 from app.ingestion.chunker import Chunk
-from app.llm.base import TemporaryError
+from app.llm.base import PermanentError, TemporaryError
 
 GEN = md_mod.chunk_metadata_generator
 
@@ -227,3 +227,56 @@ def test_apply_response_crash_still_degrades(monkeypatch):
     assert result is chunks and len(result) == 5, "块一个不少"
     for c in chunks:
         assert c.title == "" and c.summary == "" and c.questions == []
+
+
+def test_permanent_error_degrades_without_retrying(monkeypatch, caplog):
+    """永久错误（4xx/鉴权）不消耗重试预算：1 次调用即降级本批。
+
+    锁定 metadata.py 的 PermanentError 短路契约：break 在退避之前，
+    不烧剩余尝试、不退避，警告 attempt=1。
+    """
+    chunks = _mk_chunks(5)
+    fake, sleeps = _install(monkeypatch, [PermanentError("模拟 401 鉴权失败")])
+
+    with caplog.at_level(logging.WARNING, logger="app.ingestion.metadata"):
+        result = GEN.generate(chunks)
+
+    assert len(fake.prompts) == 1, "永久错误必须短路：仅 1 次调用，不得重试"
+    assert sleeps == [], "break 在 _backoff_sleep 之前——永久错误路径零退避"
+    assert result is chunks and len(result) == 5, "块一个不少"
+    for c in chunks:
+        assert c.title == "" and c.summary == "" and c.questions == []
+    assert "ingest.metadata_batch_failed" in caplog.text
+    assert "attempt=1" in caplog.text
+    assert "permanent" in caplog.text
+
+
+def test_doc_label_threads_into_batch_logs(monkeypatch, caplog):
+    """doc_label 归属：ok/failed 两类批日志都带 doc= 字段；缺省时字段省略。"""
+    # 失败批：3 次尝试全败 → failed 日志带 doc=
+    chunks = _mk_chunks(10)
+    fake, _ = _install(monkeypatch, [TemporaryError("模拟超时")] * 3)
+    with caplog.at_level(logging.WARNING, logger="app.ingestion.metadata"):
+        GEN.generate(chunks, doc_label="abc12345:年报.pdf")
+    failed_rec = next(r for r in caplog.records if r.message.startswith("ingest.metadata_batch_failed"))
+    assert "doc=abc12345:年报.pdf" in failed_rec.message
+
+    # 成功批：ok 日志同样带 doc=（复用新 fake，避免 caplog 混入上一段）
+    caplog.clear()
+    chunks2 = _mk_chunks(10)
+    fake2, _ = _install(monkeypatch, [_full_batch_resp(10)])
+    with caplog.at_level(logging.INFO, logger="app.ingestion.metadata"):
+        GEN.generate(chunks2, doc_label="def67890:手册.docx")
+    ok_rec = next(r for r in caplog.records if r.message.startswith("ingest.metadata_batch_ok"))
+    assert "doc=def67890:手册.docx" in ok_rec.message
+
+    # 缺省（向后兼容）：不带 doc_label 调用 → 日志不含 doc= 字段
+    caplog.clear()
+    chunks3 = _mk_chunks(10)
+    _install(monkeypatch, [TemporaryError("模拟超时")] * 3)
+    with caplog.at_level(logging.WARNING, logger="app.ingestion.metadata"):
+        GEN.generate(chunks3)
+    failed_rec3 = next(
+        r for r in caplog.records if r.message.startswith("ingest.metadata_batch_failed")
+    )
+    assert "doc=" not in failed_rec3.message

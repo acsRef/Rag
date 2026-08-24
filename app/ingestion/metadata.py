@@ -68,20 +68,25 @@ def _backoff_sleep(attempt: int) -> None:
 class ChunkMetadataGenerator:
     """Calls MiniMax once per batch of chunks to generate title/summary/questions."""
 
-    def generate(self, chunks: list[Chunk]) -> list[Chunk]:
+    def generate(self, chunks: list[Chunk], *, doc_label: str = "") -> list[Chunk]:
         """Fill title/summary/questions for all chunks, batch by batch.
 
         绝不上抛、绝不丢块：任何一批在全部尝试后仍失败，只记录
         ``ingest.metadata_batch_failed`` 并让该批保持空元数据继续走流程。
+        doc_label（可选）：文档标识，由调用方传入并随批级日志输出——
+        generate 跑在共享线程池上，并发摄入的批次日志互相交错，没有它
+        出事时只能靠时间戳考古定位是哪份文档丢了问题。
         """
         if not chunks:
             return chunks
         for batch_no, start in enumerate(range(0, len(chunks), _BATCH_SIZE)):
             batch = chunks[start : start + _BATCH_SIZE]
-            self._generate_batch(batch, batch_no)
+            self._generate_batch(batch, batch_no, doc_label=doc_label)
         return chunks
 
-    def _generate_batch(self, batch: list[Chunk], batch_no: int) -> None:
+    def _generate_batch(
+        self, batch: list[Chunk], batch_no: int, *, doc_label: str = ""
+    ) -> None:
         """Run one batch: up to 1 + _BATCH_MAX_RETRIES attempts, then degrade in place."""
         last_err = ""
         attempt = 0
@@ -101,7 +106,8 @@ class ChunkMetadataGenerator:
             else:
                 if hit:
                     logger.info(
-                        "ingest.metadata_batch_ok batch=%d chunks=%d hit=%d",
+                        "ingest.metadata_batch_ok%s batch=%d chunks=%d hit=%d",
+                        f" doc={doc_label}" if doc_label else "",
                         batch_no,
                         len(batch),
                         hit,
@@ -112,7 +118,8 @@ class ChunkMetadataGenerator:
             if attempt < _BATCH_MAX_RETRIES:
                 _backoff_sleep(attempt)
         logger.warning(
-            "ingest.metadata_batch_failed batch=%d chunks=%d attempt=%d err=%s",
+            "ingest.metadata_batch_failed%s batch=%d chunks=%d attempt=%d err=%s",
+            f" doc={doc_label}" if doc_label else "",
             batch_no,
             len(batch),
             attempt + 1,
