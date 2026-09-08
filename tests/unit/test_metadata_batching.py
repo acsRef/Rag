@@ -258,7 +258,9 @@ def test_doc_label_threads_into_batch_logs(monkeypatch, caplog):
     fake, _ = _install(monkeypatch, [TemporaryError("模拟超时")] * 3)
     with caplog.at_level(logging.WARNING, logger="app.ingestion.metadata"):
         GEN.generate(chunks, doc_label="abc12345:年报.pdf")
-    failed_rec = next(r for r in caplog.records if r.message.startswith("ingest.metadata_batch_failed"))
+    failed_rec = next(
+        r for r in caplog.records if r.message.startswith("ingest.metadata_batch_failed")
+    )
     assert "doc=abc12345:年报.pdf" in failed_rec.message
 
     # 成功批：ok 日志同样带 doc=（复用新 fake，避免 caplog 混入上一段）

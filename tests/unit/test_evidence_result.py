@@ -142,9 +142,7 @@ def test_build_evidence_result_temporal_consistent_false_on_conflicts():
     """
     from app.core.evidence import Conflict
 
-    c = Conflict(
-        metric="x", values=[], conflict_type="value_mismatch", severity="high"
-    )
+    c = Conflict(metric="x", values=[], conflict_type="value_mismatch", severity="high")
     table = EvidenceTable(query="q", slots=[_slot("s", {"d1", "d2"})], conflicts=[c])
     r = build_evidence_result(table)
     assert r.temporal_consistent is False
@@ -154,9 +152,7 @@ def test_build_evidence_result_low_severity_conflict_still_consistent():
     """Phase 4-C: low severity (year_mismatch) 不让 temporal_consistent=False."""
     from app.core.evidence import Conflict
 
-    c = Conflict(
-        metric="x", values=[], conflict_type="year_mismatch", severity="low"
-    )
+    c = Conflict(metric="x", values=[], conflict_type="year_mismatch", severity="low")
     table = EvidenceTable(query="q", slots=[_slot("s", {"d1", "d2"})], conflicts=[c])
     r = build_evidence_result(table)
     assert r.temporal_consistent is True

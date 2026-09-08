@@ -8,23 +8,32 @@
 
 import json
 import sys
+from pathlib import Path
 
 sys.path.insert(0, ".")
+from gold import iter_questions
+
 from eval.deterministic_numeric import summarize, verify_number_claims
 
 # 加载 PDF evidence
 pdf = {
-    2025: open("eval/sany_annual_reports/三一重工_2025年年度报告.pymupdf4llm.md", encoding="utf-8").read(),
-    2024: open("eval/sany_annual_reports/三一重工_2024年年度报告.pymupdf4llm.md", encoding="utf-8").read(),
+    2025: Path("eval/sany_annual_reports/三一重工_2025年年度报告.pymupdf4llm.md").read_text(
+        encoding="utf-8"
+    ),
+    2024: Path("eval/sany_annual_reports/三一重工_2024年年度报告.pymupdf4llm.md").read_text(
+        encoding="utf-8"
+    ),
 }
 
 # Q26/Q33/Q55 的 gold_evidence 从 testset 取
-ds = json.load(open("eval/sany_annual_reports/rag_testset.json", encoding="utf-8"))
-by_id = {q["id"]: q for q in ds["题目"]}
+with open("eval/sany_annual_reports/rag_testset.json", encoding="utf-8") as f:
+    ds = json.load(f)
+by_id = {q.id: q for q in iter_questions()}
 
 
 def run_case(qid, extra_evidence=""):
-    cal = json.load(open(f"eval/judge_calibration_v3/{qid}.json", encoding="utf-8"))
+    with open(f"eval/judge_calibration_v3/{qid}.json", encoding="utf-8") as f:
+        cal = json.load(f)
     answer = cal["generation_answer"]
     ev_snippets = [e["snippet"] for e in by_id[qid].get("gold_evidence", [])]
     if extra_evidence:
@@ -62,7 +71,8 @@ q33_evidence_2025 = (
     "|主要会计数据|2025年|202|4年|本期比上"
     " |归属于上市公司股东的净利润|8,408,057|5,955,567|5,975,451|41.18|4,527,451|"
 )
-cal33 = json.load(open("eval/judge_calibration_v3/Q33.json", encoding="utf-8"))
+with open("eval/judge_calibration_v3/Q33.json", encoding="utf-8") as f:
+    cal33 = json.load(f)
 verdicts = verify_number_claims(cal33["generation_answer"], [q33_evidence_2025])
 print("=== Q33 (semantic-error boundary case) ===")
 print(f"  {summarize(verdicts)}")

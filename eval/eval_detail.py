@@ -19,6 +19,7 @@ from pathlib import Path
 
 import requests
 from dotenv import load_dotenv
+from gold import iter_questions
 
 load_dotenv(Path(__file__).parent / ".env")
 
@@ -57,11 +58,11 @@ JUDGE_PROMPT = """你是一个严格的RAG评测裁判。
 def call_judge(q_data: dict, rag_answer: str) -> dict:
     api_key = os.environ.get("SILICONFLOW_API_KEY", "")
     prompt = JUDGE_PROMPT.format(
-        question=q_data["问题"],
-        category=q_data["类别"],
-        reference=q_data["参考答案"][:500],
-        source=q_data["答案依据"][:200],
-        pitfall=q_data["考察的RAG易错点"][:200],
+        question=q_data.question,
+        category=q_data.category,
+        reference=q_data.gold_answer[:500],
+        source=q_data.evidence_basis[:200],
+        pitfall=q_data.pitfall[:200],
         rag_answer=rag_answer[:1200],
     )
     for attempt in range(5):
@@ -274,14 +275,12 @@ def main():
         print("ERROR: 找不到三一重工知识库")
         sys.exit(1)
 
-    # Load test set
-    with open(TESTSET_PATH, encoding="utf-8") as f:
-        testset = json.load(f)
-    questions = testset["题目"]
+    # Load test set（gold 唯一入口）
+    questions = iter_questions()
 
     # Filter
     if args.category:
-        questions = [q for q in questions if q["类别"].startswith(args.category)]
+        questions = [q for q in questions if q.category.startswith(args.category)]
         print(f"筛选 {args.category} 类题目: {len(questions)} 题")
     if args.limit:
         questions = questions[: args.limit]
@@ -290,15 +289,15 @@ def main():
 
     records = []
     for i, q in enumerate(questions):
-        qid = q["id"]
+        qid = q.id
         print(
-            f"[{i + 1}/{len(questions)}] {qid} ({q['难度']}) {q['问题'][:40]}...",
+            f"[{i + 1}/{len(questions)}] {qid} ({q.difficulty}) {q.question[:40]}...",
             end=" ",
             flush=True,
         )
 
         # RAG call
-        rag = call_rag_detail(q["问题"], token, kb_id)
+        rag = call_rag_detail(q.question, token, kb_id)
         answer = rag["answer"]
         sources = rag["sources"]
         thinking = rag.get("thinking", "")
@@ -308,10 +307,10 @@ def main():
             records.append(
                 {
                     "qid": qid,
-                    "question": q["问题"],
-                    "category": q["类别"],
-                    "difficulty": q["难度"],
-                    "reference": q["参考答案"],
+                    "question": q.question,
+                    "category": q.category,
+                    "difficulty": q.difficulty,
+                    "reference": q.gold_answer,
                     "answer": "",
                     "sources": [],
                     "thinking": "",
@@ -337,10 +336,10 @@ def main():
         records.append(
             {
                 "qid": qid,
-                "question": q["问题"],
-                "category": q["类别"],
-                "difficulty": q["难度"],
-                "reference": q["参考答案"],
+                "question": q.question,
+                "category": q.category,
+                "difficulty": q.difficulty,
+                "reference": q.gold_answer,
                 "answer": answer,
                 "sources": sources,
                 "thinking": thinking,

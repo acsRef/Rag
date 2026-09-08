@@ -42,11 +42,13 @@ def main():
             if qid in TRUE_CORRECTIONS:
                 # 真修正：覆盖 gold + 记录 diff
                 q["参考答案"] = new_gold
-                corrections.append({
-                    "id": qid,
-                    "old": old_gold[:80],
-                    "new": new_gold[:80],
-                })
+                corrections.append(
+                    {
+                        "id": qid,
+                        "old": old_gold[:80],
+                        "new": new_gold[:80],
+                    }
+                )
                 q["gold_correction_note"] = v.get("correction_note", "")
             else:
                 # human 验证原 gold 正确 → 保留原文（避免降级：原 gold 往往比
@@ -72,9 +74,7 @@ def main():
         f"{GOLD_SOURCE_VERIFIED} (已人工+PDF验证) | {GOLD_SOURCE_ORIGINAL} (原始标注未验证)"
     )
 
-    TESTSET_PATH.write_text(
-        json.dumps(ds, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
+    TESTSET_PATH.write_text(json.dumps(ds, ensure_ascii=False, indent=2), encoding="utf-8")
 
     print(f"Migrated {migrated} verified questions")
     print(f"Marked   {marked} original questions as {GOLD_SOURCE_ORIGINAL}")
@@ -100,7 +100,9 @@ def main():
     assert "86.4" in by_id["Q55"]["参考答案"], "Q55 gold not updated!"
     assert by_id["Q26"]["gold_source"] == GOLD_SOURCE_VERIFIED
     assert "千元" in by_id["Q11"]["参考答案"], "Q11 gold degraded (should keep 千元 unit answer)!"
-    assert "61.01" in by_id["Q51"]["参考答案"] or "61.01" in str(by_id["Q51"].get("gold_evidence", "")), "Q51 gold degraded!"
+    assert "61.01" in by_id["Q51"]["参考答案"] or "61.01" in str(
+        by_id["Q51"].get("gold_evidence", "")
+    ), "Q51 gold degraded!"
     assert by_id["Q56"]["参考答案"].startswith("三份年报中"), "Q56 gold changed unexpectedly!"
     print("  Q26 gold contains '0.80' ✓")
     print("  Q55 gold contains '86.4' ✓")

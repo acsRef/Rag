@@ -42,9 +42,7 @@ def clean_corpus(integration_db):
     yield
 
 
-def test_table_chunk_dual_representation(
-    clean_corpus, fake_llm_stack, monkeypatch
-):
+def test_table_chunk_dual_representation(clean_corpus, fake_llm_stack, monkeypatch):
     from app.config import settings
     from app.ingestion.indexer import DocumentIndexer
     from app.store.pgvector_store import get_chunks_by_document
@@ -83,9 +81,7 @@ def test_table_chunk_dual_representation(
     )
 
 
-def test_plain_chunk_embedding_text_equals_text(
-    clean_corpus, fake_llm_stack, monkeypatch
-):
+def test_plain_chunk_embedding_text_equals_text(clean_corpus, fake_llm_stack, monkeypatch):
     """纯文本 chunk 的 retrieval 表示 == 原文（维持现状，不加前缀）。"""
     from app.config import settings
     from app.ingestion.indexer import DocumentIndexer
@@ -104,9 +100,7 @@ def test_plain_chunk_embedding_text_equals_text(
     assert all(c.get("chunk_type") is None for c in chunks)
 
 
-def test_embedding_version_stamped_from_current_settings(
-    clean_corpus, fake_llm_stack, monkeypatch
-):
+def test_embedding_version_stamped_from_current_settings(clean_corpus, fake_llm_stack, monkeypatch):
     """Phase C 不变量：重用与新建 chunk 必须使用 settings.current_embedding_version。
 
     复用 chunk（is_reused=True 路径）若写死旧版本号，hybrid_search 的
@@ -146,7 +140,9 @@ def test_embedding_version_stamped_from_current_settings(
     chunks_v1 = get_chunks_by_document(doc_id)
     assert chunks_v1, "初次摄入应落库 chunk"
     v1_versions = {c["embedding_version"] for c in chunks_v1}
-    assert v1_versions == {initial_version}, f"v1 期望 version={initial_version}，实际 {v1_versions}"
+    assert v1_versions == {initial_version}, (
+        f"v1 期望 version={initial_version}，实际 {v1_versions}"
+    )
 
     # Step 3a：把文档 status 改成 indexing，绕开 unchanged 早返
     from app.store.db import get_db_ctx
@@ -178,6 +174,6 @@ def test_embedding_version_stamped_from_current_settings(
         f"Phase C 不变量破坏：期望单一 version={new_version}，实际 {v2_versions}"
     )
     # 显式负向断言：不得有任何 chunk 是旧版本
-    assert not any(c["embedding_version"] != settings.current_embedding_version for c in chunks_v2), (
-        "存在 chunk 的 embedding_version 与 settings.current_embedding_version 不一致"
-    )
+    assert not any(
+        c["embedding_version"] != settings.current_embedding_version for c in chunks_v2
+    ), "存在 chunk 的 embedding_version 与 settings.current_embedding_version 不一致"

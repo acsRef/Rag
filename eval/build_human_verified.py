@@ -10,15 +10,22 @@ import json
 import re
 from pathlib import Path
 
-# Load testset
-ds = json.load(open("eval/sany_annual_reports/rag_testset.json", encoding="utf-8"))
-test_qs = {q["id"]: q for q in ds["题目"]}
+from gold import iter_questions
+
+# Load testset（gold 唯一入口）
+test_qs = {q.id: q for q in iter_questions()}
 
 # Load 3 PDFs as markdown
 pdf_text = {
-    2023: open("eval/sany_annual_reports/三一重工_2023年年度报告.pymupdf4llm.md", encoding="utf-8").read(),
-    2024: open("eval/sany_annual_reports/三一重工_2024年年度报告.pymupdf4llm.md", encoding="utf-8").read(),
-    2025: open("eval/sany_annual_reports/三一重工_2025年年度报告.pymupdf4llm.md", encoding="utf-8").read(),
+    2023: Path("eval/sany_annual_reports/三一重工_2023年年度报告.pymupdf4llm.md").read_text(
+        encoding="utf-8"
+    ),
+    2024: Path("eval/sany_annual_reports/三一重工_2024年年度报告.pymupdf4llm.md").read_text(
+        encoding="utf-8"
+    ),
+    2025: Path("eval/sany_annual_reports/三一重工_2025年年度报告.pymupdf4llm.md").read_text(
+        encoding="utf-8"
+    ),
 }
 
 
@@ -40,21 +47,21 @@ def find_evidence(years, keywords, context=200):
 
 # Human labels
 human_labels = {
-    "Q01": {"correct": False, "partial": True,  "refusal": "N/A",  "citation": True},
-    "Q02": {"correct": True,  "partial": False, "refusal": "N/A",  "citation": True},
-    "Q03": {"correct": True,  "partial": False, "refusal": "N/A",  "citation": True},
-    "Q11": {"correct": False, "partial": True,  "refusal": "N/A",  "citation": True},
-    "Q12": {"correct": False, "partial": False, "refusal": False,  "citation": "N/A"},
-    "Q17": {"correct": False, "partial": False, "refusal": "N/A",  "citation": False},
-    "Q18": {"correct": False, "partial": True,  "refusal": "N/A",  "citation": True},
-    "Q25": {"correct": True,  "partial": False, "refusal": "N/A",  "citation": True},
-    "Q26": {"correct": False, "partial": False, "refusal": "N/A",  "citation": False},
-    "Q32": {"correct": False, "partial": True,  "refusal": "N/A",  "citation": True},
-    "Q33": {"correct": False, "partial": True,  "refusal": "N/A",  "citation": True},
-    "Q50": {"correct": True,  "partial": False, "refusal": "N/A",  "citation": True},
-    "Q51": {"correct": False, "partial": True,  "refusal": "N/A",  "citation": True},
-    "Q55": {"correct": False, "partial": False, "refusal": "N/A",  "citation": False},
-    "Q56": {"correct": True,  "partial": False, "refusal": "N/A",  "citation": "N/A"},
+    "Q01": {"correct": False, "partial": True, "refusal": "N/A", "citation": True},
+    "Q02": {"correct": True, "partial": False, "refusal": "N/A", "citation": True},
+    "Q03": {"correct": True, "partial": False, "refusal": "N/A", "citation": True},
+    "Q11": {"correct": False, "partial": True, "refusal": "N/A", "citation": True},
+    "Q12": {"correct": False, "partial": False, "refusal": False, "citation": "N/A"},
+    "Q17": {"correct": False, "partial": False, "refusal": "N/A", "citation": False},
+    "Q18": {"correct": False, "partial": True, "refusal": "N/A", "citation": True},
+    "Q25": {"correct": True, "partial": False, "refusal": "N/A", "citation": True},
+    "Q26": {"correct": False, "partial": False, "refusal": "N/A", "citation": False},
+    "Q32": {"correct": False, "partial": True, "refusal": "N/A", "citation": True},
+    "Q33": {"correct": False, "partial": True, "refusal": "N/A", "citation": True},
+    "Q50": {"correct": True, "partial": False, "refusal": "N/A", "citation": True},
+    "Q51": {"correct": False, "partial": True, "refusal": "N/A", "citation": True},
+    "Q55": {"correct": False, "partial": False, "refusal": "N/A", "citation": False},
+    "Q56": {"correct": True, "partial": False, "refusal": "N/A", "citation": "N/A"},
 }
 
 
@@ -147,28 +154,44 @@ other_gold = {
 
 # Known truth (RAG correctness verified against PDF)
 known_truth = {
-    "Q01": "wrong",   # 740.19 vs 732.22
+    "Q01": "wrong",  # 740.19 vs 732.22
     "Q02": "correct",
     "Q03": "correct",
-    "Q11": "wrong",   # false refusal
-    "Q12": "wrong",   # false refusal
-    "Q17": "wrong",   # hallucinated
+    "Q11": "wrong",  # false refusal
+    "Q12": "wrong",  # false refusal
+    "Q17": "wrong",  # hallucinated
     "Q18": "partial",
     "Q25": "correct",
-    "Q26": "correct", # corrected gold agrees with RAG
+    "Q26": "correct",  # corrected gold agrees with RAG
     "Q32": "partial",
-    "Q33": "wrong",   # conflated 2024 adjusted with 2025 number
+    "Q33": "wrong",  # conflated 2024 adjusted with 2025 number
     "Q50": "correct",
     "Q51": "partial",
-    "Q55": "correct", # corrected gold agrees with RAG
-    "Q56": "correct", # correct refusal
+    "Q55": "correct",  # corrected gold agrees with RAG
+    "Q56": "correct",  # correct refusal
 }
 
 
 cal_dir = Path("eval/judge_calibration_v3")
 
 out = []
-for qid in ["Q01","Q02","Q03","Q11","Q12","Q17","Q18","Q25","Q26","Q32","Q33","Q50","Q51","Q55","Q56"]:
+for qid in [
+    "Q01",
+    "Q02",
+    "Q03",
+    "Q11",
+    "Q12",
+    "Q17",
+    "Q18",
+    "Q25",
+    "Q26",
+    "Q32",
+    "Q33",
+    "Q50",
+    "Q51",
+    "Q55",
+    "Q56",
+]:
     orig = test_qs[qid]
     cal = json.loads((cal_dir / f"{qid}.json").read_text(encoding="utf-8"))
 
@@ -179,9 +202,9 @@ for qid in ["Q01","Q02","Q03","Q11","Q12","Q17","Q18","Q25","Q26","Q32","Q33","Q
 
     record = {
         "id": qid,
-        "category": orig["类别"],
-        "question": orig["问题"],
-        "original_gold": orig["参考答案"],
+        "category": orig.category,
+        "question": orig.question,
+        "original_gold": orig.gold_answer,
         "verified_gold": gold["gold_answer"],
         "gold_evidence": gold["gold_evidence"],
         "gold_judgment": gold["gold_judgment"],
@@ -234,21 +257,25 @@ for r in out:
     if j_simple == h_simple:
         metrics["agreement_judge_human"]["matches"] += 1
     else:
-        metrics["agreement_judge_human"]["details"].append({
-            "qid": r["id"], "judge": j, "human": h, "reality": rv
-        })
+        metrics["agreement_judge_human"]["details"].append(
+            {"qid": r["id"], "judge": j, "human": h, "reality": rv}
+        )
     metrics["agreement_judge_human"]["total"] += 1
 
     # Metric 2: Judge vs Reality (correctness against verified truth)
     # correct partial = "right"; wrong = "wrong"
-    j_collapse = "wrong" if j == "wrong" else ("right" if j in ("correct", "partial") else "unknown")
-    rv_collapse = "wrong" if rv == "wrong" else ("right" if rv in ("correct", "partial") else "unknown")
+    j_collapse = (
+        "wrong" if j == "wrong" else ("right" if j in ("correct", "partial") else "unknown")
+    )
+    rv_collapse = (
+        "wrong" if rv == "wrong" else ("right" if rv in ("correct", "partial") else "unknown")
+    )
     if j_collapse == rv_collapse and j_collapse != "unknown":
         metrics["accuracy_judge_vs_reality"]["matches"] += 1
     else:
-        metrics["accuracy_judge_vs_reality"]["details"].append({
-            "qid": r["id"], "judge": j, "reality": rv
-        })
+        metrics["accuracy_judge_vs_reality"]["details"].append(
+            {"qid": r["id"], "judge": j, "reality": rv}
+        )
     metrics["accuracy_judge_vs_reality"]["total"] += 1
 
     # Metric 3: Shared Error (Judge wrong AND Human wrong)
@@ -256,35 +283,48 @@ for r in out:
     j_wrong = j_collapse == "wrong" or (j_collapse == "right" and rv_collapse == "wrong")
     if h_wrong and j_wrong:
         metrics["shared_error_rate"]["shared_wrong"] += 1
-        metrics["shared_error_rate"]["details"].append({
-            "qid": r["id"], "judge": j, "human": h, "reality": rv
-        })
+        metrics["shared_error_rate"]["details"].append(
+            {"qid": r["id"], "judge": j, "human": h, "reality": rv}
+        )
     metrics["shared_error_rate"]["total"] += 1
 
 
 def pct(num, denom):
-    return f"{num}/{denom} = {num/denom*100:.1f}%"
+    return f"{num}/{denom} = {num / denom * 100:.1f}%"
 
 
-metrics["agreement_judge_human"]["pct"] = pct(metrics["agreement_judge_human"]["matches"], metrics["agreement_judge_human"]["total"])
-metrics["accuracy_judge_vs_reality"]["pct"] = pct(metrics["accuracy_judge_vs_reality"]["matches"], metrics["accuracy_judge_vs_reality"]["total"])
-metrics["shared_error_rate"]["pct"] = pct(metrics["shared_error_rate"]["shared_wrong"], metrics["shared_error_rate"]["total"])
+metrics["agreement_judge_human"]["pct"] = pct(
+    metrics["agreement_judge_human"]["matches"], metrics["agreement_judge_human"]["total"]
+)
+metrics["accuracy_judge_vs_reality"]["pct"] = pct(
+    metrics["accuracy_judge_vs_reality"]["matches"], metrics["accuracy_judge_vs_reality"]["total"]
+)
+metrics["shared_error_rate"]["pct"] = pct(
+    metrics["shared_error_rate"]["shared_wrong"], metrics["shared_error_rate"]["total"]
+)
 
 
 output_path = Path("eval/sany_annual_reports/human_verified_15.json")
-output_path.write_text(json.dumps({
-    "version": "1.0",
-    "created": "2026-08-23",
-    "method": "PDF 原文交叉验证（pymupdf4llm 提取 + 人工核对）",
-    "metadata": {
-        "verifier": "AI (Claude) per user spec",
-        "verifier_notes": "Q26/Q55 gold 已修正（原 gold 漏中期分红 / 错说新能源收入无法获得）",
-        "pdf_source": "eval/sany_annual_reports/三一重工_20XX年年度报告.pdf (pymupdf4llm 提取为 markdown)",
-        "limitations": "Q17/Q18/Q32/Q33 部分 evidence 未完整提取（仅前 3 hit）"
-    },
-    "questions": out,
-    "metrics": metrics,
-}, ensure_ascii=False, indent=2), encoding="utf-8")
+output_path.write_text(
+    json.dumps(
+        {
+            "version": "1.0",
+            "created": "2026-08-23",
+            "method": "PDF 原文交叉验证（pymupdf4llm 提取 + 人工核对）",
+            "metadata": {
+                "verifier": "AI (Claude) per user spec",
+                "verifier_notes": "Q26/Q55 gold 已修正（原 gold 漏中期分红 / 错说新能源收入无法获得）",
+                "pdf_source": "eval/sany_annual_reports/三一重工_20XX年年度报告.pdf (pymupdf4llm 提取为 markdown)",
+                "limitations": "Q17/Q18/Q32/Q33 部分 evidence 未完整提取（仅前 3 hit）",
+            },
+            "questions": out,
+            "metrics": metrics,
+        },
+        ensure_ascii=False,
+        indent=2,
+    ),
+    encoding="utf-8",
+)
 
 print(f"Saved to {output_path}")
 print()

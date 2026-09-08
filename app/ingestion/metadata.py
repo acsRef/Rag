@@ -84,9 +84,7 @@ class ChunkMetadataGenerator:
             self._generate_batch(batch, batch_no, doc_label=doc_label)
         return chunks
 
-    def _generate_batch(
-        self, batch: list[Chunk], batch_no: int, *, doc_label: str = ""
-    ) -> None:
+    def _generate_batch(self, batch: list[Chunk], batch_no: int, *, doc_label: str = "") -> None:
         """Run one batch: up to 1 + _BATCH_MAX_RETRIES attempts, then degrade in place."""
         last_err = ""
         attempt = 0

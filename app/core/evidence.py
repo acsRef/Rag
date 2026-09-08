@@ -339,9 +339,7 @@ class ConflictDetector:
             # （否则 match.end() 已包含单位，extractor 在单位之后找单位，永远找不到）
             number_start = match.start(1)
             number_end = match.end(1)
-            key = regex_conflict_key_extractor.extract(
-                chunk, (number_start, number_end)
-            )
+            key = regex_conflict_key_extractor.extract(chunk, (number_start, number_end))
             # backward-compat: metric 字段从 key 派生
             metric_str = key.metric if key.metric != UNKNOWN else "未知指标"
 

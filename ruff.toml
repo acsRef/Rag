@@ -51,3 +51,9 @@ ignore = [
     "SIM102",
     "F841",
 ]
+
+[format]
+# ruff ≥ 0.12 会把 Markdown 代码围栏内的 Python 一并格式化。docs/plans 是
+# 历史实验记录（只保留原始事实，不改写历史），格式化仅增加 diff churn；
+# 文档不参与 format gate，代码文件仍全量检查。
+exclude = ["*.md"]

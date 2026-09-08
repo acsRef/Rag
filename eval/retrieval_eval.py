@@ -30,6 +30,8 @@ load_dotenv(Path(__file__).parent / ".env")
 
 # 让 eval/ 作为包导入 metrics（同目录运行 OK；项目根目录运行也 OK）
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from gold import iter_questions
+
 from eval.metrics import compute_all  # noqa: E402
 
 BASE_URL = os.environ.get("RAGENT_BASE_URL", "http://localhost:8000")
@@ -50,8 +52,8 @@ def _load_json(path: Path) -> dict:
 
 
 def _select_questions(testset: dict, tier: str, tiers_cfg: dict) -> list[dict]:
-    questions = testset.get("题目") or []
-    q_by_id = {q["id"]: q for q in questions}
+    questions = iter_questions()
+    q_by_id = {q.id: q for q in questions}
 
     if tier == "full":
         return list(questions)
@@ -165,15 +167,15 @@ def main() -> None:
     for i, q in enumerate(questions, 1):
         t0 = time.monotonic()
         try:
-            data = _retrieve(args.base_url, token, q["问题"], kb_id, args.top_k)
+            data = _retrieve(args.base_url, token, q.question, kb_id, args.top_k)
         except Exception as e:
             print(f"[{i}/{len(questions)}] {q['id']} ❌ retrieve error: {e}", flush=True)
             results.append(
                 {
-                    "id": q["id"],
+                    "id": q.id,
                     "category": q.get("类别"),
                     "difficulty": q.get("难度"),
-                    "question": q["问题"],
+                    "question": q.question,
                     "error": str(e),
                 }
             )
@@ -183,10 +185,10 @@ def main() -> None:
         retrieved_ids = [it["document_id"] for it in items]
         gold = q.get("gold_documents") or []
         result = {
-            "id": q["id"],
+            "id": q.id,
             "category": q.get("类别"),
             "difficulty": q.get("难度"),
-            "question": q["问题"],
+            "question": q.question,
             "retrieved_count": len(items),
             "top1_doc": items[0]["document_id"] if items else None,
             "retrieved_ids": retrieved_ids,

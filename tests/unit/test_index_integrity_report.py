@@ -59,7 +59,14 @@ def sqlite_conn():
                 text("INSERT INTO documents (document_id, filename) VALUES (:d, :f)"),
                 {"d": did, "f": fname},
             )
-        chunks = [("c11", "d1"), ("c12", "d1"), ("c13", "d1"), ("c21", "d2"), ("c22", "d2"), ("c31", "d3")]
+        chunks = [
+            ("c11", "d1"),
+            ("c12", "d1"),
+            ("c13", "d1"),
+            ("c21", "d2"),
+            ("c22", "d2"),
+            ("c31", "d3"),
+        ]
         for cid, did in chunks:
             conn.execute(
                 text("INSERT INTO chunks (chunk_id, document_id) VALUES (:c, :d)"),

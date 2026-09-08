@@ -129,7 +129,9 @@ def main() -> int:
         doc_rows = conn.execute(text(DOC_COVERAGE_SQL)).fetchall()
         for r in doc_rows:
             pct = 100 * r.covered / r.total if r.total else 0.0
-            print(f"[INFO]   doc={r.document_id[:8]} {r.filename}: {r.covered}/{r.total} ({pct:.1f}%)")
+            print(
+                f"[INFO]   doc={r.document_id[:8]} {r.filename}: {r.covered}/{r.total} ({pct:.1f}%)"
+            )
 
         n_q = conn.execute(text("SELECT count(*) FROM chunk_questions")).scalar_one()
         if args.expect_questions == "zero":

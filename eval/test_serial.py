@@ -6,6 +6,7 @@ from pathlib import Path
 
 import requests
 from dotenv import load_dotenv
+from gold import iter_questions
 
 load_dotenv(Path(__file__).parent / ".env")
 
@@ -66,18 +67,18 @@ def main():
 
     with open(TESTSET_PATH, encoding="utf-8") as f:
         testset = json.load(f)
-    questions = {q["id"]: q for q in testset["题目"]}
+    questions = {q.id: q for q in iter_questions()}
 
     for qid in TARGETS:
         q = questions[qid]
         print(f"\n{'=' * 70}")
-        print(f"[{qid}] {q['类别']} | {q['难度']}")
-        print(f"Q: {q['问题']}")
-        print(f"参考: {q['参考答案'][:120]}...")
+        print(f"[{qid}] {q.category} | {q.difficulty}")
+        print(f"Q: {q.question}")
+        print(f"参考: {q.gold_answer[:120]}...")
 
         try:
             t0 = time.time()
-            rag = call_rag(token, kb_id, q["问题"])
+            rag = call_rag(token, kb_id, q.question)
             elapsed = time.time() - t0
 
             print(f"\nRAG ({elapsed:.1f}s):")

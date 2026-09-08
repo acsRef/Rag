@@ -16,6 +16,7 @@ import time
 from pathlib import Path
 
 import requests
+from gold import iter_questions
 
 BASE_URL = "http://localhost:8000"
 TESTSET_PATH = Path(__file__).parent / "sany_annual_reports" / "rag_testset.json"
@@ -158,13 +159,13 @@ def judge_answer(
 ) -> dict:
     """Use LLM to judge the RAG answer."""
     prompt = JUDGE_PROMPT.format(
-        question=question_data["问题"],
-        category=question_data["类别"],
-        difficulty=question_data["难度"],
-        reference=question_data["参考答案"],
-        source=question_data["答案依据"],
-        pitfall=question_data["考察的RAG易错点"],
-        common_errors=question_data["常见错误答案"],
+        question=question_data.question,
+        category=question_data.category,
+        difficulty=question_data.difficulty,
+        reference=question_data.gold_answer,
+        source=question_data.evidence_basis,
+        pitfall=question_data.pitfall,
+        common_errors=question_data.common_wrong_answers,
         rag_answer=rag_answer,
     )
 
@@ -243,10 +244,8 @@ def run_eval(limit: int | None = None, skip_judge: bool = False, resume: bool = 
         sys.exit(1)
     print(f"使用知识库: {kb_id}")
 
-    # Load test set
-    with open(TESTSET_PATH, encoding="utf-8") as f:
-        testset = json.load(f)
-    questions = testset["题目"]
+    # Load test set（gold 唯一入口）
+    questions = iter_questions()
     if limit:
         questions = questions[:limit]
     print(f"共 {len(questions)} 道题")
@@ -261,27 +260,27 @@ def run_eval(limit: int | None = None, skip_judge: bool = False, resume: bool = 
 
     # Run each question
     for i, q in enumerate(questions):
-        qid = q["id"]
+        qid = q.id
         if qid in results and results[qid].get("rag_answer"):
             print(f"[{i + 1}/{len(questions)}] {qid} 已有结果，跳过")
             continue
 
         print(
-            f"[{i + 1}/{len(questions)}] {qid} ({q['难度']}) {q['问题'][:40]}...",
+            f"[{i + 1}/{len(questions)}] {qid} ({q.difficulty}) {q.question[:40]}...",
             end=" ",
             flush=True,
         )
 
         try:
-            rag_result = call_rag(q["问题"], token, kb_id)
+            rag_result = call_rag(q.question, token, kb_id)
             answer = rag_result["answer"].strip()
             print(f"→ {len(answer)}字", end=" ", flush=True)
 
             results[qid] = {
-                "question": q["问题"],
-                "reference": q["参考答案"],
-                "category": q["类别"],
-                "difficulty": q["难度"],
+                "question": q.question,
+                "reference": q.gold_answer,
+                "category": q.category,
+                "difficulty": q.difficulty,
                 "rag_answer": answer,
                 "sources_count": len(rag_result.get("sources", [])),
                 "error": rag_result.get("error"),
@@ -297,10 +296,10 @@ def run_eval(limit: int | None = None, skip_judge: bool = False, resume: bool = 
         except Exception as e:
             print(f"ERROR: {e}")
             results[qid] = {
-                "question": q["问题"],
-                "reference": q["参考答案"],
-                "category": q["类别"],
-                "difficulty": q["难度"],
+                "question": q.question,
+                "reference": q.gold_answer,
+                "category": q.category,
+                "difficulty": q.difficulty,
                 "rag_answer": "",
                 "error": str(e),
                 "judge_score": None,
@@ -330,7 +329,7 @@ def run_eval(limit: int | None = None, skip_judge: bool = False, resume: bool = 
             print("WARNING: SILICONFLOW_API_KEY not set, skipping judge phase")
         else:
             for i, q in enumerate(questions):
-                qid = q["id"]
+                qid = q.id
                 if qid not in results or not results[qid].get("rag_answer"):
                     continue
                 if results[qid].get("judge_score") is not None and results[qid]["judge_score"] >= 0:
@@ -445,14 +444,14 @@ def generate_report(results: dict, questions: list):
     lines.append("\n| 题号 | 类别 | 难度 | 问题(摘要) | 得分 | 理由 |")
     lines.append("|------|------|------|-----------|------|------|")
     for q in questions:
-        qid = q["id"]
+        qid = q.id
         r = results.get(qid, {})
         score = r.get("judge_score")
         score_str = str(score) if score is not None and score >= 0 else "未评"
         reason = (r.get("judge_reason") or "")[:40]
-        q_summary = q["问题"][:25] + "..." if len(q["问题"]) > 25 else q["问题"]
+        q_summary = q.question[:25] + "..." if len(q.question) > 25 else q.question
         lines.append(
-            f"| {qid} | {q['类别'][:8]} | {q['难度']} | {q_summary} | {score_str} | {reason} |"
+            f"| {qid} | {q.category[:8]} | {q.difficulty} | {q_summary} | {score_str} | {reason} |"
         )
 
     # Failed / error cases

@@ -14,6 +14,7 @@ from pathlib import Path
 
 import requests
 from dotenv import load_dotenv
+from gold import iter_questions
 
 load_dotenv(Path(__file__).parent / ".env")
 
@@ -99,8 +100,8 @@ def judge(question_data, rag_answer):
     # 紧凑 prompt，避免长 prompt 触发超时
     prompt = f"""根据参考答案判断RAG回答的准确度(0-3分)。
 
-问题: {question_data["问题"]}
-参考答案: {question_data["参考答案"][:300]}
+问题: {question_data.question}
+参考答案: {question_data.gold_answer[:300]}
 RAG回答: {rag_answer[:800]}
 
 3=完全正确;2=基本正确有小偏差;1=部分正确有明显错误;0=错误/拒答/编造。
@@ -149,7 +150,7 @@ RAG回答: {rag_answer[:800]}
 def run(limit=None):
     with open(TESTSET_PATH, encoding="utf-8") as f:
         testset = json.load(f)
-    questions = {q["id"]: q for q in testset["题目"]}
+    questions = {q.id: q for q in iter_questions()}
     targets = TARGET_QUESTIONS[:limit] if limit else TARGET_QUESTIONS
 
     token = login()
@@ -158,11 +159,11 @@ def run(limit=None):
     results = []
     for qid in targets:
         q = questions[qid]
-        print(f"\n[{qid}] {q['类别']} | {q['难度']}")
-        print(f"  Q: {q['问题']}")
+        print(f"\n[{qid}] {q.category} | {q.difficulty}")
+        print(f"  Q: {q.question}")
 
         try:
-            rag = call_rag(token, kb_id, q["问题"])
+            rag = call_rag(token, kb_id, q.question)
             answer = rag["answer"]
             print(f"  A: {answer[:200]}...")
 

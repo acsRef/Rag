@@ -23,7 +23,6 @@ import asyncio
 import json
 import os
 import re
-import sys
 from collections import Counter
 from datetime import UTC, datetime
 from pathlib import Path
@@ -32,7 +31,8 @@ from pathlib import Path
 os.environ.setdefault("CHAT_MODEL", "deepseek-ai/DeepSeek-V3")
 
 # === imports after env override ===
-from app.config import settings  # noqa: E402
+from gold import iter_questions
+
 from app.core import pipeline as pipeline_mod  # noqa: E402
 from app.llm.chat import minimax_client  # noqa: E402
 from app.models.schemas import ChatRequest  # noqa: E402
@@ -51,12 +51,14 @@ TARGET_DIST = {
     "I": 2,  # 拒答边界
 }
 
+
 # === conversation_memory mock (避免在 DB 写假 user_id 的会话) ===
 async def _noop(*args, **kwargs):
     return None
 
-pipeline_mod.conversation_memory.get_or_create_conversation = (
-    lambda conv_id, user_id: f"cal-{conv_id or 'new'}"
+
+pipeline_mod.conversation_memory.get_or_create_conversation = lambda conv_id, user_id: (
+    f"cal-{conv_id or 'new'}"
 )
 pipeline_mod.conversation_memory.get_history = lambda cid: []
 pipeline_mod.conversation_memory.get_summary = lambda cid: ""
@@ -131,7 +133,7 @@ def parse_sse_answer(events: list[str]) -> str:
 
 
 async def run_rag(question: dict) -> tuple[list[str], str | None, str]:
-    req = ChatRequest(query=question["问题"])
+    req = ChatRequest(query=question.question)
     events: list[str] = []
     error: str | None = None
     try:
@@ -147,14 +149,13 @@ async def run_rag(question: dict) -> tuple[list[str], str | None, str]:
 
 # === Stratified sampling ===
 
+
 def stratified_sample() -> list[dict]:
     """按 TARGET_DIST 分层抽样，可复现（按 id 顺序取前 N）。"""
-    with open(TESTSET_PATH, encoding="utf-8") as f:
-        ds = json.load(f)
-
+    # Load test set（gold 唯一入口）
     by_prefix: dict[str, list[dict]] = {}
-    for q in ds["题目"]:
-        prefix = q["类别"].split("-")[0].strip()
+    for q in iter_questions():
+        prefix = q.category.split("-")[0].strip()
         by_prefix.setdefault(prefix, []).append(q)
 
     selected: list[dict] = []
@@ -168,7 +169,7 @@ def stratified_sample() -> list[dict]:
             selected.extend(available[:count])
 
     print(f"Selected {len(selected)} questions:")
-    by_pfx = Counter(q["类别"].split("-")[0].strip() for q in selected)
+    by_pfx = Counter(q.category.split("-")[0].strip() for q in selected)
     for p, c in sorted(by_pfx.items()):
         print(f"  {p}: {c}")
     if missing:
@@ -179,9 +180,10 @@ def stratified_sample() -> list[dict]:
 
 # === Single-question runner ===
 
+
 async def run_one(question: dict) -> dict:
-    qid = question["id"]
-    category = question["类别"]
+    qid = question.id
+    category = question.category
 
     # 1. RAG generation
     events, error, answer = await run_rag(question)
@@ -191,8 +193,8 @@ async def run_one(question: dict) -> dict:
         judge_result = {"score": None, "reason": f"skipped (error={error})", "raw": ""}
     else:
         judge_result = await judge_one(
-            question=question["问题"],
-            reference=question["参考答案"],
+            question=question.question,
+            reference=question.gold_answer,
             rag_answer=answer,
         )
 
@@ -205,8 +207,8 @@ async def run_one(question: dict) -> dict:
         "question_id": qid,
         "category": category,
         "category_prefix": category.split("-")[0].strip(),
-        "question": question["问题"],
-        "gold_answer": question["参考答案"],
+        "question": question.question,
+        "gold_answer": question.gold_answer,
         "generation_answer": answer,
         "answer_length_chars": len(answer),
         "judge_score": judge_result["score"],
@@ -221,6 +223,7 @@ async def run_one(question: dict) -> dict:
 
 
 # === Summary stats ===
+
 
 def compute_summary(records: list[dict]) -> dict:
     n = len(records)
@@ -243,12 +246,14 @@ def compute_summary(records: list[dict]) -> dict:
         if r["error"]:
             reasons.append(f"rag_error: {r['error']}")
         if reasons:
-            suspected_disagreement.append({
-                "question_id": r["question_id"],
-                "reasons": reasons,
-                "judge_score": r["judge_score"],
-                "judge_reason": r["judge_reason"][:100] if r["judge_reason"] else "",
-            })
+            suspected_disagreement.append(
+                {
+                    "question_id": r["question_id"],
+                    "reasons": reasons,
+                    "judge_score": r["judge_score"],
+                    "judge_reason": r["judge_reason"][:100] if r["judge_reason"] else "",
+                }
+            )
 
     return {
         "n_questions": n,
@@ -261,7 +266,8 @@ def compute_summary(records: list[dict]) -> dict:
             "null": by_score.get(None, 0),
         },
         "score_distribution_pct": {
-            k: f"{v/n*100:.0f}%" for k, v in {
+            k: f"{v / n * 100:.0f}%"
+            for k, v in {
                 "0": by_score.get(0, 0),
                 "1": by_score.get(1, 0),
                 "2": by_score.get(2, 0),
@@ -276,6 +282,7 @@ def compute_summary(records: list[dict]) -> dict:
 
 
 # === HUMAN_VERIFY.md 生成 ===
+
 
 def generate_human_verify_md(records: list[dict]) -> str:
     """生成待人工核对模板。"""
@@ -292,49 +299,54 @@ def generate_human_verify_md(records: list[dict]) -> str:
     for r in records:
         qid = r["question_id"]
         cat = r["category"]
-        lines.extend([
-            f"## {qid} [{cat}]",
+        lines.extend(
+            [
+                f"## {qid} [{cat}]",
+                "",
+                f"**Question**: {r['question']}",
+                "",
+                f"**Gold Answer**: {r['gold_answer']}",
+                "",
+                f"**RAG Answer**: {r['generation_answer'][:500]}{'...' if len(r['generation_answer']) > 500 else ''}",
+                "",
+                f"**Judge Score**: {r['judge_score']} (0-3)",
+                "",
+                f"**Judge Reason**: {r['judge_reason']}",
+                "",
+                f"**Judge Raw Response**: `{r['judge_raw_response']}`",
+                "",
+                f"**Citations**: {r['citation_count']} 个, IDs: {r['unique_citation_ids']}",
+                "",
+                "**Human Verify (填空)**：",
+                "- [ ] human_correct: true / false",
+                "- [ ] human_partial: true / false",
+                "- [ ] human_refusal_correct: N/A (模型未拒答) 或 true (模型拒答且应拒答) 或 false (模型拒答但不应拒答)",
+                "- [ ] human_citation_correct: true / false / N/A",
+                "",
+                "**Notes**: (free-form 备注)",
+                "",
+                "---",
+                "",
+            ]
+        )
+    lines.extend(
+        [
+            "## 填完后请运行",
             "",
-            f"**Question**: {r['question']}",
+            "```bash",
+            "D:/miniConda/envs/rag/python.exe eval/aggregate_judge_agreement.py \\",
+            "  --human <path-to-filled-md>",
+            "```",
             "",
-            f"**Gold Answer**: {r['gold_answer']}",
+            "(aggregate_judge_agreement.py 待实现 — 解析 human_verify.md 中的 [ ] 标记)",
             "",
-            f"**RAG Answer**: {r['generation_answer'][:500]}{'...' if len(r['generation_answer']) > 500 else ''}",
-            "",
-            f"**Judge Score**: {r['judge_score']} (0-3)",
-            "",
-            f"**Judge Reason**: {r['judge_reason']}",
-            "",
-            f"**Judge Raw Response**: `{r['judge_raw_response']}`",
-            "",
-            f"**Citations**: {r['citation_count']} 个, IDs: {r['unique_citation_ids']}",
-            "",
-            "**Human Verify (填空)**：",
-            "- [ ] human_correct: true / false",
-            "- [ ] human_partial: true / false",
-            "- [ ] human_refusal_correct: N/A (模型未拒答) 或 true (模型拒答且应拒答) 或 false (模型拒答但不应拒答)",
-            "- [ ] human_citation_correct: true / false / N/A",
-            "",
-            "**Notes**: (free-form 备注)",
-            "",
-            "---",
-            "",
-        ])
-    lines.extend([
-        "## 填完后请运行",
-        "",
-        "```bash",
-        "D:/miniConda/envs/rag/python.exe eval/aggregate_judge_agreement.py \\",
-        "  --human <path-to-filled-md>",
-        "```",
-        "",
-        "(aggregate_judge_agreement.py 待实现 — 解析 human_verify.md 中的 [ ] 标记)",
-        "",
-    ])
+        ]
+    )
     return "\n".join(lines)
 
 
 # === Main ===
+
 
 async def amain():
     OUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -343,21 +355,17 @@ async def amain():
 
     records = []
     for q in selected:
-        print(f"=== {q['id']} ({q['类别']}) ===", flush=True)
+        print(f"=== {q.id} ({q.category}) ===", flush=True)
         r = await run_one(q)
 
         # Save per-question artifact
         out_path = OUT_DIR / f"{r['question_id']}.json"
-        out_path.write_text(
-            json.dumps(r, ensure_ascii=False, indent=2), encoding="utf-8"
-        )
+        out_path.write_text(json.dumps(r, ensure_ascii=False, indent=2), encoding="utf-8")
 
         score = r["judge_score"]
         score_s = "?" if score is None else str(score)
         err_s = f" ERR={r['error']}" if r["error"] else ""
-        print(
-            f"  judge={score_s} cite={r['citation_count']}{err_s}"
-        )
+        print(f"  judge={score_s} cite={r['citation_count']}{err_s}")
 
         records.append(r)
 
@@ -377,8 +385,8 @@ async def amain():
     print("=" * 60)
     print(f"\nOutput: {OUT_DIR}/")
     print(f"  Per-question: {len(records)} JSON files")
-    print(f"  Summary: summary.json")
-    print(f"  Human verify template: HUMAN_VERIFY.md")
+    print("  Summary: summary.json")
+    print("  Human verify template: HUMAN_VERIFY.md")
     print()
     print("Score distribution:")
     for k, v in summary["score_distribution"].items():

@@ -7,6 +7,7 @@ from pathlib import Path
 
 import requests
 from dotenv import load_dotenv
+from gold import iter_questions
 
 # 加载 .env
 load_dotenv(Path(__file__).parent / ".env")
@@ -23,10 +24,8 @@ token = requests.post(
 kb_id = requests.get(f"{BASE_URL}/api/v1/kb", headers={"Authorization": f"Bearer {token}"}).json()
 kb_id = [k["id"] for k in kb_id if "三一重工" in k["name"]][0]
 
-# 加载测试集
-with open(TESTSET_PATH, encoding="utf-8") as f:
-    testset = json.load(f)
-questions = {q["id"]: q for q in testset["题目"]}
+# 加载测试集（gold 唯一入口）
+questions = {q.id: q for q in iter_questions()}
 
 # 测试目标题
 TARGETS = [
@@ -71,9 +70,9 @@ def call_rag(query):
 def judge(question_data, rag_answer):
     prompt = f"""判断RAG系统回答是否正确。
 
-问题：{question_data["问题"]}
-参考答案：{question_data["参考答案"]}
-考察易错点：{question_data["考察的RAG易错点"]}
+问题：{question_data.question}
+参考答案：{question_data.gold_answer}
+考察易错点：{question_data.pitfall}
 
 RAG回答：
 {rag_answer[:1500]}
@@ -121,11 +120,11 @@ print(f"\n{'=' * 60}\nC/H 类逐题测试\n{'=' * 60}\n")
 results = {}
 for qid in TARGETS:
     q = questions[qid]
-    print(f"\n[{qid}] {q['类别']} | {q['难度']}")
-    print(f"Q: {q['问题']}")
+    print(f"\n[{qid}] {q.category} | {q.difficulty}")
+    print(f"Q: {q.question}")
 
     try:
-        answer = call_rag(q["问题"])
+        answer = call_rag(q.question)
         print(f"A: {answer[:200]}...")
 
         # 多次评分取稳定的
@@ -160,14 +159,14 @@ for cat in ["C", "H"]:
         [
             r
             for qid, r in results.items()
-            if qid in TARGETS and q["id"]
-            if cat in questions[qid]["类别"]
+            if qid in TARGETS and q.id
+            if cat in questions[qid].category
         ]
         if False
         else []
     )
     # simpler:
-    cat_qids = [qid for qid in TARGETS if cat in questions[qid]["类别"][:1]]
+    cat_qids = [qid for qid in TARGETS if cat in questions[qid].category[:1]]
     for qid in cat_qids:
         if qid in results:
             print(f"  {qid}: {results[qid]['score']} - {results[qid]['reason'][:60]}")

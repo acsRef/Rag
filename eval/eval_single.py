@@ -14,6 +14,7 @@ from pathlib import Path
 
 import requests
 from dotenv import load_dotenv
+from gold import iter_questions
 
 load_dotenv(Path(__file__).parent / ".env")
 
@@ -154,9 +155,8 @@ def main():
         sys.exit(1)
 
     # Load test set
-    with open(TESTSET_PATH, encoding="utf-8") as f:
-        testset = json.load(f)
-    questions = testset["题目"][args.offset :]
+    # Load test set（gold 唯一入口）
+    questions = iter_questions()[args.offset :]
     if args.limit:
         questions = questions[: args.limit]
 
@@ -168,25 +168,25 @@ def main():
 
     # Count already done
     done = sum(
-        1 for q in questions if q["id"] in results and results[q["id"]].get("judge_score", -1) >= 0
+        1 for q in questions if q.id in results and results[q.id].get("judge_score", -1) >= 0
     )
     print(f"共 {len(questions)} 题，已完成 {done} 题\n")
 
     for i, q in enumerate(questions):
-        qid = q["id"]
+        qid = q.id
 
         # Skip if already done
         if qid in results and results[qid].get("judge_score", -1) >= 0:
             continue
 
         print(
-            f"[{i + 1}/{len(questions)}] {qid} ({q['难度']}) {q['问题'][:40]}...",
+            f"[{i + 1}/{len(questions)}] {qid} ({q.difficulty}) {q.question[:40]}...",
             end=" ",
             flush=True,
         )
 
         # Step 1: Call RAG
-        rag = call_rag(q["问题"], token, kb_id)
+        rag = call_rag(q.question, token, kb_id)
         answer = rag["answer"]
         ans_len = len(answer)
         print(f"→ {ans_len}字", end=" ", flush=True)
@@ -194,10 +194,10 @@ def main():
         if not answer or rag.get("error"):
             print(f"❌ RAG failed: {rag.get('error', 'empty')}")
             results[qid] = {
-                "question": q["问题"],
-                "reference": q["参考答案"],
-                "category": q["类别"],
-                "difficulty": q["难度"],
+                "question": q.question,
+                "reference": q.gold_answer,
+                "category": q.category,
+                "difficulty": q.difficulty,
                 "rag_answer": "",
                 "sources_count": 0,
                 "error": rag.get("error", "empty"),
@@ -211,15 +211,15 @@ def main():
 
         # Step 2: Judge
         time.sleep(3)  # delay before judge
-        judge = call_judge(q["问题"], q["参考答案"], answer)
+        judge = call_judge(q.question, q.gold_answer, answer)
         score = judge["score"]
         reason = judge["reason"]
 
         results[qid] = {
-            "question": q["问题"],
-            "reference": q["参考答案"],
-            "category": q["类别"],
-            "difficulty": q["难度"],
+            "question": q.question,
+            "reference": q.gold_answer,
+            "category": q.category,
+            "difficulty": q.difficulty,
             "rag_answer": answer,
             "sources_count": rag["sources_count"],
             "error": None,
@@ -242,7 +242,7 @@ def main():
     if scored:
         total = sum(r["judge_score"] for r in scored.values())
         max_score = len(scored) * 3
-        print(f"\n=== 已完成 {len(scored)}/{len(testset['题目'])} 题 ===")
+        print(f"\n=== 已完成 {len(scored)}/{len(iter_questions())} 题 ===")
         print(f"总分: {total}/{max_score} ({total / max_score * 100:.1f}%)")
 
 

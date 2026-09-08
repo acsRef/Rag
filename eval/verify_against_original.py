@@ -33,7 +33,12 @@ QUESTIONS = [
     ("Q17", "C", "跨文档对比", None),
     ("Q18", "C", "跨文档对比", None),
     ("Q25", "D", "每股合计分红", None),
-    ("Q26", "D", "2025年每股合计分红（含已实施的中期分红与年度预案）", "全年合计每10股4.9元，即每股0.49元"),
+    (
+        "Q26",
+        "D",
+        "2025年每股合计分红（含已实施的中期分红与年度预案）",
+        "全年合计每10股4.9元，即每股0.49元",
+    ),
     ("Q32", "E", "时序与追溯调整", None),
     ("Q33", "E", "时序与追溯调整", None),
     ("Q50", "H", "错误前提纠偏", None),
@@ -43,21 +48,21 @@ QUESTIONS = [
 ]
 
 HUMAN_LABELS = {
-    "Q01": {"correct": False, "partial": True,  "refusal": "N/A",  "citation": True},
-    "Q02": {"correct": True,  "partial": False, "refusal": "N/A",  "citation": True},
-    "Q03": {"correct": True,  "partial": False, "refusal": "N/A",  "citation": True},
-    "Q11": {"correct": False, "partial": True,  "refusal": "N/A",  "citation": True},
-    "Q12": {"correct": False, "partial": False, "refusal": False,  "citation": "N/A"},
-    "Q17": {"correct": False, "partial": False, "refusal": "N/A",  "citation": False},
-    "Q18": {"correct": False, "partial": True,  "refusal": "N/A",  "citation": True},
-    "Q25": {"correct": True,  "partial": False, "refusal": "N/A",  "citation": True},
-    "Q26": {"correct": False, "partial": False, "refusal": "N/A",  "citation": False},
-    "Q32": {"correct": False, "partial": True,  "refusal": "N/A",  "citation": True},
-    "Q33": {"correct": False, "partial": True,  "refusal": "N/A",  "citation": True},
-    "Q50": {"correct": True,  "partial": False, "refusal": "N/A",  "citation": True},
-    "Q51": {"correct": False, "partial": True,  "refusal": "N/A",  "citation": True},
-    "Q55": {"correct": False, "partial": False, "refusal": "N/A",  "citation": False},
-    "Q56": {"correct": True,  "partial": False, "refusal": "N/A",  "citation": "N/A"},
+    "Q01": {"correct": False, "partial": True, "refusal": "N/A", "citation": True},
+    "Q02": {"correct": True, "partial": False, "refusal": "N/A", "citation": True},
+    "Q03": {"correct": True, "partial": False, "refusal": "N/A", "citation": True},
+    "Q11": {"correct": False, "partial": True, "refusal": "N/A", "citation": True},
+    "Q12": {"correct": False, "partial": False, "refusal": False, "citation": "N/A"},
+    "Q17": {"correct": False, "partial": False, "refusal": "N/A", "citation": False},
+    "Q18": {"correct": False, "partial": True, "refusal": "N/A", "citation": True},
+    "Q25": {"correct": True, "partial": False, "refusal": "N/A", "citation": True},
+    "Q26": {"correct": False, "partial": False, "refusal": "N/A", "citation": False},
+    "Q32": {"correct": False, "partial": True, "refusal": "N/A", "citation": True},
+    "Q33": {"correct": False, "partial": True, "refusal": "N/A", "citation": True},
+    "Q50": {"correct": True, "partial": False, "refusal": "N/A", "citation": True},
+    "Q51": {"correct": False, "partial": True, "refusal": "N/A", "citation": True},
+    "Q55": {"correct": False, "partial": False, "refusal": "N/A", "citation": False},
+    "Q56": {"correct": True, "partial": False, "refusal": "N/A", "citation": "N/A"},
 }
 
 
@@ -90,12 +95,14 @@ def search_in_pdf(year: int, keywords: list[str], context_chars: int = 200) -> l
             start = max(0, m.start() - context_chars)
             end = min(len(text), m.end() + context_chars)
             snippet = text[start:end].replace("\n", " ").strip()
-            hits.append({
-                "year": year,
-                "keyword": kw,
-                "position": m.start(),
-                "snippet": snippet,
-            })
+            hits.append(
+                {
+                    "year": year,
+                    "keyword": kw,
+                    "position": m.start(),
+                    "snippet": snippet,
+                }
+            )
             if len(hits) >= 5:  # 限制每个 keyword 最多 5 个 hit
                 break
     return hits[:10]  # 限制总 hit 数
@@ -132,12 +139,14 @@ for qid, cat, desc, gold in QUESTIONS:
 
     print(f"\n{'─' * 80}")
     print(f"## {qid} [{cat}] — {desc}")
-    print(f"  Human: correct={human.get('correct')} partial={human.get('partial')} | Judge: {judge_score}/3")
+    print(
+        f"  Human: correct={human.get('correct')} partial={human.get('partial')} | Judge: {judge_score}/3"
+    )
     print(f"  Gold: {gold or '(see Q record)'}")
     print(f"  RAG answer ({len(rag_answer)} chars): {rag_answer[:200]}")
     print(f"  PDF hits: {ver['pdf_hits_count']}")
 
     # 显示 top 3 hits
     for i, hit in enumerate(ver["pdf_hits"][:3]):
-        print(f"  [{i+1}] {hit['year']}年报 / kw='{hit['keyword']}':")
+        print(f"  [{i + 1}] {hit['year']}年报 / kw='{hit['keyword']}':")
         print(f"      ...{hit['snippet'][:250]}...")

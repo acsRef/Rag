@@ -24,6 +24,8 @@ from pathlib import Path
 os.environ.setdefault("CHAT_MODEL", "Qwen/Qwen3-8B")
 
 # === imports after env override ===
+from gold import iter_questions
+
 from app.config import settings  # noqa: E402
 from app.core import evidence as ev_mod  # noqa: E402
 from app.core import pipeline as pipeline_mod  # noqa: E402
@@ -99,8 +101,9 @@ def reset_gate_capture() -> None:
 async def _noop(*args, **kwargs):
     return None
 
-pipeline_mod.conversation_memory.get_or_create_conversation = (
-    lambda conv_id, user_id: f"ablation-{conv_id or 'new'}"
+
+pipeline_mod.conversation_memory.get_or_create_conversation = lambda conv_id, user_id: (
+    f"ablation-{conv_id or 'new'}"
 )
 pipeline_mod.conversation_memory.get_history = lambda cid: []
 pipeline_mod.conversation_memory.get_summary = lambda cid: ""
@@ -190,7 +193,7 @@ async def judge_one(record: dict) -> bool | None:
 
 # ── 单题执行 ──────────────────────────────────────────
 async def run_one(question: dict, config: dict) -> dict:
-    req = ChatRequest(query=question["问题"])
+    req = ChatRequest(query=question.question)
     reset_gate_capture()
     t0 = time.monotonic()
     events: list[str] = []
@@ -208,9 +211,9 @@ async def run_one(question: dict, config: dict) -> dict:
     parsed = parse_sse_events(events) if not error else {}
     gate = _gate_capture.get("last_result", {})
     return {
-        "question_id": question["id"],
-        "category": question["类别"],
-        "category_prefix": get_category_prefix(question["类别"]),
+        "question_id": question.id,
+        "category": question.category,
+        "category_prefix": get_category_prefix(question.category),
         "config": {
             "gate_enabled": config["gate_enabled"],
             "threshold": config["threshold"],
@@ -224,9 +227,9 @@ async def run_one(question: dict, config: dict) -> dict:
         "gate_refused": parsed.get("gate_refused", False),
         "refusal_reason": parsed.get("refusal_reason"),
         "generation_answer": parsed.get("answer", ""),
-        "gold_answer": question["参考答案"],
+        "gold_answer": question.gold_answer,
         "is_correct": None,
-        "should_answer": get_should_answer(question["类别"]),
+        "should_answer": get_should_answer(question.category),
         "latency_ms": latency_ms,
         "sse_event_count": len(events),
         "sse_has_evidence_refused": parsed.get("gate_refused", False),
@@ -368,9 +371,8 @@ def three_axis_judge(off_agg: dict, t_agg: dict) -> dict:
 
 # ── main ──────────────────────────────────────────────
 async def amain(args):
-    with open(TESTSET_PATH, encoding="utf-8") as f:
-        ds = json.load(f)
-    items = ds["题目"][: args.limit]
+    # Load test set（gold 唯一入口）
+    items = iter_questions()[: args.limit]
     selected = [c for c in CONFIGS if c["name"] in args.configs]
 
     timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S")
@@ -394,12 +396,12 @@ async def amain(args):
 
         records: list[dict] = []
         for q in items:
-            print(f"  [{config['name']}] {q['id']} ...", end=" ", flush=True)
+            print(f"  [{config['name']}] {q.id} ...", end=" ", flush=True)
             r = await run_one(q, config)
             if args.judge:
                 r["is_correct"] = await judge_one(r)
             records.append(r)
-            (per_q_dir / f"{config['name']}_{q['id']}.json").write_text(
+            (per_q_dir / f"{config['name']}_{q.id}.json").write_text(
                 json.dumps(r, ensure_ascii=False, indent=2),
                 encoding="utf-8",
             )

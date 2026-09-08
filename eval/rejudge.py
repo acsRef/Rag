@@ -10,6 +10,7 @@ from pathlib import Path
 
 import requests
 from dotenv import load_dotenv
+from gold import iter_questions
 
 load_dotenv(Path(__file__).parent / ".env")
 
@@ -20,8 +21,8 @@ TESTSET_PATH = "D:/PyProject/ragent-py/eval/sany_annual_reports/rag_testset.json
 def judge(question_data, rag_answer):
     prompt = f"""根据参考答案判断RAG回答的准确度(0-3分)。
 
-问题: {question_data["问题"]}
-参考答案: {question_data["参考答案"][:300]}
+问题: {question_data.question}
+参考答案: {question_data.gold_answer[:300]}
 RAG回答: {rag_answer[:800]}
 
 3=完全正确;2=基本正确有小偏差;1=部分正确有明显错误;0=错误/拒答/编造。
@@ -71,9 +72,8 @@ RAG回答: {rag_answer[:800]}
 def main():
     with open(RESULTS_PATH, encoding="utf-8") as f:
         results = json.load(f)
-    with open(TESTSET_PATH, encoding="utf-8") as f:
-        testset = json.load(f)
-    questions = {q["id"]: q for q in testset["题目"]}
+    # Load test set（gold 唯一入口）
+    questions = {q.id: q for q in iter_questions()}
 
     # 找出未评分的题
     targets = [
