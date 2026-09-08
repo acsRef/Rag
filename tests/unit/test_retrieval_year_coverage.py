@@ -43,6 +43,9 @@ def _make_result(chunk_id, doc_id, year, score=0.5, text="内容"):
 
 
 def test_supplement_skips_non_cross_year(monkeypatch):
+    # 该策略经 ablation 后默认关闭（决定见 docs/plans/2026-08-23-baseline-ablation.md），
+    # 单测显式开启以锁定函数本身的行为
+    monkeypatch.setattr(retrieval.settings, "year_supplement_enabled", True)
     results = [_make_result("a", "d2023", "2023年")]
     out = retrieval._supplement_missing_years(results, "2023年营收", ["kb1"], None, True, "")
     # 单点查询（有年份无跨年）→ 不触发，原样返回
@@ -51,6 +54,8 @@ def test_supplement_skips_non_cross_year(monkeypatch):
 
 def test_supplement_appends_missing_related_years(monkeypatch):
     """query 含 2023-2025，但结果只有 2024 和 2025 → 应补 2023。"""
+    # 策略默认关闭（ablation 决定），单测显式开启以锁定函数行为
+    monkeypatch.setattr(retrieval.settings, "year_supplement_enabled", True)
     results = [
         _make_result("r24", "d2024", "2024年", score=0.8),
         _make_result("r25", "d2025", "2025年", score=0.7),

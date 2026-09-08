@@ -394,10 +394,14 @@ def test_failed_doc_can_be_retried(integration_db, fake_llm_stack, monkeypatch):
 
 def test_questions_align_with_persisted_chunks(integration_db, fake_llm_stack, monkeypatch):
     """单 chunk embedding 失败时，questions 不得挂到别的 chunk（旧 zip 错位）。"""
+    from app.config import settings
     from app.ingestion.indexer import document_indexer
     from app.llm.embedding import sf_embedding
     from app.store import pgvector_store
     from app.store.db import ChunkQuestion, get_db_ctx
+
+    # 该测试断言 ChunkQuestion 行存在——channel 默认随 dev .env 关闭，显式开启
+    monkeypatch.setattr(settings, "question_channel_enabled", True)
 
     async def selective_fail(texts, **kw):
         from tests.integration.conftest import fake_vector

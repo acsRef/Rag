@@ -104,7 +104,17 @@ async def test_cross_doc_extras_reach_final_results(ingest_docs, monkeypatch):
         c["score"] = 0.02 - i * 0.001  # RRF 量级的直连分
 
     async def fake_collect(
-        kb_ids, query_emb, query, user_role_ids, can_read_all, top_k, seen_ids, results, user_id=""
+        kb_ids,
+        query_emb,
+        query,
+        user_role_ids,
+        can_read_all,
+        top_k,
+        seen_ids,
+        results,
+        user_id="",
+        document_ids=None,
+        filters=None,
     ):
         for c in d1_chunks:
             seen_ids.add(c["chunk_id"])
@@ -112,6 +122,9 @@ async def test_cross_doc_extras_reach_final_results(ingest_docs, monkeypatch):
 
     monkeypatch.setattr(retrieval_mod, "_collect_results", fake_collect)
     monkeypatch.setattr(s, "mmr_enabled", False)
+    # 跨文档检索经 ablation 默认关闭（docs/plans/2026-08-23-baseline-ablation.md），
+    # 单测显式开启以锁定 engine 内 RRF 映射逻辑
+    monkeypatch.setattr(s, "cross_doc_enabled", True)
 
     results = await retrieval_engine.retrieve("多头注意力", None, can_read_all=True)
     doc_ids = {r.document_id for r in results}

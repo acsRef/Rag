@@ -215,6 +215,11 @@ class TextChunker:
                 flush()
                 packed.extend(self._hard_split(t, title, section_path))
                 continue
+            if not cur_parts and header and len(header) + e_len > self.max_chunk_size:
+                # 元素自身可容纳，但加法性路径头超限：去掉重复头保整体
+                # （title / section_path 元数据仍携带上下文），避免把原子块硬切开
+                packed.append(Chunk(text=t, title=title, section_path=list(section_path)))
+                continue
             cur_parts.append(t)
             cur_len += e_len
         flush()
