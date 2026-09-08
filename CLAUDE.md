@@ -122,12 +122,12 @@ cd frontend && npm run build   # runs vue-tsc -b && vite build
 
 **Stack**: FastAPI (Python 3.11) + Vue 3/Vite/TypeScript + PostgreSQL 15 + pgvector 0.8
 
-**LLM providers**: SiliconFlow (chat: Qwen/Qwen3-8B, intent: Qwen/Qwen3-8B, complex-query rewrite: DeepSeek-R1-0528-Qwen3-8B, vision: Qwen/Qwen3-VL-8B-Instruct, embedding: Qwen3-VL-Embedding-8B 4096d, rerank: BAAI/bge-reranker-v2-m3). MiniMax M3 available as fallback provider via `chat_provider="minimax"`.
+**LLM providers**: SiliconFlow (chat: Qwen/Qwen3-8B, intent: Qwen/Qwen3-8B, complex-query rewrite: DeepSeek-R1-0528-Qwen3-8B, vision: Qwen/Qwen3-VL-8B-Instruct, embedding: Qwen/Qwen3-Embedding-8B 1024d, rerank: BAAI/bge-reranker-v2-m3). MiniMax M3 available as fallback provider via `chat_provider="minimax"`.
 
 **RAG pipeline** (see [app/core/pipeline.py:118](app/core/pipeline.py#L118) `RAGPipeline.execute`):
 ```
 # Default runtime (strategy flags off unless noted; see app/config.py)
-QueryRewrite → IntentClassify (DeepSeek-V3; route to 1-3 KBs) → Hybrid Search
+QueryRewrite → IntentClassify (Qwen3-8B; route to 1-3 KBs) → Hybrid Search
 (vector cosine + BM25 ts_rank + question-vector channel, RRF merge; relaxed-BM25
 fallback when < top_k)
 → Cross-encoder Rerank → MMR diversity (λ=0.7, ≤2 per doc) → TopK
@@ -251,7 +251,7 @@ D:/miniConda/envs/rag/python.exe -c "import app.main"
 │   │   └── pipeline.py        # IngestionPipeline orchestrator
 │   ├── llm/                   # Async LLM clients (OpenAI-compatible)
 │   │   ├── base.py            # AsyncOpenAI wrapper + circuit breaker
-│   │   ├── chat.py            # SiliconFlow chat (DeepSeek-V3)
+│   │   ├── chat.py            # SiliconFlow chat (Qwen3-8B)
 │   │   ├── embedding.py       # SiliconFlow embeddings
 │   │   ├── rerank.py          # Cross-encoder reranking
 │   │   └── vision.py          # Image understanding (Qwen3-VL-8B-Instruct, LRU cache)

@@ -42,11 +42,15 @@ def test_render_table_doc_contains_comment_and_enums():
             },
         ],
     )
-    assert "# 表 `public.fact_sales`" in md
-    assert "销售记录事实表" in md
-    assert "| channel | character varying(10) | 销售渠道 |" in md
+    # P15 prelude 版格式：标题无反引号；概述段自然语言；字段清单 + 字段详解 + 表关系
+    assert "# 表 public.fact_sales" in md
+    assert "表 `public.fact_sales` 用途：销售记录事实表。" in md
+    assert "主键字段是 `sale_id`" in md
+    assert "| `channel` | character varying(10) | 销售渠道 | 枚举值: 线上 / 线下 |" in md
     assert "线上 / 线下" in md
+    assert "字段 `channel`（类型 character varying(10)），销售渠道" in md
     assert "FK → public.dim_date.date_id" in md
+    assert "`public.fact_sales.date_id` → `public.dim_date.date_id`" in md
 
 
 def test_render_api_doc_http():

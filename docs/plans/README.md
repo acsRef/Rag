@@ -10,6 +10,10 @@
 
 ## 已完成
 
+- [2026-09-07-baseline-3r-rebuild](2026-09-07-baseline-3r-rebuild.md) — **Baseline-3R 控制组重建记录**（commit `d085ec9`，2026-09-06）：1381 chunks @v3、question channel OFF、metadata batching 修复后干净重建；15 题 verified gate acc(≥2)=66.7%（与 Baseline-2 同口径一致，佐证"重建的控制组而非新实验"）；lineage 尾环：Baseline-3(LOCKED) → 3R(控制组) → Baseline-4(后续实验)
+
+- [2026-08-24-baseline-4-candidate-invalid](2026-08-24-baseline-4-candidate-invalid.md) — Baseline-4 候选标记 **INVALID**：metadata 单次 LLM 调用缺陷（超时丢 41 chunks / question coverage 0.94%）→ 架构修复（25 chunks/批 + 重试 + 显式键映射 + 降级不丢块）；明确后续正确实验链（3R 控制组 → Baseline-4 channel ON）
+
 - [2026-08-24-baseline-3-locked](2026-08-24-baseline-3-locked.md) — RAG v2 Step 2A 锁定：表格感知摄入（表格双表示 + chunk_type/table_headers/table_meta 元数据列，1340 chunks @v3，channel OFF）；15-Q gate 两轮 ±50pp 单题翻转证明无统计力，升级 65 题正式 benchmark——overall acc(≥2) **73.8%**（mean 2.23/3，覆盖 65/65），六条 lock 准则全 PASS；A 类 80%（n=10）坐实增益，B 类 66.7% 证伪 run2 塌方，C 类 50% 留作后续改进
 
 - [2026-08-23-baseline-2-locked](2026-08-23-baseline-2-locked.md) — RAG v2 Step 1：embedding 配置迁移（Qwen3-VL-Embedding-8B@4096 → Qwen3-Embedding-8B@1024），清库+迁维+重摄 1381 chunks @1024 代际 v2，15 题 verified acc(≥2)=66.7%（+16.7pp vs Baseline-1R），mean 73.3%；过程含 2 个计划外 bug 修复（indexer 写死 embedding_version=1 让新 chunk 对检索不可见 / integration conftest 不锁 question_channel_enabled）；完整性断言穷举通过

@@ -150,9 +150,9 @@ Parser(多格式→Markdown) → Cleaner → Structurer → Chunker
 ```
 
 ### LLM 栈
-- **SiliconFlow**:chat 默认 `deepseek-ai/DeepSeek-V3`;意图路由 V3;复杂查询拆解
+- **SiliconFlow**:chat 默认 `Qwen/Qwen3-8B`;意图路由 Qwen3-8B;复杂查询拆解
   `DeepSeek-R1-0528-Qwen3-8B`;视觉 `Qwen/Qwen3-VL-8B-Instruct`;
-  Embedding `Qwen3-VL-Embedding-8B`(4096d);Rerank `BAAI/bge-reranker-v2-m3`
+  Embedding `Qwen/Qwen3-Embedding-8B`(1024d,corpus 代际 v3);Rerank `BAAI/bge-reranker-v2-m3`
 - **MiniMax M3**:备选 provider(`chat_provider="minimax"` 时启用)+ metadata 批量生成
 - **熔断器**:按 provider 隔离,5xx/超时/连接错才计失败,4xx 永久错误不计
 

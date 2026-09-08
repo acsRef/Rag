@@ -49,18 +49,73 @@ def render_faq_doc(*, question: str, keywords: list[str], tables: list[str],
 
 
 def render_table_doc(*, schema: str, table: str, table_comment: str, columns: list[dict]) -> str:
-    """columns 每项: {name, type, comment, enums: list|None, fk: str|None}"""
-    lines = [f"# 表 `{schema}.{table}`", ""]
-    if table_comment:
-        lines += [table_comment, ""]
-    lines += ["## 字段", "", "| 字段 | 类型 | 含义 | 枚举/FK |", "|---|---|---|---|"]
+    """P15 prelude 改版：自然语言 + 表格混合（ragent-py KB 喂给 LLM 用）。
+
+    columns 每项: {name, type, comment, enums: list|None, fk: str|None}
+
+    设计要点（LLM 生成 SQL 时优先采纳字面词）：
+    - 概述段：说明表用途 + 关键字段 + 表关系（FK）
+    - 字段清单表格（结构化索引）
+    - 字段详解段：每个字段单独一段，「字段 X（类型 Y）含义 Z」逐字给出
+    - 表关系段：FK 链路的自然语言描述（避免 LLM 凭常识拼列名）
+    """
+    lines = [f"# 表 {schema}.{table}", ""]
+
+    # 1. 概述 + 关键字段（自然语言）
+    pk = next((c["name"] for c in columns
+               if c.get("comment") and "主键" in c["comment"]), None)
+    if not pk:
+        # fallback: 找第一个 integer + 通常是 PK
+        for c in columns:
+            if c["type"].startswith("integer"):
+                pk = c["name"]
+                break
+    fk_cols = [c for c in columns if c.get("fk")]
+    lines.append(
+        f"表 `{schema}.{table}` 用途：{table_comment or '（业务表，无 COMMENT）'}。"
+        + (f" 主键字段是 `{pk}`。" if pk else "")
+        + (f" 与其他表通过外键关联：{', '.join(c['fk'] for c in fk_cols)}。" if fk_cols else "")
+    )
+    lines.append("")
+
+    # 2. 字段清单表格（结构化索引，方便 embedding 检索）
+    lines += ["## 字段清单", "",
+              "| 字段名 | 类型 | 含义 | 枚举值 / 外键 |",
+              "|---|---|---|---|"]
     for c in columns:
         extra = []
         if c.get("fk"):
             extra.append(f"FK → {c['fk']}")
         if c.get("enums"):
             extra.append("枚举值: " + " / ".join(str(v) for v in c["enums"]))
-        lines.append(f"| {c['name']} | {c['type']} | {c.get('comment') or ''} | {'; '.join(extra)} |")
+        lines.append(
+            f"| `{c['name']}` | {c['type']} | {c.get('comment') or ''} | {'; '.join(extra)} |"
+        )
+    lines.append("")
+
+    # 3. 字段详解（自然语言段，LLM 生成 SQL 时优先用这里给的字面词）
+    lines += ["## 字段详解（SQL 生成时请使用下方字面词，不要凭常识臆造）", ""]
+    for c in columns:
+        seg = f"字段 `{c['name']}`（类型 {c['type']}）"
+        if c.get("comment"):
+            seg += f"，{c['comment']}"
+        if c.get("fk"):
+            seg += f"。外键关联：{c['fk']}"
+        if c.get("enums"):
+            seg += f"。枚举值：{' / '.join(str(v) for v in c['enums'])}"
+        seg += "。"
+        lines.append(seg)
+    lines.append("")
+
+    # 4. 表关系（自然语言段）
+    if fk_cols:
+        lines += ["## 表关系（JOIN 时使用以下外键关联）", ""]
+        for c in fk_cols:
+            lines.append(
+                f"`{schema}.{table}.{c['name']}` → `{c['fk']}`（JOIN 条件：`{schema}.{table}.{c['name']} = {c['fk'].split('.', 1)[-1]}`）"
+            )
+        lines.append("")
+
     return "\n".join(lines) + "\n"
 
 

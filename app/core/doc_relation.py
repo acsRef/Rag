@@ -501,7 +501,7 @@ class CrossDocRetriever:
 
 
 def _cosine_similarity(a: list[float], b: list[float]) -> float:
-    """Vanilla cosine via numpy. Used for channel 3 (4096-dim embedding)."""
+    """Vanilla cosine via numpy. Used for channel 3 (settings-dim embedding)."""
     a_arr = np.array(a, dtype=np.float64)
     b_arr = np.array(b, dtype=np.float64)
     norm_a = float(np.linalg.norm(a_arr))

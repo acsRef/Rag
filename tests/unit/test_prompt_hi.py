@@ -34,6 +34,13 @@ def test_i_class_forbids_synthesis_substitution():
     assert "拒答" in SYSTEM_PROMPT
 
 
+def test_citation_format_rule_present():
+    # 引用格式：[1][2] 对应 Source 编号（Issue #1 验收标准 3——答案引用必须映射到检索来源
+    # 的"规则层"锁定；答案级自动对齐校验见 docs/architecture-decisions.md D9 已知缺口）
+    assert "引用来源时用 [1][2]" in SYSTEM_PROMPT
+    assert "不引用来源的扣分" in SYSTEM_PROMPT
+
+
 def test_no_duplicate_information_sufficiency_section():
     # 之前编辑引入过重复块，锁定不回归
     assert SYSTEM_PROMPT.count("信息充分度决策") == 1
