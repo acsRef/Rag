@@ -12,7 +12,7 @@
 - **混合检索**：向量语义 + BM25（jieba 分词、OR-tsquery）+ 候选问题通道，RRF 融合；两阶段检索（文档级筛选 → 块级）；relaxed-BM25 兜底
 - **多路召回（question channel）**：摄入期 LLM 为每个 chunk 生成候选问题 → 独立 embedding → 查询期三路 RRF（权重 0.15 防噪声）；默认开启，可 env 关闭
 - **跨编码器重排 + MMR 多样性**：bge-reranker-v2-m3 精排；MMR（λ=0.7，每文档 ≤2）控制冗余
-- **RAG v2 可选策略**（代码齐备、默认关闭，见下方检索链路表）：跨文档关联检索 / 权威 section 加权 / section 补充 / 跨年覆盖补充 / 查询拆解 / Evidence Gate（证据覆盖不足时拒答）
+- **检索可调策略（research/ablation 路径）**：6 个 env 开关覆盖跨文档关联 / section 加权 / section 补充 / 跨年覆盖 / 查询拆解 / Evidence Gate，默认关闭，详见下方「Research / ablation path」表（8-config ablation 在三一语料无 recall 收益）
 - **长对话记忆**：Token 预算窗口 + 超限自动摘要压缩 + 有界滞后；思考/回答双流推送，支持中断恢复
 - **PII 安全红线**：身份证/手机/邮箱/银行卡三层检测（正则 → Luhn/mod-11 算法校验 → 上下文排除），脱敏或拒审，管理员审核（确认/误报/白名单）
 - **文档增量更新**：内容 hash 复用 —— 未变更 chunk 复用 embedding 与 LLM 元数据；embedding 部分失败时保留旧索引可重试
@@ -57,10 +57,12 @@
 
 ## 检索链路
 
+### Production path（默认上线）
+
 ```
 query
-  ↓ QueryRewrite（代词消解 / 复杂查询拆解，DeepSeek-R1）
-  ↓ IntentClassify（Qwen3-8B，路由到 1-3 个知识库）
+  ↓ QueryRewrite（代词消解 / 复杂查询拆解，DeepSeek-R1，仅复杂时触发）
+  ↓ IntentClassify（Qwen3-8B，路由 1-3 个知识库）
   ↓ Hybrid Search
       ├─ 向量通道   Qwen3-Embedding-8B@1024（表格 chunk 用归一化 retrieval_text）
       ├─ BM25 通道  jieba 分词 + PG ts_rank（OR-tsquery；< top_k 时 relaxed 兜底）
@@ -71,7 +73,11 @@ query
   ↓ TopK → Prompt 组装（证据表 + 冲突提示）→ SSE 流式生成（TagStreamParser 统一 think/answer 流）
 ```
 
-**RAG v2 可选策略**（8 组 ablation 对三一语料无 recall 收益，默认关闭；需要时用 env 单点重评估）：
+**始终开启**：问题通道（`QUESTION_CHANNEL_ENABLED`，env 可关）、检索缓存、降级提示、电路熔断。
+
+### Research / ablation path（默认关闭，需 env 显式开启）
+
+8-config ablation 在三一重工语料上无 recall 增益、MRR +0.8pp（噪声范围）—— 这些开关只用于单点重评估，不进生产：
 
 | 策略 | env | 说明 |
 |---|---|---|
@@ -79,10 +85,10 @@ query
 | 权威 section 加权 | `SECTION_BOOST_ENABLED` | 财务关键词触发，权威 section（主要会计数据/利润表）boost |
 | section 补充 | `SECTION_SUPPLEMENT_ENABLED` | 权威 section 定向补充检索 |
 | 跨年覆盖补充 | `YEAR_SUPPLEMENT_ENABLED` | C 类跨年 query 缺失年份定向补 1 条 |
-| 查询拆解 | `QUERY_DECOMPOSITION_ENABLED` | 复杂 query 拆子问题 |
-| Evidence Gate | `EVIDENCE_GATE_ENABLED` | 证据覆盖率 < 阈值或高严重度冲突时拒答（代码齐备，默认关） |
+| 查询拆解 | `QUERY_DECOMPOSITION_ENABLED` | 复杂 query 拆子问题（仅触发 DeepSeek-R1 rewrite） |
+| Evidence Gate | `EVIDENCE_GATE_ENABLED` | 证据覆盖率 < 阈值或高严重度冲突时拒答（代码齐备，未启用） |
 
-始终开启：问题通道（`QUESTION_CHANNEL_ENABLED`，env 可关，Baseline 评测在 OFF 下锁定）、检索缓存、降级提示。
+详见 [`docs/plans/2026-08-23-ablation-report.md`](docs/plans/2026-08-23-ablation-report.md)。
 
 ## 快速开始
 
@@ -188,17 +194,15 @@ D:/miniConda/envs/rag/python.exe eval/eval_single.py
 D:/miniConda/envs/rag/python.exe eval/rejudge.py
 ```
 
-**Baseline 阵容（labeling：Baseline-N = 正式锁定档位；后缀 R = 重建/重放）**：
+**Baseline 阵容（按评估代际）**：
 
-| Baseline | 配置 | 结果 | 状态 |
+| Baseline | 唯一变量 | 结果 | 状态 |
 |---|---|---|---|
-| Baseline-1R | DeepSeek-V3 + Qwen3-VL-Embedding@4096，v1 语料 | acc(≥2) 50.0%（14/15 覆盖） | 历史参照 |
-| Baseline-2 | Qwen3-Embedding-8B@**1024**，重新摄入 1381 chunks @v2，channel OFF | 66.7%（15 题）| LOCKED |
-| Baseline-3 | 表格感知摄入（双表示 + 元数据列），1340 chunks @v3，channel OFF | **73.8%**（65 题，mean 2.23/3，覆盖 65/65）| LOCKED |
-| Baseline-3R | 重建控制组：1381 chunks，metadata batching 修复，channel OFF | 66.7%（15 题）| 控制组（非新功能） |
-| Baseline-4 候选 | 1381 chunks，channel ON | INVALID（metadata 单次调用缺陷丢 41 chunks，coverage 0.94%）| 已归档 |
+| Baseline-2 | Embedding 迁移至 Qwen3-Embedding-8B@1024（4096→1024） | 66.7%（15-Q gate，acc≥2）| LOCKED |
+| **Baseline-3** | 表格感知摄入：`chunks.text` 保留 Markdown（生成用），`retrieval_text` 归一化（嵌入用），`chunk_type/table_headers/table_meta` 落库 | **73.8%**（65-Q，acc≥2，mean 2.23/3，覆盖 65/65）| **LOCKED · 正式锁定档** |
+| Baseline-3R | 重建控制组：metadata batching 修复后重建 1381 chunks（channel OFF） | 66.7%（15-Q）| 控制组（非新功能） |
 
-方法论要点：15 题小样本被 ±50pp 单题翻转证明无统计力，正式锁定以 65 题 benchmark 为准（见 `docs/plans/2026-08-24-baseline-3-locked.md`）；评测时 judge ≠ 生成模型（同一 API 密钥下用独立 model 参数）。
+> 上述数字均来自 Evaluator v1（独立 judge 模型 + gold v2 唯一入口）。15-Q gate 在三一语料被 ±50pp 单题翻转证伪（两次 15-Q 跑方向相反）—— 正式结论一律以 65-Q 为准。详见 [`docs/plans/2026-08-24-baseline-3-locked.md`](docs/plans/2026-08-24-baseline-3-locked.md)、[`docs/plans/2026-08-23-baseline-2-locked.md`](docs/plans/2026-08-23-baseline-2-locked.md)。
 
 ## 测试
 
@@ -237,7 +241,7 @@ D:/miniConda/envs/rag/python.exe -m mcp_server.server
 
 - **LLM**：SiliconFlow（provider 熔断隔离，MiniMax 可作 fallback）
 - **Embedding**：`embedding_model` / `embedding_dimension`（1024）/ `current_embedding_version`（代际 v3）——切换模型后需 `tools/migrate_vector_dimension.py` + 重摄
-- **策略开关**：见上方「RAG v2 可选策略」表
+- **策略开关**：见上方「Research / ablation path」表（默认关闭，env 单点重评估用）
 - **PII**：三层检测开关、脱敏策略（mask full/partial / reject / audit）
 - **MMR**：λ=0.7、每文档上限、惩罚系数（均可调）
 - **对话**：轮数上限、摘要触发轮数、token 预算

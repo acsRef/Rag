@@ -116,8 +116,8 @@ class ImageDescriber:
         try:
             from app.config import settings as _settings
 
-            # 固定走多模态模型：文本模型可能是非多模态的 highspeed 变体。
-            # Qwen2.5-VL 支持 system 角色（DeepSeek-OCR 曾因不支持才并入 user，已回退）。
+            # 固定走多模态模型：文本模型可能是非多模态的 highspeed 变体，
+            # 不可被 chat_provider 覆盖（vision_model 始终是 Qwen3-VL）。
             resp = await minimax_client.chat(
                 [
                     {

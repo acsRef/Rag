@@ -5,15 +5,13 @@ class Settings(BaseSettings):
     # LLM chat provider: "siliconflow" (default) or "minimax"
     chat_provider: str = "siliconflow"
 
-    # SiliconFlow (Chat + Vision + Embedding + Rerank)
+    # SiliconFlow (Chat + Vision + Embedding + Rerank) — production stack
     siliconflow_api_key: str = ""
     siliconflow_base_url: str = "https://api.siliconflow.cn/v1"
-    # chat 模型：V3 费用过高（2026-08-21 成本决策），改用 Qwen3-8B
     chat_model: str = "Qwen/Qwen3-8B"
-    # intent 模型：路由分类任务较轻，Qwen3-8B 足够；统一模型栈降低切换成本
-    intent_model: str = "Qwen/Qwen3-8B"
-    rewrite_model: str = "deepseek-ai/DeepSeek-R1-0528-Qwen3-8B"  # 复杂查询的子问题拆解/依赖规划（推理模型，仅复杂时动用）
-    vision_model: str = "Qwen/Qwen3-VL-8B-Instruct"  # 图片理解（多模态 Qwen-VL 8B，遵守[类型]分类约定；原 Qwen2.5-VL-7B 已在硅基流动下架）
+    intent_model: str = "Qwen/Qwen3-8B"  # 路由分类；统一 chat 模型栈
+    rewrite_model: str = "deepseek-ai/DeepSeek-R1-0528-Qwen3-8B"  # 复杂查询拆解（推理模型，仅复杂时动用）
+    vision_model: str = "Qwen/Qwen3-VL-8B-Instruct"  # 多模态视觉模型（不走 chat_provider 切换）
     embedding_model: str = "Qwen/Qwen3-Embedding-8B"
     embedding_dimension: int = 1024
     rerank_model: str = "BAAI/bge-reranker-v2-m3"
@@ -31,7 +29,7 @@ class Settings(BaseSettings):
     jwt_algorithm: str = "HS256"
     access_token_expire_minutes: int = 1440  # 24h
 
-    # 首次启动种子账号（CLAUDE.md 宣称可配，旧实现硬编码 admin/admin123）
+    # First-startup seed account (created once if DB is empty)
     default_username: str = "admin"
     default_password: str = "admin123"
 
@@ -55,7 +53,6 @@ class Settings(BaseSettings):
     mmr_doc_penalty: float = 0.05
 
     # Token budget — 控制注入 LLM 的 prompt 各部分大小
-    # 默认值基于 MiniMax M3 128K 上下文,留足余量
     prompt_max_tokens: int = 10000  # 总预算(不含 LLM 输出预留)
     history_max_tokens: int = 2000  # 近期对话的 token 预算
     summary_max_tokens: int = 800  # 历史摘要的最大 token 数
@@ -77,8 +74,8 @@ class Settings(BaseSettings):
     embedding_backoff_base: float = 1.0
     embedding_rate_limit_rps: int = 5
     embedding_send_dimensions: bool = True  # env: EMBEDDING_SEND_DIMENSIONS
-    # Qwen3-Embedding 系列接受 dimensions 参数；bge-m3 等固定维度模型不支持，
-    # 切换此类模型时置 false（其原生维度写入 embedding_dimension）。
+    # Qwen3-Embedding 系列支持 `dimensions` 参数；固定维度模型（如 bge-m3）须置 false，
+    # 并将 embedding_dimension 设为其原生维度。
 
     # Circuit breaker
     circuit_breaker_enabled: bool = True  # env: CIRCUIT_BREAKER_ENABLED
@@ -89,20 +86,21 @@ class Settings(BaseSettings):
     embedding_cache_enabled: bool = True  # env: EMBEDDING_CACHE_ENABLED
 
     # Active embedding schema version used by retrieval SQL filters.
-    # 1 = 第一代 corpus（Qwen3-VL-Embedding-8B@4096，裸 text 输入，历史）；
-    # 2 = 第二代 corpus（Qwen3-Embedding-8B@1024，裸 text 输入，Baseline-2）；
-    # 3 = 第三代 corpus（Qwen3-Embedding-8B@1024，表格归一化 retrieval_text 输入，
-    #     Baseline-3+，见 docs/plans/2026-08-23-rag-v2-implementation-plan.md Task 15）。
     # hybrid_search 加 AND embedding_version = :v 隔离不同代际。
+    # 2 = 第二代 corpus（Qwen3-Embedding-8B@1024，裸 text 输入）；
+    # 3 = 第三代 corpus（Qwen3-Embedding-8B@1024，表格归一化 retrieval_text 输入）。
+    # 见 docs/plans/2026-08-24-baseline-3-locked.md。
     current_embedding_version: int = 3  # env: CURRENT_EMBEDDING_VERSION
 
     # Retrieval cache (see app/core/cache.py::RetrievalCache)
     retrieval_cache_enabled: bool = True  # env: RETRIEVAL_CACHE_ENABLED
 
-    # Retrieval strategies default off: the 8-group ablation on the Sany corpus
-    # (docs/plans/2026-08-23-ablation-report.md) showed no recall gain and
-    # slightly negative MRR vs baseline. Env vars keep each strategy available
-    # for single-point re-evaluation (e.g. CROSS_DOC_ENABLED=true).
+    # ── Optional retrieval strategies (default OFF; research/ablation path) ──
+    # Production path = hybrid_search + rerank + MMR alone. 8-config ablation on
+    # the Sany corpus ([docs/plans/2026-08-23-ablation-report.md](docs/plans/2026-08-23-ablation-report.md))
+    # showed no recall gain and +0.8pp MRR (noise range) vs baseline. Each env
+    # var below enables a single strategy for re-evaluation; turning them on in
+    # production is not recommended.
     cross_doc_enabled: bool = False  # env: CROSS_DOC_ENABLED
     section_boost_enabled: bool = False  # env: SECTION_BOOST_ENABLED
     section_supplement_enabled: bool = False  # env: SECTION_SUPPLEMENT_ENABLED

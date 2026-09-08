@@ -48,3 +48,8 @@ mcp_server/
 # Eval data (regenerable, not source code)
 eval/ablation/
 *.pymupdf4llm.md
+
+# Personal prep / interview notes (local only, not source)
+docs/interview-talking-points.md
+docs/*-interview*
+docs/interview*
