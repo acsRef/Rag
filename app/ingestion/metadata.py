@@ -13,6 +13,7 @@ aborting the document or dropping chunks.
      全库问题覆盖率 ~1%，question channel 形同虚设。
 """
 
+import os
 import asyncio
 import logging
 import time
@@ -192,4 +193,23 @@ class ChunkMetadataGenerator:
         return hit
 
 
-chunk_metadata_generator = ChunkMetadataGenerator()
+class _MetadataDisabled:
+    """`INGEST_METADATA_ENABLED=0` 时的空实现：完全不调元数据 LLM。
+
+    为什么存在（2026-11-17）：元数据抽取向每个 25-chunk 批次发一次 LLM 请求，实测在
+    网络抖动/超时时会重试到分钟级；重灌 3 份 470-chunk 的年报时要 1–2 小时。
+    关掉它之后入库只做「分块 + embedding」（embedding 有缓存 + 5 rps 限流），
+    分钟级完成；代价是 chunk 级 metadata（年份/实体/关键词加成）缺失，
+    检索仍可用（纯向量 + 关键词），只是丢一部分加成。
+    默认开启（`1`），只有显式置 `0` 才跳过——生产行为不变。
+    """
+
+    def generate(self, chunks, *, doc_label: str = ""):  # noqa: ANN001, ARG002
+        return chunks
+
+
+chunk_metadata_generator = (
+    ChunkMetadataGenerator()
+    if os.getenv("INGEST_METADATA_ENABLED", "1") != "0"
+    else _MetadataDisabled()
+)
