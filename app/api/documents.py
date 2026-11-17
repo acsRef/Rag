@@ -342,14 +342,23 @@ async def upload_document(
 @router.get("", response_model=list[DocumentListItem])
 def list_documents(
     current_user: dict = Depends(get_current_user),
+    kb_id: str | None = None,
     limit: int = 50,
     offset: int = 0,
 ):
+    """列文档；`kb_id` 可选，给了就只列该知识库。
+
+    2026-11-17 修：此前**没有 kb_id 参数**（FastAPI 会静默忽略未知 query），
+    admin 调 `?kb_id=x` 拿到的是全库 → 任何「按库清理/按库统计」的客户端都会误删/误算
+    （真实事故：评测平台据此清理临时库，把全库 14 份文档删了）。
+    """
     limit = min(max(1, limit), 200)
     offset = max(0, offset)
     with get_db_ctx() as session:
         can_read_all = current_user["is_admin"] or "doc.read_all" in current_user["permissions"]
         query = session.query(Document)
+        if kb_id:
+            query = query.filter(Document.kb_id == kb_id)
         if not can_read_all:
             query = query.filter(Document.owner_id == current_user["id"])
         docs = query.order_by(Document.created_at.desc()).offset(offset).limit(limit).all()
