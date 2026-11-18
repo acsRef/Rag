@@ -169,12 +169,12 @@ def main() -> None:
         try:
             data = _retrieve(args.base_url, token, q.question, kb_id, args.top_k)
         except Exception as e:
-            print(f"[{i}/{len(questions)}] {q['id']} ❌ retrieve error: {e}", flush=True)
+            print(f"[{i}/{len(questions)}] {q.id} ❌ retrieve error: {e}", flush=True)
             results.append(
                 {
                     "id": q.id,
-                    "category": q.get("类别"),
-                    "difficulty": q.get("难度"),
+                    "category": q.category,
+                    "difficulty": q.difficulty,
                     "question": q.question,
                     "error": str(e),
                 }
@@ -183,11 +183,11 @@ def main() -> None:
         elapsed_ms = (time.monotonic() - t0) * 1000
         items = data.get("items", [])
         retrieved_ids = [it["document_id"] for it in items]
-        gold = q.get("gold_documents") or []
+        gold = q.gold_documents or []
         result = {
             "id": q.id,
-            "category": q.get("类别"),
-            "difficulty": q.get("难度"),
+            "category": q.category,
+            "difficulty": q.difficulty,
             "question": q.question,
             "retrieved_count": len(items),
             "top1_doc": items[0]["document_id"] if items else None,
@@ -202,7 +202,7 @@ def main() -> None:
         icon = "✓" if not gold or result.get("metrics", {}).get("hit@10") else "·"
         m = result.get("metrics", {})
         print(
-            f"[{i}/{len(questions)}] {q['id']} {icon} "
+            f"[{i}/{len(questions)}] {q.id} {icon} "
             f"top1={result['top1_doc']} hits={result['retrieved_count']} "
             f"{elapsed_ms:.0f}ms hit@10={m.get('hit@10', '-')}",
             flush=True,
