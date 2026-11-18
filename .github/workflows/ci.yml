@@ -1,0 +1,98 @@
+# L1 门禁：每次 push / PR 跑「代码有没有被改坏」，不需要任何 secret。
+#
+# 两个 job：
+#   unit        —— tests/unit，纯离线（tests/conftest.py 把 DB/LLM 凭据哨兵化，
+#                  任何误触真实服务的用例会立即失败）
+#   integration —— tests/integration，真 PostgreSQL 15 + pgvector service；
+#                  embedding / rerank / metadata 三层被 conftest 的确定性 fake 替换，
+#                  所以同样不需要 SILICONFLOW_API_KEY
+#
+# live_llm 用例（4 个文件，真 API）靠 pytestmark + live_env fixture 自动 skip：
+#   未设置 RAGENT_LIVE_LLM=1 / 没有真实 key 时结果是 skipped 而不是 failed。
+#   真检索评测不在这里 —— 见 eval.yml（每晚 + 手动，需要 SILICONFLOW_API_KEY）。
+#
+# 本地等价命令（Windows，rag 环境）：
+#   D:/miniConda/envs/rag/python.exe -m pytest tests/unit -q
+#   D:/miniConda/envs/rag/python.exe -m pytest tests/integration -q
+name: ci
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+# 连续 push 同一分支时取消上一次，只保留最新一次结果
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+  PYTHONUNBUFFERED: "1"
+
+jobs:
+  unit:
+    name: unit (offline)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -r requirements-dev.txt
+      - name: Run offline unit suite
+        # 528 passed（本地实测，2026-11-18，rag 环境 Python 3.11）
+        run: python -m pytest tests/unit -q
+
+  integration:
+    name: integration (postgres + pgvector)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    services:
+      postgres:
+        # 与 docker-compose.yml 的 postgres 15 + pgvector 对齐；
+        # integration/conftest.py 会自行 CREATE DATABASE ragent_test + CREATE EXTENSION vector
+        image: pgvector/pgvector:pg15
+        env:
+          POSTGRES_USER: ragent
+          POSTGRES_PASSWORD: ragent
+          POSTGRES_DB: ragent
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U ragent -d ragent"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -r requirements-dev.txt
+      - name: Run integration suite
+        # 66 passed / 13 skipped（本地实测，2026-11-18；skipped 全部是 live_llm
+        # 真 API 用例：未设 RAGENT_LIVE_LLM=1 时 fixture 主动 skip，不会红）
+        run: python -m pytest tests/integration -q
+      - name: Note on skipped live tests
+        if: always()
+        run: |
+          echo "live_llm 用例在没有 secrets + RAGENT_LIVE_LLM=1 时按设计 skip；"
+          echo "真实 embedding/LLM 链路见 eval.yml（L2，每晚 + 手动）。"

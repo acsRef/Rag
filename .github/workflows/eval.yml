@@ -1,0 +1,375 @@
+# L2「真检索评测」流水线 —— 回答的是「检索层现在还能不能把 gold 文档捞回来」，
+# 不是「代码有没有被改坏」（后者是 ci.yml / L1）。
+#
+# 触发：
+#   - schedule：每天 18:17 UTC = 次日 02:17 Asia/Shanghai
+#   - workflow_dispatch：手动指定档位与 top_k
+#
+# 两个 job：
+#   retrieval-invariants —— 复用 tests/integration 里已存在的检索不变式场景
+#       （增量更新/删除后无脏召回、跨库隔离、权限、跨文档、全链路），不写新场景逻辑。
+#       只依赖 PostgreSQL + fake embedding 层，不需要 secret，每晚跟随 cron 跑。
+#   retrieval-eval       —— 真检索评测：真 PostgreSQL + 真 SiliconFlow embedding，
+#       按 eval/sany_annual_reports/tiers.json 选 65 题（full），走仓库既有
+#       eval/retrieval_eval.py → POST /api/v1/retrieve，判据来自 eval/gold.py +
+#       eval/metrics.py（hit@5/hit@10/recall@5/recall@10/MRR），不另造一套。
+#       需要 secrets.SILICONFLOW_API_KEY；没配时打印 warning + job summary 后跳过，
+#       **不会红**（L1 门禁不受影响）。
+#
+# 产物：retrieval-results-<run_id> artifact（retrieval_results.json + backend 日志），
+#       以及 Job Summary 里的指标表。详见 docs/ci-eval-pipelines.md。
+name: eval
+
+on:
+  schedule:
+    # 每天 18:17 UTC = 次日 02:17 Asia/Shanghai（避开整点，降低 GitHub 排队概率）
+    - cron: "17 18 * * *"
+  workflow_dispatch:
+    inputs:
+      tier:
+        description: "检索档位（eval/sany_annual_reports/tiers.json；full=全 65 题）"
+        type: choice
+        options: [full, regression, smoke]
+        default: full
+      top_k:
+        description: "检索 top_k（1-50）"
+        type: string
+        default: "10"
+
+permissions:
+  contents: read
+
+concurrency:
+  # 评测会消耗真实 API 额度：同一时间只留一条，不取消进行中的
+  group: eval-retrieval
+  cancel-in-progress: false
+
+env:
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+  PYTHONUNBUFFERED: "1"
+
+jobs:
+  # ── 检索不变式：复用既有 integration 场景，不新增场景逻辑 ─────────────────
+  # 覆盖 task 要求的「增量更新 / 删除后无脏召回 / 跨库隔离 / 权限」四类，对应：
+  #   test_ingestion.py       增量摄入 + 复用（content_hash 不变不重嵌）
+  #   test_delete_relations.py 删除文档/KB 后 doc_relations 无幽灵边（无脏召回）
+  #   test_workspace_acl.py    restricted 工作空间 + owner 旁路（跨库隔离/权限）
+  #   test_cross_doc.py        跨文档关系矩阵（跨库召回边界）
+  #   test_retrieval_e2e.py    检索全链路（embedding→hybrid→cross-doc→rerank→MMR）
+  retrieval-invariants:
+    name: retrieval invariants (existing integration scenarios)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    services:
+      postgres:
+        image: pgvector/pgvector:pg15
+        env:
+          POSTGRES_USER: ragent
+          POSTGRES_PASSWORD: ragent
+          POSTGRES_DB: ragent
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U ragent -d ragent"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -r requirements-dev.txt
+      - name: Run existing retrieval invariant scenarios
+        run: |
+          python -m pytest -q \
+            tests/integration/test_ingestion.py \
+            tests/integration/test_delete_relations.py \
+            tests/integration/test_workspace_acl.py \
+            tests/integration/test_cross_doc.py \
+            tests/integration/test_retrieval_e2e.py
+
+  # ── 真检索评测：65 题 × 真 embedding，产物 JSON artifact ───────────────────
+  retrieval-eval:
+    name: retrieval eval (65-Q, real embedding)
+    runs-on: ubuntu-latest
+    # 依赖安装 ~4min + 语料重建 ~5min + 65 题检索 ~3min；留足余量
+    timeout-minutes: 60
+    services:
+      postgres:
+        image: pgvector/pgvector:pg15
+        env:
+          POSTGRES_USER: ragent
+          POSTGRES_PASSWORD: ragent
+          POSTGRES_DB: ragent
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U ragent -d ragent"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      DATABASE_URL: postgresql://ragent:ragent@localhost:5432/ragent
+      RAGENT_BASE_URL: http://localhost:8000
+      RAGENT_KB_NAME_HINT: 三一重工
+      # 非真实凭据占位：app.main 启动强校验只拒绝默认占位值（JWT_SECRET/PII_ENCRYPTION_KEY）
+      JWT_SECRET: ci-placeholder-jwt-secret-0123456789
+      PII_ENCRYPTION_KEY: ci-placeholder-pii-encryption-key-0123456789
+      # 语料入库只做「分块 + embedding」，跳过元数据 LLM：
+      # app/ingestion/metadata.py 明确说明开着它重灌 3 份年报要 1-2 小时。
+      INGEST_METADATA_ENABLED: "0"
+      TIER: ${{ inputs.tier || 'full' }}
+      TOP_K: ${{ inputs.top_k || '10' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+      - name: Install dependencies
+        # pymupdf4llm：app/ingestion/parser.py 的 PDF 解析路径依赖它，
+        # 但 requirements.txt 未声明（仓库已知缺口）；这里按本地实测版本钉死，
+        # 供下面「PDF → Markdown」的语料准备步骤使用。
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -r requirements-dev.txt
+          pip install "pymupdf4llm==1.28.2"
+      - id: guard
+        env:
+          SILICONFLOW_API_KEY: ${{ secrets.SILICONFLOW_API_KEY }}
+        run: |
+          if [ -z "${SILICONFLOW_API_KEY}" ]; then
+            echo "::warning::未配置 secrets.SILICONFLOW_API_KEY，L2 真检索评测跳过（job 不红；L1 门禁不受影响）"
+            {
+              echo "### ℹ️ 真检索评测已跳过"
+              echo ""
+              echo '未配置 `secrets.SILICONFLOW_API_KEY`，本次不跑真实 embedding 检索评测。'
+              echo '配置该 secret 后手动重跑本 workflow（或等次日 cron）即可。'
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Ensure pgvector extension
+        if: steps.guard.outputs.ok == 'true'
+        # app/store/db.py 的 init_db() 不建 extension（integration/conftest 也是自己建），
+        # 而 CREATE TABLE ... VECTOR(1024) 依赖它，所以建库后第一条命令就补上。
+        run: |
+          python - <<'PY'
+          from sqlalchemy import create_engine, text
+
+          engine = create_engine(
+              "postgresql://ragent:ragent@localhost:5432/ragent", isolation_level="AUTOCOMMIT"
+          )
+          with engine.connect() as conn:
+              conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+          engine.dispose()
+          print("pgvector extension ready")
+          PY
+      - name: Validate gold testset (reuse eval/gold.py validator)
+        if: steps.guard.outputs.ok == 'true'
+        run: python eval/gold.py
+      - name: Start backend (python -m app.main)
+        if: steps.guard.outputs.ok == 'true'
+        run: |
+          python -m app.main > ragent-backend.log 2>&1 &
+          for i in $(seq 1 60); do
+            if curl -sf "$RAGENT_BASE_URL/health" > /dev/null; then
+              echo "backend ready（等待 ${i} 次 × 2s）"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "::error::backend 未在 120s 内就绪"
+          tail -100 ragent-backend.log
+          exit 1
+      - name: Build eval corpus (pinned gold document ids)
+        if: steps.guard.outputs.ok == 'true'
+        # eval/retrieval_eval.py 用 rag_testset.json 的 gold_documents 比对
+        # /api/v1/retrieve 返回的 document_id。gold id 来自历史一次入库
+        # （tools/annotate_gold_documents.py 的 YEAR_TO_DOC_ID），新库会随机生成 id，
+        # 不 pin 的话 hit@k 恒为 0 —— 所以先按上传契约预建 Document 行、再用
+        # document_id 表单字段重新上传（/documents/upload 的既有增量更新契约）。
+        run: |
+          python - <<'PY'
+          import os
+          import sys
+          import time
+          from pathlib import Path
+
+          import pymupdf4llm
+          import requests
+
+          REPO = Path.cwd()
+          sys.path.insert(0, str(REPO))
+
+          from tools.annotate_gold_documents import YEAR_TO_DOC_ID
+          from app.api.documents import _upsert_processing_document
+
+          BASE = os.environ["RAGENT_BASE_URL"]
+          EVAL_DIR = REPO / "eval" / "sany_annual_reports"
+          PDF_NAME = "三一重工_{year}年年度报告.pdf"
+          MD_NAME = "三一重工_{year}年年度报告.md"
+
+          # 与 app/ingestion/parser.py 的 PDF 路径同一库；显式关闭 GNN layout：
+          # layout 模式在 CI CPU 上对 250 页年报极慢（本地 3 份 >15min 仍未完成），
+          # 经典路径仍保留表格结构，本地实测 3 份合计 ~2min。
+          pymupdf4llm.use_layout(False)
+
+          r = requests.post(
+              f"{BASE}/api/v1/auth/login",
+              json={"username": "admin", "password": "admin123"},
+              timeout=30,
+          )
+          r.raise_for_status()
+          token = r.json()["access_token"]
+          user_id = r.json()["user"]["id"]
+          headers = {"Authorization": f"Bearer {token}"}
+
+          # 复用同名 KB（与 eval/retrieval_eval.py::_find_kb_id 同一套 name hint 语义），
+          # 没有才创建——同库重跑时不会多建 KB、也不会因为 document_id 已在别的 KB 而 404。
+          kb_hint = os.environ.get("RAGENT_KB_NAME_HINT", "三一重工")
+          r = requests.get(f"{BASE}/api/v1/kb", headers=headers, timeout=30)
+          r.raise_for_status()
+          kb_id = next((kb["id"] for kb in r.json() if kb_hint in kb.get("name", "")), None)
+          if kb_id is None:
+              r = requests.post(
+                  f"{BASE}/api/v1/kb",
+                  headers=headers,
+                  json={"name": "三一重工年报", "visibility": "public"},
+                  timeout=30,
+              )
+              r.raise_for_status()
+              kb_id = r.json()["id"]
+              print(f"kb created id={kb_id}")
+          else:
+              print(f"kb reused id={kb_id}")
+
+          for year, doc_id in YEAR_TO_DOC_ID.items():
+              _upsert_processing_document(doc_id, MD_NAME.format(year=year), kb_id, user_id)
+
+          for year, doc_id in YEAR_TO_DOC_ID.items():
+              md_path = EVAL_DIR / MD_NAME.format(year=year)
+              t0 = time.monotonic()
+              md_path.write_text(
+                  pymupdf4llm.to_markdown(str(EVAL_DIR / PDF_NAME.format(year=year))),
+                  encoding="utf-8",
+              )
+              t_parse = time.monotonic() - t0
+              with open(md_path, "rb") as f:
+                  r = requests.post(
+                      f"{BASE}/api/v1/documents/upload",
+                      headers=headers,
+                      data={"kb_id": kb_id, "document_id": doc_id},
+                      files={"file": (md_path.name, f, "text/markdown")},
+                      timeout=300,
+                  )
+              r.raise_for_status()
+              if r.json()["document_id"] != doc_id:
+                  raise SystemExit(f"upload returned unexpected document_id: {r.json()}")
+              print(f"uploaded {md_path.name} -> {doc_id}（转换 {t_parse:.1f}s）")
+
+              deadline = time.monotonic() + 600
+              while time.monotonic() < deadline:
+                  r = requests.get(
+                      f"{BASE}/api/v1/documents/{doc_id}", headers=headers, timeout=60
+                  )
+                  r.raise_for_status()
+                  d = r.json()
+                  if d["status"] not in ("processing", "indexing"):
+                      print(
+                          f"  {d['status']} chunks={d['chunk_count']} "
+                          f"embedded={d['embedded_chunk_count']}"
+                      )
+                      if d["status"] == "failed":
+                          raise SystemExit(f"ingest failed: {d.get('error_message')}")
+                      if d["status"] == "partial":
+                          print("::warning::语料部分 embedding 失败（partial），指标可能偏低")
+                      break
+                  time.sleep(5)
+              else:
+                  raise SystemExit(f"ingest timeout for {doc_id}")
+
+          print("eval corpus ready")
+          PY
+      - name: Run retrieval eval (reuse eval/retrieval_eval.py)
+        if: steps.guard.outputs.ok == 'true'
+        # 判据全部来自仓库既有实现：eval/gold.py（gold 唯一入口）+
+        # eval/metrics.py::compute_all（hit@5/hit@10/recall@5/recall@10/mrr）
+        run: |
+          python eval/retrieval_eval.py --tier "$TIER" --top-k "$TOP_K" --base-url "$RAGENT_BASE_URL"
+      - name: Summarize metrics + sanity gate
+        if: steps.guard.outputs.ok == 'true'
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import sys
+          from pathlib import Path
+
+          path = Path("eval/sany_annual_reports/retrieval_results.json")
+          results = json.loads(path.read_text(encoding="utf-8"))
+          have_gold = [r for r in results if r.get("gold_documents")]
+          errors = [r for r in results if r.get("error")]
+          degraded = [r for r in results if r.get("degraded")]
+          avg_latency = (
+              sum(r.get("elapsed_ms", 0) for r in results) / len(results) if results else 0
+          )
+
+          # 聚合口径与 eval/retrieval_eval.py::_print_summary 一致（只是换成 markdown）
+          agg = {}
+          if have_gold:
+              keys = list(have_gold[0]["metrics"].keys())
+              agg = {k: sum(r["metrics"][k] for r in have_gold) / len(have_gold) for k in keys}
+
+          lines = [
+              "### 检索评测结果",
+              "",
+              f"- 题目数：{len(results)}（有 gold 标注：{len(have_gold)}）",
+              f"- 检索报错：{len(errors)}，embedding 降级：{len(degraded)}",
+              f"- 平均单题检索耗时：{avg_latency:.0f} ms",
+              "",
+          ]
+          if agg:
+              lines += ["| 指标 | 值 |", "| --- | --- |"]
+              lines += [f"| {k} | {v:.3f} |" for k, v in agg.items()]
+          else:
+              lines.append("没有带 gold 标注的题目，无法计算检索指标。")
+          summary = "\n".join(lines) + "\n"
+          print(summary)
+          summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
+          if summary_path:
+              with open(summary_path, "a", encoding="utf-8") as f:
+                  f.write(summary)
+
+          # 自检门（不是质量门）：gold 标注存在却全 0 命中 = 语料/文档 id 映射坏了，
+          # 这种「绿着但没有信号」的夜间评测比红更危险，所以让它响亮失败。
+          if not have_gold:
+              print("::error::retrieval_results.json 没有任何 gold 标注题目，评测无效")
+              sys.exit(1)
+          if all(agg.get(k, 0) == 0 for k in ("hit@5", "hit@10", "recall@10", "mrr")):
+              print("::error::所有检索指标为 0：请检查语料 document_id 是否与 gold_documents 对齐")
+              sys.exit(1)
+          PY
+      - name: Skip note
+        if: steps.guard.outputs.ok != 'true'
+        run: echo "SILICONFLOW_API_KEY 未配置，真检索评测按设计跳过（job 保持绿色）。"
+      - name: Upload retrieval results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: retrieval-results-${{ github.run_id }}
+          path: |
+            eval/sany_annual_reports/retrieval_results.json
+            ragent-backend.log
+          if-no-files-found: warn
+          retention-days: 30
