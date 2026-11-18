@@ -1,4 +1,4 @@
-# L2「真检索评测」流水线 —— 回答的是「检索层现在还能不能把 gold 文档捞回来」，
+﻿# L2「真检索评测」流水线 —— 回答的是「检索层现在还能不能把 gold 文档捞回来」，
 # 不是「代码有没有被改坏」（后者是 ci.yml / L1）。
 #
 # 触发：
@@ -38,6 +38,7 @@ on:
 
 permissions:
   contents: read
+  issues: write
 
 concurrency:
   # 评测会消耗真实 API 额度：同一时间只留一条，不取消进行中的
@@ -373,3 +374,29 @@ jobs:
             ragent-backend.log
           if-no-files-found: warn
           retention-days: 30
+
+  # 失败要能吵醒人：定时失败自动开/更新 Issue（手动触发不刷，避免调试噪音）。
+  # 与 ReportAgent 仓的 live-eval / e2e-contract 同一套约定。
+  notify-failure:
+    needs: [retrieval-invariants, retrieval-eval]
+    if: always() && failure() && github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Open or update tracking issue
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          title="[eval] nightly 检索评测失败"
+          run_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          body="夜间 eval 失败：$run_url
+
+          排查顺序：① 下载 `retrieval-results-*` artifact（含 `ragent-backend.log`）
+          ② 看 Job Summary 是否提示「指标全 0 / gold 未对齐」（语料 document_id 漂移）
+          ③ 本地复跑：见 `docs/ci-eval-pipelines.md`"
+          existing=$(gh issue list --state open --search "$title in:title" --json number --jq '.[0].number // empty')
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body "$body"
+          else
+            gh issue create --title "$title" --body "$body"
+          fi
