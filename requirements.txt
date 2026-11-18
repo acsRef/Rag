@@ -14,4 +14,6 @@ psycopg2-binary
 pgvector
 python-jose[cryptography]
 passlib[bcrypt]
+# bcrypt 5.0 起改用新的长度校验：passlib 1.7.4 调 hash() 会抛 'password cannot be longer than 72 bytes'；本地验证组合 = bcrypt 4.0.1 + passlib 1.7.4
+bcrypt==4.0.1
 ftfy>=6.0
