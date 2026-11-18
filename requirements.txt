@@ -2,7 +2,7 @@ fastapi>=0.115.0
 uvicorn[standard]
 openai>=1.0.0
 docling
-SQLAlchemy
+SQLAlchemy>=2.0,<2.1  # 2.1 起 postgresql:// 默认驱动变 psycopg(v3)，本仓只 pin 了 psycopg2-binary；本地验证版本 2.0.50
 pydantic
 pydantic-settings
 python-multipart

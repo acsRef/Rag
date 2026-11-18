@@ -53,7 +53,16 @@ jobs:
           pip install -r requirements.txt -r requirements-dev.txt
       - name: Run offline unit suite
         # 528 passed（本地实测，2026-11-18，rag 环境 Python 3.11）
-        run: python -m pytest tests/unit -q
+        run: |
+          set +e
+          python -m pytest tests/unit -q --tb=short > /tmp/unit.log 2>&1
+          code=$?
+          if [ $code -ne 0 ]; then
+            tail -60 /tmp/unit.log | while IFS= read -r line; do
+              echo "::error file=unit::$line"
+            done
+          fi
+          exit $code
 
   integration:
     name: integration (postgres + pgvector)
@@ -90,7 +99,16 @@ jobs:
       - name: Run integration suite
         # 66 passed / 13 skipped（本地实测，2026-11-18；skipped 全部是 live_llm
         # 真 API 用例：未设 RAGENT_LIVE_LLM=1 时 fixture 主动 skip，不会红）
-        run: python -m pytest tests/integration -q
+        run: |
+          set +e
+          python -m pytest tests/integration -q --tb=short > /tmp/integration.log 2>&1
+          code=$?
+          if [ $code -ne 0 ]; then
+            tail -60 /tmp/integration.log | while IFS= read -r line; do
+              echo "::error file=integration::$line"
+            done
+          fi
+          exit $code
       - name: Note on skipped live tests
         if: always()
         run: |
